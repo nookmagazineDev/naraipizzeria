@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>รายงานยอดการขาย</title>
+  <style>
+    :root {
+      --primary: #1a56db;
+      --primary-dark: #1e429f;
+      --success: #057a55;
+      --danger: #c81e1e;
+      --bg: #f3f4f6;
+      --card: #ffffff;
+      --border: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --hover: #eff6ff;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', 'Noto Sans Thai', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--primary-dark);
+      color: #fff;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    header svg { width: 28px; height: 28px; flex-shrink: 0; }
+    header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: 0.01em; }
+
+    .container { max-width: 1400px; margin: 0 auto; padding: 24px 16px; }
+
+    /* Filter card */
+    .filter-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+    .filter-card h2 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 16px;
+    }
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: flex-end;
+    }
+    .filter-group { display: flex; flex-direction: column; gap: 6px; }
+    .filter-group label { font-size: 0.82rem; font-weight: 600; color: var(--muted); }
+    .filter-group input[type="date"],
+    .filter-group select {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.95rem;
+      color: var(--text);
+      background: #fff;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.15s;
+      height: 38px;
+    }
+    .filter-group input[type="date"]:focus,
+    .filter-group select:focus { border-color: var(--primary); }
+    .filter-group select { min-width: 180px; padding-right: 28px; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 10px center;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 20px;
+      border-radius: 8px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-primary:disabled { background: #9ca3af; cursor: not-allowed; transform: none; }
+    .btn-export { background: var(--success); color: #fff; }
+    .btn-export:hover { background: #046c4e; }
+    .btn-export:disabled { background: #9ca3af; cursor: not-allowed; }
+
+    /* Summary cards */
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .summary-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+    .summary-card .label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .summary-card .value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .summary-card .value.green { color: var(--success); }
+    .summary-card .sub {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* Table card */
+    .table-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      overflow: hidden;
+    }
+    .table-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .table-header h2 { font-size: 1rem; font-weight: 700; }
+    .table-meta { font-size: 0.82rem; color: var(--muted); }
+
+    .search-box {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 12px;
+      font-size: 0.88rem;
+      width: 220px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .search-box:focus { border-color: var(--primary); }
+
+    .table-scroll { overflow-x: auto; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.87rem;
+    }
+    thead tr { background: #f8fafc; }
+    th {
+      padding: 12px 14px;
+      text-align: left;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+    th:hover { background: #f0f4ff; color: var(--primary); }
+    th .sort-icon { margin-left: 4px; opacity: 0.4; font-style: normal; }
+    th.sorted .sort-icon { opacity: 1; color: var(--primary); }
+
+    td {
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      color: var(--text);
+    }
+    tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: var(--hover); }
+
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    td.amount { text-align: right; font-weight: 600; color: var(--success); font-variant-numeric: tabular-nums; }
+    td.bill-total { text-align: right; font-weight: 700; color: var(--primary-dark); font-variant-numeric: tabular-nums; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge-cash { background: #d1fae5; color: #065f46; }
+    .badge-credit { background: #dbeafe; color: #1e40af; }
+    .badge-qr { background: #fef3c7; color: #92400e; }
+    .badge-other { background: #f3f4f6; color: #374151; }
+
+    /* States */
+    .state-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      color: var(--muted);
+      gap: 12px;
+    }
+    .state-box svg { width: 48px; height: 48px; opacity: 0.35; }
+    .state-box p { font-size: 0.95rem; }
+
+    .spinner {
+      width: 40px; height: 40px;
+      border: 4px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-box {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      padding: 14px 18px;
+      color: var(--danger);
+      font-size: 0.88rem;
+      margin: 0 0 16px;
+    }
+
+    .pagination {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .pagination span { font-size: 0.84rem; color: var(--muted); }
+    .page-btns { display: flex; gap: 6px; }
+    .page-btn {
+      padding: 5px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #fff;
+      font-size: 0.84rem;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .page-btn:hover:not(:disabled) { background: var(--hover); border-color: var(--primary); color: var(--primary); }
+    .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .page-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+    @media (max-width: 640px) {
+      .filter-row { flex-direction: column; }
+      .summary-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <rect x="2" y="3" width="20" height="14" rx="2"/>
+    <path d="M8 21h8M12 17v4"/>
+    <path d="M6 8h4M6 12h6M14 12l2 2 4-4"/>
+  </svg>
+  <h1>รายงานยอดการขายรายละเอียด</h1>
+</header>
+
+<div class="container">
+
+  <!-- Error box -->
+  <div id="error-box" class="error-box" style="display:none;"></div>
+
+  <!-- Filter -->
+  <div class="filter-card">
+    <h2>เลือกช่วงวันที่และสาขา</h2>
+    <div class="filter-row">
+      <div class="filter-group">
+        <label for="start-date">วันที่เริ่มต้น</label>
+        <input type="date" id="start-date" />
+      </div>
+      <div class="filter-group">
+        <label for="end-date">วันที่สิ้นสุด</label>
+        <input type="date" id="end-date" />
+      </div>
+      <div class="filter-group">
+        <label for="outlet-select">สาขา (Outlet)</label>
+        <select id="outlet-select">
+          <option value="">— ทั้งหมด —</option>
+          <option value="7">7 · SJP</option>
+          <option value="12">12 · CRM</option>
+          <option value="19">19 · XCM</option>
+          <option value="37">37 · SLR</option>
+          <option value="51">51 · SUM</option>
+          <option value="59">59 · XUM</option>
+          <option value="61">61 · SCS</option>
+          <option value="63">63 · SMP</option>
+          <option value="67">67 · XSB</option>
+          <option value="72">72 · XHH</option>
+          <option value="78">78 · HRS</option>
+          <option value="79">79 · CLK</option>
+          <option value="80">80 · P90</option>
+          <option value="109">109 · HPS</option>
+          <option value="400">400 · ZBW</option>
+          <option value="401">401 · ZPT</option>
+          <option value="500">500 · NPT</option>
+          <option value="501">501 · WRM</option>
+          <option value="503">503 · WMT</option>
+          <option value="904">904 · IPR</option>
+          <option value="906">906 · ZK3</option>
+        </select>
+      </div>
+      <button class="btn btn-primary" id="btn-load" onclick="loadData()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+        ค้นหา
+      </button>
+      <button class="btn btn-export" id="btn-export" onclick="exportCSV()" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 3v12"/>
+        </svg>
+        Export CSV
+      </button>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="summary-grid" id="summary-grid" style="display:none;">
+    <div class="summary-card">
+      <div class="label">รายการทั้งหมด</div>
+      <div class="value" id="s-count">0</div>
+      <div class="sub">บิล</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">ยอดขายรวม (amount)</div>
+      <div class="value green" id="s-amount">฿0</div>
+      <div class="sub">บาท</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">ยอดบิลรวม (billTotal)</div>
+      <div class="value green" id="s-billtotal">฿0</div>
+      <div class="sub">บาท</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">จำนวนผู้เข้าใช้รวม</div>
+      <div class="value" id="s-cover">0</div>
+      <div class="sub">คน (cover)</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">เฉลี่ย/บิล</div>
+      <div class="value" id="s-avg">฿0</div>
+      <div class="sub">billTotal เฉลี่ย</div>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="table-card">
+    <div class="table-header">
+      <div>
+        <h2>รายการขาย</h2>
+        <div class="table-meta" id="table-meta">— กรุณาเลือกช่วงวันที่แล้วกดค้นหา</div>
+      </div>
+      <input type="text" class="search-box" id="search-box" placeholder="ค้นหา checkID, orderID, checkDesc…" oninput="onSearch()" style="display:none;" />
+    </div>
+
+    <div id="table-content">
+      <div class="state-box">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>
+          <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/>
+        </svg>
+        <p>เลือกช่วงวันที่และกด "ค้นหา" เพื่อโหลดข้อมูล</p>
+      </div>
+    </div>
+
+    <div class="pagination" id="pagination" style="display:none;">
+      <span id="page-info"></span>
+      <div class="page-btns" id="page-btns"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const API_BASE = 'http://storenarai.dyndns.tv:14365/express/cpaidbetweendate';
+  const PAGE_SIZE = 50;
+
+  const OUTLETS = {
+    7:   'SJP', 12:  'CRM', 19:  'XCM', 37:  'SLR', 51:  'SUM',
+    59:  'XUM', 61:  'SCS', 63:  'SMP', 67:  'XSB', 72:  'XHH',
+    78:  'HRS', 79:  'CLK', 80:  'P90', 109: 'HPS', 400: 'ZBW',
+    401: 'ZPT', 500: 'NPT', 501: 'WRM', 503: 'WMT', 904: 'IPR', 906: 'ZK3',
+  };
+
+  function outletLabel(id) {
+    const name = OUTLETS[parseInt(id)];
+    return name ? `${id} · ${name}` : (id ?? '-');
+  }
+
+  let allData = [];
+  let filtered = [];
+  let currentPage = 1;
+  let sortCol = null;
+  let sortAsc = true;
+
+  const COLUMNS = [
+    { key: 'Date',      label: 'วันที่',     type: 'text' },
+    { key: 'checkID',   label: 'Check ID',   type: 'num' },
+    { key: 'outletID',  label: 'สาขา',       type: 'outlet' },
+    { key: 'amount',    label: 'Amount',     type: 'amount' },
+    { key: 'billTotal', label: 'Bill Total', type: 'bill' },
+    { key: 'paidType',  label: 'ประเภทชำระ', type: 'badge' },
+    { key: 'cover',     label: 'Cover',      type: 'num' },
+    { key: 'coverAd',   label: 'Cover Ad',   type: 'num' },
+    { key: 'coverAll',  label: 'Cover All',  type: 'num' },
+    { key: 'startTime', label: 'เวลาเริ่ม',  type: 'text' },
+    { key: 'checkDesc', label: 'รายละเอียด', type: 'text' },
+    { key: 'orderID',   label: 'Order ID',   type: 'num' },
+  ];
+
+  // Set default dates to today
+  const today = new Date();
+  const fmt = d => d.toISOString().slice(0,10);
+  const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  document.getElementById('start-date').value = fmt(startOfMonth);
+  document.getElementById('end-date').value = fmt(today);
+
+  function showError(msg) {
+    const box = document.getElementById('error-box');
+    box.textContent = msg;
+    box.style.display = msg ? 'block' : 'none';
+  }
+
+  function fmtMoney(v) {
+    const n = parseFloat(v);
+    if (isNaN(n)) return v ?? '-';
+    return '฿' + n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function fmtNum(v) {
+    if (v === null || v === undefined || v === '') return '-';
+    const n = parseFloat(v);
+    return isNaN(n) ? v : n.toLocaleString('th-TH');
+  }
+
+  function paidBadge(v) {
+    if (!v) return '<span class="badge badge-other">-</span>';
+    const s = String(v).toLowerCase();
+    if (s.includes('cash') || s.includes('เงินสด')) return `<span class="badge badge-cash">${v}</span>`;
+    if (s.includes('credit') || s.includes('card') || s.includes('บัตร')) return `<span class="badge badge-credit">${v}</span>`;
+    if (s.includes('qr') || s.includes('prompt') || s.includes('โอน')) return `<span class="badge badge-qr">${v}</span>`;
+    return `<span class="badge badge-other">${v}</span>`;
+  }
+
+  async function loadData() {
+    const start = document.getElementById('start-date').value;
+    const end   = document.getElementById('end-date').value;
+    if (!start || !end) { showError('กรุณาเลือกวันที่เริ่มต้นและวันที่สิ้นสุด'); return; }
+    if (start > end)    { showError('วันที่เริ่มต้นต้องไม่มากกว่าวันที่สิ้นสุด'); return; }
+
+    showError('');
+    const btn = document.getElementById('btn-load');
+    btn.disabled = true;
+    btn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px;"></div> กำลังโหลด…';
+
+    document.getElementById('table-content').innerHTML = `
+      <div class="state-box">
+        <div class="spinner"></div>
+        <p>กำลังดึงข้อมูล…</p>
+      </div>`;
+    document.getElementById('summary-grid').style.display = 'none';
+    document.getElementById('pagination').style.display = 'none';
+    document.getElementById('search-box').style.display = 'none';
+    document.getElementById('btn-export').disabled = true;
+
+    try {
+      const outletID = document.getElementById('outlet-select').value;
+      let url = `${API_BASE}?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+      if (outletID) url += `&outletID=${encodeURIComponent(outletID)}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      let json = await res.json();
+
+      // Normalize: accept array or { data: [] } or { result: [] }
+      if (Array.isArray(json)) {
+        allData = json;
+      } else if (Array.isArray(json.data)) {
+        allData = json.data;
+      } else if (Array.isArray(json.result)) {
+        allData = json.result;
+      } else {
+        allData = Object.values(json).find(v => Array.isArray(v)) || [];
+      }
+
+      filtered = [...allData];
+      currentPage = 1;
+      sortCol = null;
+      updateSummary();
+      renderTable();
+      document.getElementById('search-box').style.display = 'block';
+      document.getElementById('btn-export').disabled = false;
+    } catch (err) {
+      showError('ไม่สามารถดึงข้อมูลได้: ' + err.message);
+      document.getElementById('table-content').innerHTML = `
+        <div class="state-box">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>
+          </svg>
+          <p>เกิดข้อผิดพลาดในการโหลดข้อมูล</p>
+        </div>`;
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> ค้นหา`;
+    }
+  }
+
+  function updateSummary() {
+    const count = filtered.length;
+    const sumAmount   = filtered.reduce((s, r) => s + (parseFloat(r.amount)    || 0), 0);
+    const sumBill     = filtered.reduce((s, r) => s + (parseFloat(r.billTotal) || 0), 0);
+    const sumCover    = filtered.reduce((s, r) => s + (parseFloat(r.cover)     || 0), 0);
+    const avg = count ? sumBill / count : 0;
+
+    document.getElementById('s-count').textContent    = count.toLocaleString('th-TH');
+    document.getElementById('s-amount').textContent   = fmtMoney(sumAmount);
+    document.getElementById('s-billtotal').textContent = fmtMoney(sumBill);
+    document.getElementById('s-cover').textContent    = fmtNum(sumCover);
+    document.getElementById('s-avg').textContent      = fmtMoney(avg);
+    document.getElementById('summary-grid').style.display = 'grid';
+  }
+
+  function sortData(col) {
+    if (sortCol === col) {
+      sortAsc = !sortAsc;
+    } else {
+      sortCol = col;
+      sortAsc = true;
+    }
+    filtered.sort((a, b) => {
+      let va = a[col], vb = b[col];
+      const na = parseFloat(va), nb = parseFloat(vb);
+      if (!isNaN(na) && !isNaN(nb)) { va = na; vb = nb; }
+      else { va = String(va ?? ''); vb = String(vb ?? ''); }
+      if (va < vb) return sortAsc ? -1 : 1;
+      if (va > vb) return sortAsc ? 1 : -1;
+      return 0;
+    });
+    currentPage = 1;
+    renderTable();
+  }
+
+  function onSearch() {
+    const q = document.getElementById('search-box').value.toLowerCase().trim();
+    if (!q) {
+      filtered = [...allData];
+    } else {
+      filtered = allData.filter(r =>
+        COLUMNS.some(c => String(r[c.key] ?? '').toLowerCase().includes(q))
+      );
+    }
+    currentPage = 1;
+    updateSummary();
+    renderTable();
+  }
+
+  function renderTable() {
+    const total = filtered.length;
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const end   = Math.min(start + PAGE_SIZE, total);
+    const page  = filtered.slice(start, end);
+
+    // meta
+    const s = document.getElementById('start-date').value;
+    const e = document.getElementById('end-date').value;
+    const outletVal = document.getElementById('outlet-select').value;
+    const outletTxt = outletVal ? ` • สาขา: ${outletLabel(outletVal)}` : ' • ทุกสาขา';
+    document.getElementById('table-meta').textContent =
+      `${s} ถึง ${e}${outletTxt}  •  พบ ${total.toLocaleString('th-TH')} รายการ`;
+
+    if (total === 0) {
+      document.getElementById('table-content').innerHTML = `
+        <div class="state-box">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M9 17H7A5 5 0 017 7h10a5 5 0 015 5"/><path d="M13 21l3-3-3-3"/>
+          </svg>
+          <p>ไม่พบข้อมูลในช่วงวันที่ที่เลือก</p>
+        </div>`;
+      document.getElementById('pagination').style.display = 'none';
+      return;
+    }
+
+    // Build thead
+    const ths = COLUMNS.map(c => {
+      const active = sortCol === c.key ? ' sorted' : '';
+      const icon = sortCol === c.key ? (sortAsc ? '▲' : '▼') : '↕';
+      return `<th class="${active}" onclick="sortData('${c.key}')">
+        ${c.label}<i class="sort-icon">${icon}</i>
+      </th>`;
+    }).join('');
+
+    // Build tbody
+    const rows = page.map((r, i) => {
+      const cells = COLUMNS.map(c => {
+        const v = r[c.key];
+        switch (c.type) {
+          case 'amount': return `<td class="amount">${fmtMoney(v)}</td>`;
+          case 'bill':   return `<td class="bill-total">${fmtMoney(v)}</td>`;
+          case 'num':    return `<td class="num">${fmtNum(v)}</td>`;
+          case 'badge':  return `<td>${paidBadge(v)}</td>`;
+          case 'outlet': return `<td><span style="font-variant-numeric:tabular-nums;font-weight:600;">${outletLabel(v)}</span></td>`;
+          default:       return `<td>${v ?? '-'}</td>`;
+        }
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+
+    document.getElementById('table-content').innerHTML = `
+      <div class="table-scroll">
+        <table>
+          <thead><tr>${ths}</tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+
+    // Pagination
+    const totalPages = Math.ceil(total / PAGE_SIZE);
+    document.getElementById('page-info').textContent =
+      `แสดง ${start + 1}–${end} จาก ${total.toLocaleString('th-TH')} รายการ`;
+
+    const btns = [];
+    btns.push(`<button class="page-btn" onclick="goPage(${currentPage-1})" ${currentPage===1?'disabled':''}>‹ ก่อน</button>`);
+
+    // page numbers
+    let ps = new Set([1, totalPages]);
+    for (let p = Math.max(1, currentPage-2); p <= Math.min(totalPages, currentPage+2); p++) ps.add(p);
+    let prev = 0;
+    [...ps].sort((a,b)=>a-b).forEach(p => {
+      if (prev && p - prev > 1) btns.push(`<span style="padding:0 4px;color:var(--muted)">…</span>`);
+      btns.push(`<button class="page-btn ${p===currentPage?'active':''}" onclick="goPage(${p})">${p}</button>`);
+      prev = p;
+    });
+
+    btns.push(`<button class="page-btn" onclick="goPage(${currentPage+1})" ${currentPage===totalPages?'disabled':''}>ถัด ›</button>`);
+    document.getElementById('page-btns').innerHTML = btns.join('');
+    document.getElementById('pagination').style.display = 'flex';
+  }
+
+  function goPage(p) {
+    const total = filtered.length;
+    const totalPages = Math.ceil(total / PAGE_SIZE);
+    if (p < 1 || p > totalPages) return;
+    currentPage = p;
+    renderTable();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function exportCSV() {
+    if (!filtered.length) return;
+    const header = COLUMNS.map(c => c.label).join(',');
+    const rows = filtered.map(r =>
+      COLUMNS.map(c => {
+        const v = r[c.key] ?? '';
+        const s = String(v);
+        return s.includes(',') || s.includes('"') || s.includes('\n')
+          ? `"${s.replace(/"/g, '""')}"` : s;
+      }).join(',')
+    );
+    const csv = '﻿' + [header, ...rows].join('\n');  // BOM for Excel Thai
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const s = document.getElementById('start-date').value;
+    const e = document.getElementById('end-date').value;
+    const ov = document.getElementById('outlet-select').value;
+    const ob = ov ? `_${outletLabel(ov).replace(' · ', '-')}` : '_ALL';
+    a.download = `sales_${s}_${e}${ob}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // Allow Enter key on date/select fields
+  document.getElementById('start-date').addEventListener('keydown',   e => { if(e.key==='Enter') loadData(); });
+  document.getElementById('end-date').addEventListener('keydown',     e => { if(e.key==='Enter') loadData(); });
+  document.getElementById('outlet-select').addEventListener('keydown', e => { if(e.key==='Enter') loadData(); });
+</script>
+</body>
+</html>

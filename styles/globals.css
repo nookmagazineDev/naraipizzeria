@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap');
+
+body {
+  font-family: 'Inter', 'Noto Sans Thai', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+/* Custom scrollbar to keep layouts premium */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Custom table adjustments */
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+tr.row-void td {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+tr.row-void td:nth-child(5) {
+  text-decoration: none;
+  opacity: 1;
+}
