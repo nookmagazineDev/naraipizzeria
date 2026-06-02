@@ -400,8 +400,27 @@ export default function App() {
     { key: 'copay', label: 'คนละครึ่ง 2', type: 'money' },
     { key: 'catering', label: 'จัดเลี้ยง', type: 'money' },
     { key: 'gojek', label: 'Gojek', type: 'money' },
-    { key: 'totalSales', label: 'Total Sales', type: 'money_bold' }
+    { key: 'totalSales', label: 'Total Sales', type: 'money_bold' },
+    { key: 'billCount', label: 'ผลรวมบิล', type: 'number' },
+    { key: 'totalCovers', label: 'จำนวนหัว', type: 'number' },
+    { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' }
   ];
+
+  const dailyCostMap = useMemo(() => {
+    const map = {};
+    if (!detailRaw.length || !costMap) return map;
+    detailRaw.forEach(r => {
+      if (r.void === 'V' || r.Void === 'V') return;
+      const d = dateFromRow(r);
+      const oid = r.outletID;
+      const key = `${d}_${oid}`;
+      const qty = parseFloat(r.quantity || r.Qty || 0);
+      const code = String(r.itemCode || '');
+      const costVal = parseFloat(costMap[code] || 0);
+      map[key] = (map[key] || 0) + (qty * costVal);
+    });
+    return map;
+  }, [detailRaw, costMap]);
 
   const dailyReportData = useMemo(() => {
     if (!salesRaw.length) return [];
@@ -451,70 +470,81 @@ export default function App() {
       const grossSales = netSales + vat;
 
       // 4. Payments
-      const cash = bills.reduce((sum, r) => sum + parseFloat(r._Cash || r._cash || 0), 0);
-      const credit = bills.reduce((sum, r) => sum + parseFloat(r._Credit || r._credit || 0), 0);
-      const qrCredit = bills.reduce((sum, r) => sum + parseFloat(r._QRcredit || r._qrCredit || r._qrcredit || 0), 0);
-      const qr = bills.reduce((sum, r) => sum + parseFloat(r._QR || r._qr || 0), 0);
-      const oc = bills.reduce((sum, r) => sum + parseFloat(r._OC || r._oc || 0), 0);
+      const cash = bills.reduce((sum, r) => sum + parseFloat(r.cash || r._Cash || r._cash || 0), 0);
+      const credit = bills.reduce((sum, r) => sum + parseFloat(r.credit || r._Credit || r._credit || 0), 0);
+      const qrCredit = bills.reduce((sum, r) => sum + parseFloat(r.qrCredit || r._QRcredit || r._qrCredit || r._qrcredit || 0), 0);
+      const qr = bills.reduce((sum, r) => sum + parseFloat(r.qr || r._QR || r._qr || 0), 0);
+      const oc = bills.reduce((sum, r) => sum + parseFloat(r.oc || r._OC || r._oc || 0), 0);
       
       const grab = bills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        return pt.includes('GRAB') ? sum + parseFloat(r.billTotal || r.BillTotal || 0) : sum;
+        if (pt.includes('GRAB')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+        return sum + parseFloat(r.grab || 0);
       }, 0);
       
       const robinhood = bills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        return pt.includes('ROBINHOOD') ? sum + parseFloat(r.billTotal || r.BillTotal || 0) : sum;
+        if (pt.includes('ROBINHOOD')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+        return sum + parseFloat(r.robinhood || 0);
       }, 0);
       
       const shopee = bills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        return pt.includes('SHOPEE') ? sum + parseFloat(r.billTotal || r.BillTotal || 0) : sum;
+        if (pt.includes('SHOPEE')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+        return sum + parseFloat(r.shopee || 0);
       }, 0);
       
       const lineMan = bills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        return (pt.includes('LINE MAN') || pt.includes('LINEMAN')) ? sum + parseFloat(r.billTotal || r.BillTotal || 0) : sum;
+        if (pt.includes('LINE MAN') || pt.includes('LINEMAN')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+        return sum + parseFloat(r.lineMan || 0);
       }, 0);
 
       const voucher = bills.reduce((sum, r) => {
-        const fromCol = parseFloat(r._Voucher || r._voucher || r.voucher || r.Voucher || 0);
+        const fromCol = parseFloat(r.voucher || r._Voucher || r._voucher || 0);
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        const fromPt = pt.includes('VOUCHER') ? parseFloat(r.billTotal || r.BillTotal || 0) : 0;
+        const fromPt = pt.includes('VOUCHER') ? parseFloat(r.billTotal || r.BillTotal || r.amount || 0) : 0;
         return sum + Math.max(fromCol, fromPt);
       }, 0);
 
       const alipay = bills.reduce((sum, r) => {
-        const fromCol = parseFloat(r._Alipay || r._alipay || 0);
+        const fromCol = parseFloat(r.alipay || r._Alipay || r._alipay || 0);
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        const fromPt = pt.includes('ALIPAY') ? parseFloat(r.billTotal || r.BillTotal || 0) : 0;
+        const fromPt = pt.includes('ALIPAY') ? parseFloat(r.billTotal || r.BillTotal || r.amount || 0) : 0;
         return sum + Math.max(fromCol, fromPt);
       }, 0);
 
       const wechat = bills.reduce((sum, r) => {
-        const fromCol = parseFloat(r._WeChat || r._wechat || 0);
+        const fromCol = parseFloat(r.weChat || r.wechat || r._WeChat || r._wechat || 0);
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        const fromPt = pt.includes('WECHAT') ? parseFloat(r.billTotal || r.BillTotal || 0) : 0;
+        const fromPt = pt.includes('WECHAT') ? parseFloat(r.billTotal || r.BillTotal || r.amount || 0) : 0;
         return sum + Math.max(fromCol, fromPt);
       }, 0);
 
       const copay = bills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        return (pt.includes('SPAYLATE2') || pt.includes('คนละครึ่ง') || pt.includes('HALF')) ? sum + parseFloat(r.billTotal || r.BillTotal || 0) : sum;
+        if (pt.includes('SPAYLATE2') || pt.includes('คนละครึ่ง') || pt.includes('HALF')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+        return sum + parseFloat(r.copay || 0);
       }, 0);
 
       const catering = bills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        return (pt.includes('CATERING') || pt.includes('จัดเลี้ยง')) ? sum + parseFloat(r.billTotal || r.BillTotal || 0) : sum;
+        if (pt.includes('CATERING') || pt.includes('จัดเลี้ยง')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+        return sum + parseFloat(r.catering || 0);
       }, 0);
 
       const gojek = bills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
-        return pt.includes('GOJEK') ? sum + parseFloat(r.billTotal || r.BillTotal || 0) : sum;
+        if (pt.includes('GOJEK')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+        return sum + parseFloat(r.gojek || 0);
       }, 0);
 
       // Total Sales = sum of all payment methods
       const totalSales = cash + credit + qrCredit + qr + oc + grab + robinhood + shopee + lineMan + voucher + alipay + wechat + copay + catering + gojek;
+
+      const billCount = bills.length;
+      const totalCovers = bills.reduce((sum, r) => sum + parseInt(r.cover || r.coverAll || r.coverAd || 0), 0);
+      const totalCost = dailyCostMap[key] || 0;
 
       return {
         date,
@@ -542,10 +572,13 @@ export default function App() {
         copay,
         catering,
         gojek,
-        totalSales
+        totalSales,
+        billCount,
+        totalCovers,
+        totalCost
       };
     }).sort((a, b) => b.date.localeCompare(a.date) || a.outletID - b.outletID);
-  }, [salesRaw]);
+  }, [salesRaw, dailyCostMap]);
 
   const filteredDailyReport = useMemo(() => {
     let d = [...dailyReportData];
@@ -2015,6 +2048,9 @@ export default function App() {
                               <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.catering)}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.gojek)}</td>
                               <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-700 font-bold">{fmtMoney(row.totalSales)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.billCount)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.totalCovers)}</td>
+                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-rose-600">{fmtMoney(row.totalCost)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -2045,6 +2081,9 @@ export default function App() {
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.catering, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.gojek, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-amber-800 font-bold">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.totalSales, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.billCount, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.totalCovers, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-rose-800">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.totalCost, 0))}</td>
                           </tr>
                         </tfoot>
                       </table>
