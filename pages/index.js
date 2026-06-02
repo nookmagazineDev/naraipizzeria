@@ -2076,9 +2076,6 @@ export default function App() {
                 )}
               </div>
             )}
-          </>
-        )}
-
             {/* TAB 5: ITEM SEARCH */}
             {!loading && activeTab === 'itemSearch' && (
               <div className="space-y-4">
@@ -2235,6 +2232,9 @@ export default function App() {
                 )}
               </div>
             )}
+          </>
+        )}
+
 
           </div>
         </main>
