@@ -413,14 +413,6 @@ export default function App() {
     { key: 'dineIn', label: 'Dine-in', type: 'money' },
     { key: 'takeHome', label: 'Take-Home', type: 'money' },
     { key: 'delivery', label: 'Delivery', type: 'money' },
-    { key: 'buffet259Qty', label: 'จำนวน Buffet 259', type: 'number' },
-    { key: 'buffet259Amt', label: 'ยอดขาย Buffet 259', type: 'money' },
-    { key: 'buffet359Qty', label: 'จำนวน Premium 359', type: 'number' },
-    { key: 'buffet359Amt', label: 'ยอดขาย Premium 359', type: 'money' },
-    { key: 'kid159Qty', label: 'จำนวน Kid Premium 159', type: 'number' },
-    { key: 'kid159Amt', label: 'ยอดขาย Kid Premium 159', type: 'money' },
-    { key: 'kid109Qty', label: 'จำนวน Kid Buffet 109', type: 'number' },
-    { key: 'kid109Amt', label: 'ยอดขาย Kid Buffet 109', type: 'money' },
     { key: 'serviceChg', label: 'Service10%', type: 'money' },
     { key: 'netSales', label: 'Net Sales', type: 'money' },
     { key: 'vat', label: 'Vat', type: 'money' },
@@ -447,6 +439,14 @@ export default function App() {
     { key: 'takeHomeCost', label: 'ต้นทุน Take-Home', type: 'money' },
     { key: 'deliveryBills', label: 'บิล Delivery', type: 'number' },
     { key: 'deliveryCost', label: 'ต้นทุน Delivery', type: 'money' },
+    { key: 'buffet259Qty', label: 'จำนวน Buffet 259', type: 'number' },
+    { key: 'buffet259Amt', label: 'ยอดขาย Buffet 259', type: 'money' },
+    { key: 'buffet359Qty', label: 'จำนวน Premium 359', type: 'number' },
+    { key: 'buffet359Amt', label: 'ยอดขาย Premium 359', type: 'money' },
+    { key: 'kid159Qty', label: 'จำนวน Kid Premium 159', type: 'number' },
+    { key: 'kid159Amt', label: 'ยอดขาย Kid Premium 159', type: 'money' },
+    { key: 'kid109Qty', label: 'จำนวน Kid Buffet 109', type: 'number' },
+    { key: 'kid109Amt', label: 'ยอดขาย Kid Buffet 109', type: 'money' },
     { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' }
   ];
 
@@ -2238,16 +2238,6 @@ export default function App() {
                                   {fmtMoney(row.delivery)}
                                 </td>
 
-                                {/* Buffet columns */}
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.buffet259Qty)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.buffet259Amt)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.buffet359Qty)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.buffet359Amt)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kid159Qty)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid159Amt)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kid109Qty)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid109Amt)}</td>
-
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.serviceChg)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.netSales)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
@@ -2302,6 +2292,16 @@ export default function App() {
                                   {fmtMoney(row.deliveryCost)}
                                 </td>
 
+                                {/* Buffet columns */}
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.buffet259Qty)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.buffet259Amt)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.buffet359Qty)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.buffet359Amt)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kid159Qty)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid159Amt)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kid109Qty)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid109Amt)}</td>
+
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-rose-600">{fmtMoney(row.totalCost)}</td>
                               </tr>
                             ))
@@ -2315,16 +2315,6 @@ export default function App() {
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.takeHome, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.delivery, 0))}</td>
                             
-                            {/* Buffet totals */}
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.buffet259Qty, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.buffet259Amt, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.buffet359Qty, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.buffet359Amt, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kid159Qty, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.kid159Amt, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kid109Qty, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.kid109Amt, 0))}</td>
-
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.serviceChg, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.netSales, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-slate-600">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.vat, 0))}</td>
@@ -2353,6 +2343,16 @@ export default function App() {
                             <td className="px-3 py-2.5 text-right font-mono font-semibold text-rose-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.takeHomeCost, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.deliveryBills, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-semibold text-rose-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.deliveryCost, 0))}</td>
+
+                            {/* Buffet totals */}
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.buffet259Qty, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.buffet259Amt, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.buffet359Qty, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.buffet359Amt, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kid159Qty, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.kid159Amt, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kid109Qty, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.kid109Amt, 0))}</td>
 
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-rose-800">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.totalCost, 0))}</td>
                           </tr>
