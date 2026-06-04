@@ -138,6 +138,7 @@ export default function App() {
   const [itemSearch, setItemSearch] = useState('');
   const [itemSearchSort, setItemSearchSort] = useState({ col: 'totalQty', asc: false });
   const [selectedItem, setSelectedItem] = useState(null); // { itemCode, nameThai, nameEng }
+  const [showDailyBillsModal, setShowDailyBillsModal] = useState({ open: false, title: '', bills: [] });
 
   useEffect(() => {
     setIsMounted(true);
@@ -406,7 +407,11 @@ export default function App() {
     { key: 'name', label: 'ชื่อสาขา', type: 'text' },
     { key: 'dineIn', label: 'Dine-in', type: 'money' },
     { key: 'takeHome', label: 'Take-Home', type: 'money' },
+    { key: 'takeHomeBills', label: 'บิล Take-Home', type: 'number' },
+    { key: 'takeHomeCost', label: 'ต้นทุน Take-Home', type: 'money' },
     { key: 'delivery', label: 'Delivery', type: 'money' },
+    { key: 'deliveryBills', label: 'บิล Delivery', type: 'number' },
+    { key: 'deliveryCost', label: 'ต้นทุน Delivery', type: 'money' },
     { key: 'serviceChg', label: 'Service10%', type: 'money' },
     { key: 'netSales', label: 'Net Sales', type: 'money' },
     { key: 'vat', label: 'Vat', type: 'money' },
@@ -432,21 +437,40 @@ export default function App() {
     { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' }
   ];
 
-  const dailyCostMap = useMemo(() => {
+  const dailyCostSplitMap = useMemo(() => {
     const map = {};
-    if (!detailRaw.length || !costMap) return map;
+    if (!detailRaw.length || !costMap || !salesRaw.length) return map;
+
+    // Map checkID -> tableID
+    const checkTableIDMap = {};
+    salesRaw.forEach(row => {
+      checkTableIDMap[String(row.checkID)] = parseInt(row.tableID || row.TableID || 0);
+    });
+
     detailRaw.forEach(r => {
-      if (r.void === 'V' || r.Void === 'V') return;
+      if (r.void === 'V' || r.Void === 'V' || r.void) return;
       const d = dateFromRow(r);
       const oid = r.outletID;
       const key = `${d}_${oid}`;
+      if (!map[key]) {
+        map[key] = { dineInCost: 0, takeHomeCost: 0, deliveryCost: 0 };
+      }
       const qty = parseFloat(r.quantity || r.Qty || 0);
       const code = String(r.itemCode || '');
       const costVal = parseFloat(costMap[code] || 0);
-      map[key] = (map[key] || 0) + (qty * costVal);
+      const cost = qty * costVal;
+
+      const tid = checkTableIDMap[String(r.chkCheckID)] || 0;
+      if (tid === 300) {
+        map[key].takeHomeCost += cost;
+      } else if (tid === 400 || tid === 401) {
+        map[key].deliveryCost += cost;
+      } else {
+        map[key].dineInCost += cost;
+      }
     });
     return map;
-  }, [detailRaw, costMap]);
+  }, [detailRaw, costMap, salesRaw]);
 
   const dailyReportData = useMemo(() => {
     if (!salesRaw.length) return [];
@@ -471,6 +495,9 @@ export default function App() {
       let dineIn = 0;
       let takeHome = 0;
       let delivery = 0;
+      let dineInBills = 0;
+      let takeHomeBills = 0;
+      let deliveryBills = 0;
 
       bills.forEach(r => {
         const amount = parseFloat(r.amount || r.Amount || 0);
@@ -480,10 +507,13 @@ export default function App() {
         const tid = parseInt(r.tableID || r.TableID || 0);
         if (tid === 300) {
           takeHome += net;
+          takeHomeBills++;
         } else if (tid === 400 || tid === 401) {
           delivery += net;
+          deliveryBills++;
         } else {
           dineIn += net;
+          dineInBills++;
         }
       });
 
@@ -570,7 +600,12 @@ export default function App() {
 
       const billCount = bills.length;
       const totalCovers = bills.reduce((sum, r) => sum + parseInt(r.cover || r.coverAll || r.coverAd || 0), 0);
-      const totalCost = dailyCostMap[key] || 0;
+      
+      const costData = dailyCostSplitMap[key] || { dineInCost: 0, takeHomeCost: 0, deliveryCost: 0 };
+      const dineInCost = costData.dineInCost;
+      const takeHomeCost = costData.takeHomeCost;
+      const deliveryCost = costData.deliveryCost;
+      const totalCost = dineInCost + takeHomeCost + deliveryCost;
 
       return {
         date,
@@ -578,7 +613,11 @@ export default function App() {
         name,
         dineIn,
         takeHome,
+        takeHomeBills,
+        takeHomeCost,
         delivery,
+        deliveryBills,
+        deliveryCost,
         serviceChg,
         netSales,
         vat,
@@ -601,10 +640,12 @@ export default function App() {
         totalSales,
         billCount,
         totalCovers,
-        totalCost
+        totalCost,
+        dineInBills,
+        dineInCost
       };
     }).sort((a, b) => b.date.localeCompare(a.date) || a.outletID - b.outletID);
-  }, [salesRaw, dailyCostMap]);
+  }, [salesRaw, dailyCostSplitMap]);
 
   const filteredDailyReport = useMemo(() => {
     let d = [...dailyReportData];
@@ -995,6 +1036,19 @@ export default function App() {
       setModal({ open: true, checkID, rows: [], loading: false, error: 'ไม่สามารถดึงข้อมูลได้: ' + e.message });
     }
   }
+
+  const handleDailyCellClick = (date, outletID, typeLabel, typeFilterFn) => {
+    const matchingBills = salesWithCost.filter(r => {
+      const d = dateFromRow(r);
+      const matchesDateAndOutlet = d === date && String(r.outletID) === String(outletID);
+      return matchesDateAndOutlet && typeFilterFn(r);
+    });
+    setShowDailyBillsModal({
+      open: true,
+      title: `${typeLabel} - สาขา ${OUTLETS[outletID] || 'Unknown'} วันที่ ${date}`,
+      bills: matchingBills
+    });
+  };
 
   const toggleCompareOutlet = (id) => {
     setCompareOutlets(prev => {
@@ -2072,9 +2126,60 @@ export default function App() {
                                 <td className="px-3 py-2 whitespace-nowrap">{row.date}</td>
                                 <td className="px-3 py-2 whitespace-nowrap font-mono">{row.outletID}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-slate-900 font-semibold">{row.name}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.dineIn)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.takeHome)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.delivery)}</td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'ยอดขาย Dine-In', r => {
+                                    const t = parseInt(r.tableID || r.TableID || 0);
+                                    return t !== 300 && t !== 400 && t !== 401;
+                                  })}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-amber-600 hover:text-amber-800 hover:underline font-bold transition-all"
+                                >
+                                  {fmtMoney(row.dineIn)}
+                                </td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'ยอดขาย Take-Home', r => parseInt(r.tableID || r.TableID || 0) === 300)}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-amber-600 hover:text-amber-800 hover:underline font-bold transition-all"
+                                >
+                                  {fmtMoney(row.takeHome)}
+                                </td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'จำนวนบิล Take-Home', r => parseInt(r.tableID || r.TableID || 0) === 300)}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-slate-700 hover:text-slate-900 hover:underline font-semibold transition-all"
+                                >
+                                  {fmtNum(row.takeHomeBills)}
+                                </td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'ต้นทุน Take-Home', r => parseInt(r.tableID || r.TableID || 0) === 300)}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-rose-600 hover:text-rose-800 hover:underline font-semibold transition-all"
+                                >
+                                  {fmtMoney(row.takeHomeCost)}
+                                </td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'ยอดขาย Delivery', r => {
+                                    const t = parseInt(r.tableID || r.TableID || 0);
+                                    return t === 400 || t === 401;
+                                  })}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-amber-600 hover:text-amber-800 hover:underline font-bold transition-all"
+                                >
+                                  {fmtMoney(row.delivery)}
+                                </td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'จำนวนบิล Delivery', r => {
+                                    const t = parseInt(r.tableID || r.TableID || 0);
+                                    return t === 400 || t === 401;
+                                  })}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-slate-700 hover:text-slate-900 hover:underline font-semibold transition-all"
+                                >
+                                  {fmtNum(row.deliveryBills)}
+                                </td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'ต้นทุน Delivery', r => {
+                                    const t = parseInt(r.tableID || r.TableID || 0);
+                                    return t === 400 || t === 401;
+                                  })}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-rose-600 hover:text-rose-800 hover:underline font-semibold transition-all"
+                                >
+                                  {fmtMoney(row.deliveryCost)}
+                                </td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.serviceChg)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.netSales)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
@@ -2108,7 +2213,11 @@ export default function App() {
                             <td colSpan={2} />
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.dineIn, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.takeHome, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.takeHomeBills, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-semibold text-rose-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.takeHomeCost, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.delivery, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.deliveryBills, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-semibold text-rose-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.deliveryCost, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.serviceChg, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.netSales, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-slate-600">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.vat, 0))}</td>
@@ -2542,6 +2651,102 @@ export default function App() {
               <span className="text-xs text-slate-400 font-medium">ทั้งหมด {itemBranchData.length} สาขาที่มีการใช้งาน</span>
               <button 
                 onClick={() => setSelectedItem(null)}
+                className="bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-5 py-2 rounded-xl transition-all"
+              >
+                ปิดหน้าต่าง
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DAILY BILLS LIST MODAL */}
+      {showDailyBillsModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setShowDailyBillsModal(prev => ({ ...prev, open: false }))}>
+          <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <ShoppingBag size={18} className="text-amber-400" />
+                  <span>รายการบิลแยกตามประเภท</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">{showDailyBillsModal.title}</p>
+              </div>
+              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setShowDailyBillsModal(prev => ({ ...prev, open: false }))}>
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="overflow-auto border border-slate-100 rounded-xl">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-5 py-3 text-slate-600 font-bold w-20">ตัวช่วย</th>
+                      <th className="px-5 py-3 text-slate-600 font-bold">เวลา</th>
+                      <th className="px-5 py-3 text-slate-600 font-bold">Check ID</th>
+                      <th className="px-5 py-3 text-slate-600 font-bold text-right">ยอดรวมบิล (Gross)</th>
+                      <th className="px-5 py-3 text-slate-600 font-bold text-right text-rose-600">ต้นทุนรวม</th>
+                      <th className="px-5 py-3 text-slate-600 font-bold">ประเภทชำระ</th>
+                      <th className="px-5 py-3 text-slate-600 font-bold">เลขที่สมาชิก</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {showDailyBillsModal.bills.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-5 py-8 text-center text-slate-400">ไม่พบรายการบิล</td>
+                      </tr>
+                    ) : (
+                      showDailyBillsModal.bills.map((row, i) => (
+                        <tr key={i} className={`hover:bg-slate-50/50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}`}>
+                          <td className="px-5 py-2.5">
+                            <button 
+                              onClick={() => {
+                                openDetail(row);
+                              }}
+                              className="flex items-center gap-1 px-2.5 py-1 border border-amber-200 hover:bg-amber-50 text-amber-700 font-semibold rounded-lg text-[10px] transition-colors"
+                            >
+                              <Eye size={12} />
+                              <span>ดูบิล</span>
+                            </button>
+                          </td>
+                          <td className="px-5 py-2.5 whitespace-nowrap">{row.startTime || row.postTime || '-'}</td>
+                          <td className="px-5 py-2.5 font-mono whitespace-nowrap font-semibold text-slate-900">{row.checkID}</td>
+                          <td className="px-5 py-2.5 text-right font-mono font-bold text-amber-700">{fmtMoney(row.billTotal)}</td>
+                          <td className="px-5 py-2.5 text-right font-mono text-rose-600 font-bold">{fmtMoney(row.billCost)}</td>
+                          <td className="px-5 py-2.5 whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              String(row.paidType).toLowerCase().includes('cash') || String(row.paidType).includes('สด')
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : 'bg-amber-50 text-amber-700'
+                            }`}>
+                              {row.paidType || '-'}
+                            </span>
+                          </td>
+                          <td className="px-5 py-2.5 font-mono text-slate-600">{row.memberTel || '-'}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-amber-50/60 border-t-2 border-amber-500 font-bold text-slate-800">
+                      <td className="px-5 py-3" colSpan={3}>รวมทั้งหมด</td>
+                      <td className="px-5 py-3 text-right font-mono text-amber-700">{fmtMoney(showDailyBillsModal.bills.reduce((s, b) => s + (parseFloat(b.billTotal) || 0), 0))}</td>
+                      <td className="px-5 py-3 text-right font-mono text-rose-700">{fmtMoney(showDailyBillsModal.bills.reduce((s, b) => s + (parseFloat(b.billCost) || 0), 0))}</td>
+                      <td colSpan={2} />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between flex-shrink-0">
+              <span className="text-xs text-slate-400 font-medium">ทั้งหมด {showDailyBillsModal.bills.length} บิล</span>
+              <button 
+                onClick={() => setShowDailyBillsModal(prev => ({ ...prev, open: false }))}
                 className="bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-5 py-2 rounded-xl transition-all"
               >
                 ปิดหน้าต่าง
