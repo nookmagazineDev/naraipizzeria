@@ -337,6 +337,7 @@ export default function App() {
     { key: 'amount', label: 'Amount', type: 'amount' },
     { key: 'billTotal', label: 'Bill Total', type: 'bill' },
     { key: 'paidType', label: 'ประเภทชำระ', type: 'badge' },
+    { key: 'memberTel', label: 'เลขที่สมาชิก', type: 'text' },
     { key: 'cover', label: 'Cover', type: 'num' },
     { key: 'coverAd', label: 'Cover Ad', type: 'num' },
     { key: 'coverAll', label: 'Cover All', type: 'num' },
@@ -1680,11 +1681,6 @@ export default function App() {
                       <TrendingUp size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
                       <p className="text-sm">กรุณากดปุ่ม &quot;ค้นหาข้อมูล&quot; ด้านบน เพื่อแสดงผลรายการขาย</p>
                     </div>
-                  ) : filteredSales.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-                      <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
-                      <p className="text-sm">ไม่พบข้อมูลตามเงื่อนไขที่ระบุ</p>
-                    </div>
                   ) : (
                     <>
                       <div className="overflow-x-auto w-full">
@@ -1727,48 +1723,60 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
-                            {filteredSales.slice((salesPage - 1) * PAGE_SIZE, salesPage * PAGE_SIZE).map((row, i) => (
-                              <tr key={i} className="hover:bg-slate-50/50 transition-colors">
-                                <td className="px-4 py-2.5">
-                                  <button 
-                                    onClick={() => openDetail(row)}
-                                    className="flex items-center gap-1 px-2.5 py-1 border border-amber-200 hover:bg-amber-50 text-amber-700 font-semibold rounded-lg text-[10px] transition-colors"
-                                  >
-                                    <Eye size={12} />
-                                    <span>ดูบิล</span>
-                                  </button>
+                            {filteredSales.length === 0 ? (
+                              <tr>
+                                <td colSpan={SALES_COLUMNS.length + 1} className="py-20 text-center text-slate-400">
+                                  <div className="flex flex-col items-center justify-center">
+                                    <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
+                                    <p className="text-sm">ไม่พบข้อมูลตามเงื่อนไขที่ระบุ</p>
+                                  </div>
                                 </td>
-                                <td className="px-4 py-2.5 whitespace-nowrap">{dateFromRow(row)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap font-mono">{row.checkID}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.amount)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.billTotal)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap">
-                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                    String(row.paidType).toLowerCase().includes('cash') || String(row.paidType).includes('สด')
-                                      ? 'bg-emerald-50 text-emerald-700'
-                                      : String(row.paidType).toLowerCase().includes('credit') || String(row.paidType).includes('บัตร')
-                                      ? 'bg-amber-50 text-amber-700'
-                                      : 'bg-amber-50 text-amber-700'
-                                  }`}>
-                                    {row.paidType || '-'}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono">{fmtNum(row.cover)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono">{fmtNum(row.coverAd)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono">{fmtNum(row.coverAll)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{row.startTime || '-'}</td>
-                                <td className="px-4 py-2.5 max-w-[200px] truncate text-slate-500" title={row.checkDesc}>{row.checkDesc || '-'}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-400">{row.orderID || '-'}</td>
                               </tr>
-                            ))}
+                            ) : (
+                              filteredSales.slice((salesPage - 1) * PAGE_SIZE, salesPage * PAGE_SIZE).map((row, i) => (
+                                <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                                  <td className="px-4 py-2.5">
+                                    <button 
+                                      onClick={() => openDetail(row)}
+                                      className="flex items-center gap-1 px-2.5 py-1 border border-amber-200 hover:bg-amber-50 text-amber-700 font-semibold rounded-lg text-[10px] transition-colors"
+                                    >
+                                      <Eye size={12} />
+                                      <span>ดูบิล</span>
+                                    </button>
+                                  </td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap">{dateFromRow(row)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-mono">{row.checkID}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.amount)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.billTotal)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                      String(row.paidType).toLowerCase().includes('cash') || String(row.paidType).includes('สด')
+                                        ? 'bg-emerald-50 text-emerald-700'
+                                        : String(row.paidType).toLowerCase().includes('credit') || String(row.paidType).includes('บัตร')
+                                        ? 'bg-amber-50 text-amber-700'
+                                        : 'bg-amber-50 text-amber-700'
+                                    }`}>
+                                      {row.paidType || '-'}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-700">{row.memberTel || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono">{fmtNum(row.cover)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono">{fmtNum(row.coverAd)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono">{fmtNum(row.coverAll)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{row.startTime || '-'}</td>
+                                  <td className="px-4 py-2.5 max-w-[200px] truncate text-slate-500" title={row.checkDesc}>{row.checkDesc || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-400">{row.orderID || '-'}</td>
+                                </tr>
+                              ))
+                            )}
                           </tbody>
                         </table>
                       </div>
                       {/* Pagination */}
                       <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
                         <span>
-                          แสดง {(salesPage - 1) * PAGE_SIZE + 1}–{Math.min(salesPage * PAGE_SIZE, filteredSales.length)} จาก {filteredSales.length.toLocaleString('th-TH')} บิล
+                          แสดง {filteredSales.length === 0 ? 0 : (salesPage - 1) * PAGE_SIZE + 1}–{Math.min(salesPage * PAGE_SIZE, filteredSales.length)} จาก {filteredSales.length.toLocaleString('th-TH')} บิล
                         </span>
                         <div className="flex gap-1.5">
                           <button 
@@ -1778,9 +1786,9 @@ export default function App() {
                           >
                             <ChevronLeft size={16} />
                           </button>
-                          <span className="flex items-center px-3 font-semibold text-slate-700">หน้า {salesPage} จาก {Math.ceil(filteredSales.length / PAGE_SIZE)}</span>
+                          <span className="flex items-center px-3 font-semibold text-slate-700">หน้า {filteredSales.length === 0 ? 0 : salesPage} จาก {Math.ceil(filteredSales.length / PAGE_SIZE)}</span>
                           <button 
-                            disabled={salesPage === Math.ceil(filteredSales.length / PAGE_SIZE)}
+                            disabled={salesPage >= Math.ceil(filteredSales.length / PAGE_SIZE)}
                             onClick={() => setSalesPage(p => p + 1)}
                             className="p-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40"
                           >
@@ -1823,11 +1831,6 @@ export default function App() {
                     <Layers size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
                     <p className="text-sm">กรุณากดปุ่ม &quot;ค้นหาข้อมูล&quot; ด้านบน เพื่อแสดงผลรายละเอียดสินค้า</p>
                   </div>
-                ) : filteredDetails.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-                    <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
-                    <p className="text-sm">ไม่พบข้อมูลตามเงื่อนไขที่ระบุ</p>
-                  </div>
                 ) : (
                   <>
                     <div className="overflow-x-auto w-full">
@@ -1868,39 +1871,50 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700">
-                          {filteredDetails.slice((detailPage - 1) * PAGE_SIZE, detailPage * PAGE_SIZE).map((row, i) => {
-                            const isVoided = row.void;
-                            return (
-                              <tr key={i} className={`hover:bg-slate-50/50 transition-colors ${isVoided ? 'row-void bg-rose-50/20' : ''}`}>
-                                <td className="px-4 py-2.5 whitespace-nowrap">{row.prtOrdTime ? row.prtOrdTime.slice(0, 10) : '-'}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap font-mono">{row.chkCheckID}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-500">{row.itemCode || '-'}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap font-semibold text-slate-800">{row.nameThai || '-'}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono font-semibold">{fmtNum(row.quantity)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.unitPrice)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-bold">{fmtMoney(row.grossPrice)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-400">{fmtMoney(row.tax)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-center font-mono">{row.tableID || '-'}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-slate-400">{row.prtOrdTime || '-'}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap">
-                                  {isVoided ? (
-                                    <span className="flex items-center gap-1 text-rose-600 font-semibold">
-                                      <XCircle size={14} />
-                                      <span>ยกเลิก</span>
-                                    </span>
-                                  ) : (
-                                    <span className="flex items-center gap-1 text-emerald-600 font-semibold">
-                                      <CheckCircle size={14} />
-                                      <span>ปกติ</span>
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-slate-400">{row.voidTime || '-'}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-400">{row.orderID || '-'}</td>
-                              </tr>
-                            );
-                          })}
+                          {filteredDetails.length === 0 ? (
+                            <tr>
+                              <td colSpan={DETAIL_COLUMNS.length} className="py-20 text-center text-slate-400">
+                                <div className="flex flex-col items-center justify-center">
+                                  <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
+                                  <p className="text-sm">ไม่พบข้อมูลตามเงื่อนไขที่ระบุ</p>
+                                </div>
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredDetails.slice((detailPage - 1) * PAGE_SIZE, detailPage * PAGE_SIZE).map((row, i) => {
+                              const isVoided = row.void;
+                              return (
+                                <tr key={i} className={`hover:bg-slate-50/50 transition-colors ${isVoided ? 'row-void bg-rose-50/20' : ''}`}>
+                                  <td className="px-4 py-2.5 whitespace-nowrap">{row.prtOrdTime ? row.prtOrdTime.slice(0, 10) : '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-mono">{row.chkCheckID}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-500">{row.itemCode || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-semibold text-slate-800">{row.nameThai || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono font-semibold">{fmtNum(row.quantity)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.unitPrice)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-bold">{fmtMoney(row.grossPrice)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-400">{fmtMoney(row.tax)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-center font-mono">{row.tableID || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-slate-400">{row.prtOrdTime || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap">
+                                    {isVoided ? (
+                                      <span className="flex items-center gap-1 text-rose-600 font-semibold">
+                                        <XCircle size={14} />
+                                        <span>ยกเลิก</span>
+                                      </span>
+                                    ) : (
+                                      <span className="flex items-center gap-1 text-emerald-600 font-semibold">
+                                        <CheckCircle size={14} />
+                                        <span>ปกติ</span>
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-slate-400">{row.voidTime || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-400">{row.orderID || '-'}</td>
+                                </tr>
+                              );
+                            })
+                          )}
                         </tbody>
                         <tfoot>
                           <tr className="bg-amber-50/50 border-t-2 border-amber-500 font-bold text-slate-800">
@@ -1921,7 +1935,7 @@ export default function App() {
                     {/* Pagination */}
                     <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
                       <span>
-                        แสดง {(detailPage - 1) * PAGE_SIZE + 1}–{Math.min(detailPage * PAGE_SIZE, filteredDetails.length)} จาก {filteredDetails.length.toLocaleString('th-TH')} รายการสินค้า
+                        แสดง {filteredDetails.length === 0 ? 0 : (detailPage - 1) * PAGE_SIZE + 1}–{Math.min(detailPage * PAGE_SIZE, filteredDetails.length)} จาก {filteredDetails.length.toLocaleString('th-TH')} รายการสินค้า
                       </span>
                       <div className="flex gap-1.5">
                         <button 
@@ -1931,9 +1945,9 @@ export default function App() {
                         >
                           <ChevronLeft size={16} />
                         </button>
-                        <span className="flex items-center px-3 font-semibold text-slate-700">หน้า {detailPage} จาก {Math.ceil(filteredDetails.length / PAGE_SIZE)}</span>
+                        <span className="flex items-center px-3 font-semibold text-slate-700">หน้า {filteredDetails.length === 0 ? 0 : detailPage} จาก {Math.ceil(filteredDetails.length / PAGE_SIZE)}</span>
                         <button 
-                          disabled={detailPage === Math.ceil(filteredDetails.length / PAGE_SIZE)}
+                          disabled={detailPage >= Math.ceil(filteredDetails.length / PAGE_SIZE)}
                           onClick={() => setDetailPage(p => p + 1)}
                           className="p-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40"
                         >
@@ -1975,11 +1989,6 @@ export default function App() {
                     <Receipt size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
                     <p className="text-sm">กรุณากดปุ่ม &quot;ค้นหาข้อมูล&quot; ด้านบน เพื่อแสดงรายงานยอดรายวัน</p>
                   </div>
-                ) : filteredDailyReport.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-                    <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
-                    <p className="text-sm">ไม่พบข้อมูลตามเงื่อนไขที่ระบุ</p>
-                  </div>
                 ) : (
                   <>
                     <div className="overflow-x-auto w-full">
@@ -2020,39 +2029,50 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-                          {filteredDailyReport.slice((dailyPage - 1) * PAGE_SIZE, dailyPage * PAGE_SIZE).map((row, i) => (
-                            <tr key={i} className="hover:bg-slate-50/50 transition-colors">
-                              <td className="px-3 py-2 whitespace-nowrap">{row.date}</td>
-                              <td className="px-3 py-2 whitespace-nowrap font-mono">{row.outletID}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-slate-900 font-semibold">{row.name}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.dineIn)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.takeHome)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.delivery)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.serviceChg)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.netSales)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.grossSales)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.cash)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.credit)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.qrCredit)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.qr)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.oc)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.grab)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.robinhood)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.shopee)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.lineMan)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.voucher)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.alipay)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.wechat)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.copay)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.catering)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.gojek)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-700 font-bold">{fmtMoney(row.totalSales)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.billCount)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.totalCovers)}</td>
-                              <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-rose-600">{fmtMoney(row.totalCost)}</td>
+                          {filteredDailyReport.length === 0 ? (
+                            <tr>
+                              <td colSpan={DAILY_COLUMNS.length} className="py-20 text-center text-slate-400">
+                                <div className="flex flex-col items-center justify-center">
+                                  <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
+                                  <p className="text-sm">ไม่พบข้อมูลตามเงื่อนไขที่ระบุ</p>
+                                </div>
+                              </td>
                             </tr>
-                          ))}
+                          ) : (
+                            filteredDailyReport.slice((dailyPage - 1) * PAGE_SIZE, dailyPage * PAGE_SIZE).map((row, i) => (
+                              <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                                <td className="px-3 py-2 whitespace-nowrap">{row.date}</td>
+                                <td className="px-3 py-2 whitespace-nowrap font-mono">{row.outletID}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-slate-900 font-semibold">{row.name}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.dineIn)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.takeHome)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.delivery)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.serviceChg)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.netSales)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.grossSales)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.cash)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.credit)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.qrCredit)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.qr)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.oc)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.grab)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.robinhood)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.shopee)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.lineMan)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.voucher)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.alipay)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.wechat)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.copay)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.catering)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.gojek)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-700 font-bold">{fmtMoney(row.totalSales)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.billCount)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.totalCovers)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-rose-600">{fmtMoney(row.totalCost)}</td>
+                              </tr>
+                            ))
+                          )}
                         </tbody>
                         <tfoot>
                           <tr className="bg-amber-50/50 border-t-2 border-amber-500 font-bold text-slate-800">
@@ -2091,7 +2111,7 @@ export default function App() {
                     {/* Pagination */}
                     <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
                       <span>
-                        แสดง {(dailyPage - 1) * PAGE_SIZE + 1}–{Math.min(dailyPage * PAGE_SIZE, filteredDailyReport.length)} จาก {filteredDailyReport.length.toLocaleString('th-TH')} รายการ
+                        แสดง {filteredDailyReport.length === 0 ? 0 : (dailyPage - 1) * PAGE_SIZE + 1}–{Math.min(dailyPage * PAGE_SIZE, filteredDailyReport.length)} จาก {filteredDailyReport.length.toLocaleString('th-TH')} รายการ
                       </span>
                       <div className="flex gap-1.5">
                         <button 
@@ -2101,9 +2121,9 @@ export default function App() {
                         >
                           <ChevronLeft size={16} />
                         </button>
-                        <span className="flex items-center px-3 font-semibold text-slate-700">หน้า {dailyPage} จาก {Math.ceil(filteredDailyReport.length / PAGE_SIZE)}</span>
+                        <span className="flex items-center px-3 font-semibold text-slate-700">หน้า {filteredDailyReport.length === 0 ? 0 : dailyPage} จาก {Math.ceil(filteredDailyReport.length / PAGE_SIZE)}</span>
                         <button 
-                          disabled={dailyPage === Math.ceil(filteredDailyReport.length / PAGE_SIZE)}
+                          disabled={dailyPage >= Math.ceil(filteredDailyReport.length / PAGE_SIZE)}
                           onClick={() => setDailyPage(p => p + 1)}
                           className="p-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40"
                         >
