@@ -802,13 +802,15 @@ export default function App() {
   // Filtered + sorted item search list
   const filteredItemSummary = useMemo(() => {
     let d = [...itemSummaryData];
-    if (itemSearch.trim()) {
+    if (itemSearch && itemSearch.trim()) {
       const q = itemSearch.toLowerCase();
-      d = d.filter(r =>
-        r.itemCode.toLowerCase().includes(q) ||
-        r.nameThai.toLowerCase().includes(q) ||
-        r.nameEng.toLowerCase().includes(q)
-      );
+      d = d.filter(r => {
+        if (!r) return false;
+        const itemCode = r.itemCode ? String(r.itemCode).toLowerCase() : '';
+        const nameThai = r.nameThai ? String(r.nameThai).toLowerCase() : '';
+        const nameEng = r.nameEng ? String(r.nameEng).toLowerCase() : '';
+        return itemCode.includes(q) || nameThai.includes(q) || nameEng.includes(q);
+      });
     }
     const { col, asc } = itemSearchSort;
     d.sort((a, b) => {
