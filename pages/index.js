@@ -1,5 +1,5 @@
 import Head from 'next/head';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   LayoutDashboard, 
   TrendingUp, 
@@ -23,7 +23,8 @@ import {
   Eye,
   CheckCircle,
   XCircle,
-  HelpCircle
+  HelpCircle,
+  Filter
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -89,6 +90,170 @@ const normalizeArray = json =>
 
 const PAGE_SIZE = 50;
 
+function ExcelFilterDropdown({
+  columnKey,
+  label,
+  value = [],
+  onChange,
+  dataset,
+  getValFn
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const dropdownRef = useRef(null);
+
+  // Get all unique values from dataset
+  const allUniqueOptions = useMemo(() => {
+    if (!dataset || !dataset.length) return [];
+    const set = new Set();
+    dataset.forEach(row => {
+      const v = getValFn ? getValFn(row, columnKey) : String(row[columnKey] ?? '');
+      set.add(v || '-');
+    });
+    return Array.from(set).sort((a, b) => {
+      const na = parseFloat(a), nb = parseFloat(b);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return String(a).localeCompare(String(b), 'th');
+    });
+  }, [dataset, columnKey, getValFn]);
+
+  // Click outside listener to close dropdown
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen]);
+
+  // Search filter options
+  const filteredOptions = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    if (!q) return allUniqueOptions;
+    return allUniqueOptions.filter(opt => String(opt).toLowerCase().includes(q));
+  }, [allUniqueOptions, searchQuery]);
+
+  // Toggle selection
+  const handleToggleOption = (opt) => {
+    let next;
+    if (value.includes(opt)) {
+      next = value.filter(v => v !== opt);
+    } else {
+      next = [...value, opt];
+    }
+    onChange(next);
+  };
+
+  // Select all matching search
+  const handleSelectAll = () => {
+    const allSelected = filteredOptions.every(opt => value.includes(opt));
+    if (allSelected) {
+      onChange(value.filter(opt => !filteredOptions.includes(opt)));
+    } else {
+      onChange(Array.from(new Set([...value, ...filteredOptions])));
+    }
+  };
+
+  const handleClear = () => {
+    onChange([]);
+    setSearchQuery('');
+  };
+
+  const isFiltered = value && value.length > 0;
+
+  return (
+    <div className="relative inline-block w-full text-left" ref={dropdownRef}>
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className={`w-full flex items-center justify-between gap-1 px-1.5 py-0.5 border rounded text-[9px] font-medium transition-all bg-white select-none ${
+          isFiltered 
+            ? 'border-amber-500 text-amber-700 bg-amber-50/50 ring-1 ring-amber-500 font-bold' 
+            : 'border-slate-200 text-slate-500 hover:border-slate-300'
+        }`}
+      >
+        <span className="truncate max-w-[80px]">
+          {isFiltered 
+            ? `${value.length} รายการ`
+            : 'ทั้งหมด'
+          }
+        </span>
+        {isFiltered ? (
+          <Filter size={8} className="text-amber-600 flex-shrink-0 fill-current" />
+        ) : (
+          <ChevronDown size={8} className="text-slate-400 flex-shrink-0" />
+        )}
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 mt-1 w-56 rounded-lg bg-white shadow-xl ring-1 ring-black/5 focus:outline-none z-50 text-slate-700 border border-slate-100 flex flex-col max-h-[300px]">
+          {/* Search box */}
+          <div className="p-2 border-b border-slate-100 flex-shrink-0 bg-slate-50 rounded-t-lg">
+            <input
+              type="text"
+              placeholder="ค้นหาค่าตัวกรอง..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white"
+            />
+          </div>
+
+          {/* Quick controls */}
+          <div className="px-2 py-1.5 border-b border-slate-100 flex justify-between text-[10px] text-slate-500 flex-shrink-0 select-none bg-white">
+            <button
+              type="button"
+              onClick={handleSelectAll}
+              className="hover:text-amber-600 font-semibold"
+            >
+              {filteredOptions.every(opt => value.includes(opt)) ? 'ล้างการเลือก' : 'เลือกทั้งหมด'}
+            </button>
+            {isFiltered && (
+              <button
+                type="button"
+                onClick={handleClear}
+                className="text-rose-500 hover:text-rose-700 font-semibold"
+              >
+                ล้างฟิลเตอร์
+              </button>
+            )}
+          </div>
+
+          {/* List of options */}
+          <div className="overflow-y-auto flex-1 py-1 max-h-[180px]">
+            {filteredOptions.length === 0 ? (
+              <div className="px-3 py-2 text-center text-xs text-slate-400">ไม่พบตัวเลือก</div>
+            ) : (
+              filteredOptions.map(opt => {
+                const checked = value.includes(opt);
+                return (
+                  <label
+                    key={opt}
+                    className="flex items-center gap-2 px-3 py-1 text-xs hover:bg-slate-50 cursor-pointer select-none text-slate-700 font-normal"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => handleToggleOption(opt)}
+                      className="rounded border-slate-300 text-amber-600 focus:ring-amber-500 w-3.5 h-3.5 flex-shrink-0"
+                    />
+                    <span className="truncate">{opt}</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [isMounted, setIsMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -138,6 +303,7 @@ export default function App() {
   const [itemSearch, setItemSearch] = useState('');
   const [itemSearchSort, setItemSearchSort] = useState({ col: 'totalQty', asc: false });
   const [selectedItem, setSelectedItem] = useState(null); // { itemCode, nameThai, nameEng }
+  const [itemColF, setItemColF] = useState({});
   const [showDailyBillsModal, setShowDailyBillsModal] = useState({ open: false, title: '', bills: [] });
 
   useEffect(() => {
@@ -201,6 +367,11 @@ export default function App() {
     setDailySort({ col: 'date', asc: false });
     setDailyPage(1);
     setDailyColF({});
+
+    setItemSearch('');
+    setItemSearchSort({ col: 'totalQty', asc: false });
+    setSelectedItem(null);
+    setItemColF({});
 
     try {
       const chunks = getChunks(startDate, endDate, 5); // 5-day chunks
@@ -286,6 +457,15 @@ export default function App() {
     }
     if (key === 'outletID') return outletLabel(row[key]);
     if (key === 'void') return row[key] ? 'ยกเลิก' : 'ปกติ';
+
+    // Formatting money and numbers for exact match/display
+    const isSalesCol = SALES_COLUMNS.find(c => c.key === key);
+    const isDetailCol = DETAIL_COLUMNS.find(c => c.key === key);
+    const col = isSalesCol || isDetailCol;
+    if (col) {
+      if (col.type === 'money' || col.type === 'money_bold' || col.type === 'amount' || col.type === 'bill') return fmtMoney(row[key]);
+      if (col.type === 'number' || col.type === 'num') return fmtNum(row[key]);
+    }
     return String(row[key] ?? '');
   }
 
@@ -306,13 +486,14 @@ export default function App() {
       );
     }
 
-    // Column Filters
-    const activeF = Object.entries(colFilters).filter(([, v]) => v.trim());
+    // Column Filters (Excel-like multiselect)
+    const activeF = Object.entries(colFilters).filter(([, vals]) => vals && vals.length > 0);
     if (activeF.length) {
       d = d.filter(row =>
-        activeF.every(([key, fv]) =>
-          getColFilterValue(row, key).toLowerCase().includes(fv.toLowerCase())
-        )
+        activeF.every(([key, selectedVals]) => {
+          const val = getColFilterValue(row, key) || '-';
+          return selectedVals.includes(val);
+        })
       );
     }
 
@@ -449,6 +630,33 @@ export default function App() {
     { key: 'kid109Amt', label: 'ยอดขาย Kid Buffet 109', type: 'money' },
     { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' }
   ];
+
+  const getDailyColFilterValue = (row, key) => {
+    if (key === 'outletID') return outletLabel(row.outletID);
+    if (key === 'date') return String(row.date ?? '').slice(0, 10);
+    const col = DAILY_COLUMNS.find(c => c.key === key);
+    if (col) {
+      if (col.type === 'money' || col.type === 'money_bold') return fmtMoney(row[key]);
+      if (col.type === 'number') return fmtNum(row[key]);
+    }
+    return String(row[key] ?? '');
+  };
+
+  const ITEM_COLUMNS = [
+    { key: 'itemCode', label: 'รหัสไอเทม', type: 'text' },
+    { key: 'nameThai', label: 'ชื่อรายการ (ไทย)', type: 'text' },
+    { key: 'nameEng', label: 'ชื่อ (Eng)', type: 'text' },
+    { key: 'totalQty', label: 'จำนวนรวม', type: 'num' },
+    { key: 'totalGross', label: 'มูลค่ารวม (฿)', type: 'money' },
+    { key: 'totalCost', label: 'ต้นทุนรวม (฿)', type: 'money' },
+    { key: 'profit', label: 'กำไร (฿)', type: 'money' }
+  ];
+
+  const getItemColFilterValue = (row, key) => {
+    if (key === 'totalQty') return fmtNum(row[key]);
+    if (key === 'totalGross' || key === 'totalCost' || key === 'profit') return fmtMoney(row[key]);
+    return String(row[key] ?? '');
+  };
 
   const dailyCostSplitMap = useMemo(() => {
     const map = {};
@@ -740,15 +948,13 @@ export default function App() {
       );
     }
 
-    // Column Filters
-    const activeF = Object.entries(dailyColF).filter(([, v]) => v.trim());
+    // Column Filters (Excel-like multiselect)
+    const activeF = Object.entries(dailyColF).filter(([, vals]) => vals && vals.length > 0);
     if (activeF.length) {
       d = d.filter(row =>
-        activeF.every(([key, fv]) => {
-          let val = '';
-          if (key === 'outletID') val = outletLabel(row.outletID);
-          else val = String(row[key] ?? '');
-          return val.toLowerCase().includes(fv.toLowerCase());
+        activeF.every(([key, selectedVals]) => {
+          const val = getDailyColFilterValue(row, key) || '-';
+          return selectedVals.includes(val);
         })
       );
     }
@@ -954,6 +1160,18 @@ export default function App() {
         return itemCode.includes(q) || nameThai.includes(q) || nameEng.includes(q);
       });
     }
+
+    // Column Filters (Excel-like multiselect)
+    const activeF = Object.entries(itemColF).filter(([, vals]) => vals && vals.length > 0);
+    if (activeF.length) {
+      d = d.filter(row =>
+        activeF.every(([key, selectedVals]) => {
+          const val = getItemColFilterValue(row, key) || '-';
+          return selectedVals.includes(val);
+        })
+      );
+    }
+
     const { col, asc } = itemSearchSort;
     d.sort((a, b) => {
       let va = a[col], vb = b[col];
@@ -963,7 +1181,7 @@ export default function App() {
       return va < vb ? (asc ? -1 : 1) : va > vb ? (asc ? 1 : -1) : 0;
     });
     return d;
-  }, [itemSummaryData, itemSearch, itemSearchSort]);
+  }, [itemSummaryData, itemSearch, itemColF, itemSearchSort]);
 
 
   const paymentChartData = useMemo(() => {
@@ -1874,15 +2092,16 @@ export default function App() {
                               <th className="px-4 py-1.5" />
                               {SALES_COLUMNS.map(c => (
                                 <th key={c.key} className="px-2 py-1.5">
-                                  <input 
-                                    type="text" 
-                                    placeholder="กรอง..." 
-                                    value={salesColF[c.key] || ''}
-                                    onChange={e => {
-                                      setSalesColF(prev => ({ ...prev, [c.key]: e.target.value }));
+                                  <ExcelFilterDropdown
+                                    columnKey={c.key}
+                                    label={c.label}
+                                    value={salesColF[c.key] || []}
+                                    onChange={val => {
+                                      setSalesColF(prev => ({ ...prev, [c.key]: val }));
                                       setSalesPage(1);
                                     }}
-                                    className="w-full px-2 py-1 border border-slate-200 rounded-lg text-[10px] font-normal focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white"
+                                    dataset={salesWithCost}
+                                    getValFn={getColFilterValue}
                                   />
                                 </th>
                               ))}
@@ -2025,15 +2244,16 @@ export default function App() {
                           <tr className="bg-slate-50/50 border-b border-slate-100">
                             {DETAIL_COLUMNS.map(c => (
                               <th key={c.key} className="px-2 py-1.5">
-                                <input 
-                                  type="text" 
-                                  placeholder="กรอง..." 
-                                  value={detailColF[c.key] || ''}
-                                  onChange={e => {
-                                    setDetailColF(prev => ({ ...prev, [c.key]: e.target.value }));
+                                <ExcelFilterDropdown
+                                  columnKey={c.key}
+                                  label={c.label}
+                                  value={detailColF[c.key] || []}
+                                  onChange={val => {
+                                    setDetailColF(prev => ({ ...prev, [c.key]: val }));
                                     setDetailPage(1);
                                   }}
-                                  className="w-full px-2 py-1 border border-slate-200 rounded-lg text-[10px] font-normal focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white"
+                                  dataset={detailRaw}
+                                  getValFn={getColFilterValue}
                                 />
                               </th>
                             ))}
@@ -2183,15 +2403,16 @@ export default function App() {
                           <tr className="bg-slate-50/50 border-b border-slate-100">
                             {DAILY_COLUMNS.map(c => (
                               <th key={c.key} className="px-1.5 py-1">
-                                <input 
-                                  type="text" 
-                                  placeholder="กรอง..." 
-                                  value={dailyColF[c.key] || ''}
-                                  onChange={e => {
-                                    setDailyColF(prev => ({ ...prev, [c.key]: e.target.value }));
+                                <ExcelFilterDropdown
+                                  columnKey={c.key}
+                                  label={c.label}
+                                  value={dailyColF[c.key] || []}
+                                  onChange={val => {
+                                    setDailyColF(prev => ({ ...prev, [c.key]: val }));
                                     setDailyPage(1);
                                   }}
-                                  className="w-full px-1.5 py-0.5 border border-slate-200 rounded text-[9px] font-normal focus:outline-none focus:ring-1 focus:ring-amber-500 bg-white"
+                                  dataset={dailyReportData}
+                                  getValFn={getDailyColFilterValue}
                                 />
                               </th>
                             ))}
@@ -2420,15 +2641,7 @@ export default function App() {
                         <table className="w-full text-xs">
                           <thead className="bg-slate-900 text-white sticky top-0 z-10">
                             <tr>
-                              {[
-                                { key: 'itemCode', label: 'รหัสไอเทม' },
-                                { key: 'nameThai', label: 'ชื่อรายการ (ไทย)' },
-                                { key: 'nameEng', label: 'ชื่อ (Eng)' },
-                                { key: 'totalQty', label: 'จำนวนรวม' },
-                                { key: 'totalGross', label: 'มูลค่ารวม (฿)' },
-                                { key: 'totalCost', label: 'ต้นทุนรวม (฿)' },
-                                { key: 'profit', label: 'กำไร (฿)' },
-                              ].map(col => (
+                              {ITEM_COLUMNS.map(col => (
                                 <th
                                   key={col.key}
                                   onClick={() => setItemSearchSort(s => ({ col: col.key, asc: s.col === col.key ? !s.asc : false }))}
@@ -2438,6 +2651,20 @@ export default function App() {
                                     {col.label}
                                     {itemSearchSort.col === col.key ? (itemSearchSort.asc ? ' ▲' : ' ▼') : <span className="opacity-30"> ▼</span>}
                                   </div>
+                                </th>
+                              ))}
+                            </tr>
+                            <tr className="bg-slate-800/80 border-t border-slate-700">
+                              {ITEM_COLUMNS.map(col => (
+                                <th key={col.key} className="px-2 py-1.5 font-normal">
+                                  <ExcelFilterDropdown
+                                    columnKey={col.key}
+                                    label={col.label}
+                                    value={itemColF[col.key] || []}
+                                    onChange={val => setItemColF(prev => ({ ...prev, [col.key]: val }))}
+                                    dataset={itemSummaryData}
+                                    getValFn={getItemColFilterValue}
+                                  />
                                 </th>
                               ))}
                             </tr>
