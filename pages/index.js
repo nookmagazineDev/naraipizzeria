@@ -336,6 +336,7 @@ export default function App() {
     { key: 'outletID', label: 'สาขา', type: 'outlet' },
     { key: 'amount', label: 'Amount', type: 'amount' },
     { key: 'billTotal', label: 'Bill Total', type: 'bill' },
+    { key: 'vat', label: 'Vat', type: 'money' },
     { key: 'billCost', label: 'ต้นทุนรวม', type: 'money' },
     { key: 'paidType', label: 'ประเภทชำระ', type: 'badge' },
     { key: 'memberTel', label: 'เลขที่สมาชิก', type: 'text' },
@@ -384,7 +385,8 @@ export default function App() {
       const cid = String(row.checkID);
       return {
         ...row,
-        billCost: salesCostMap[cid] ?? 0
+        billCost: salesCostMap[cid] ?? 0,
+        vat: parseFloat(row.vat || row.Vat || 0)
       };
     });
   }, [salesRaw, salesCostMap]);
@@ -795,10 +797,11 @@ export default function App() {
   // Tab 2 (Sales Report) stats
   const salesTabStats = useMemo(() => {
     if (!filteredSales.length) {
-      return { totalRevenue: 0, totalCost: 0, totalProfit: 0 };
+      return { totalRevenue: 0, totalCost: 0, totalProfit: 0, totalVat: 0 };
     }
     const filteredCheckIDs = new Set(filteredSales.map(r => String(r.checkID)));
     const totalRevenue = filteredSales.reduce((sum, r) => sum + (parseFloat(r.billTotal) || 0), 0);
+    const totalVat = filteredSales.reduce((sum, r) => sum + (parseFloat(r.vat || r.Vat || 0) || 0), 0);
     const totalCost = detailRaw.reduce((sum, r) => {
       if (r.void || !r.chkCheckID) return sum;
       if (filteredCheckIDs.has(String(r.chkCheckID))) {
@@ -809,7 +812,7 @@ export default function App() {
       return sum;
     }, 0);
     const totalProfit = totalRevenue - totalCost;
-    return { totalRevenue, totalCost, totalProfit };
+    return { totalRevenue, totalCost, totalProfit, totalVat };
   }, [filteredSales, detailRaw, costMap]);
 
   // Chart 1: Daily Sales Trend
@@ -1771,7 +1774,7 @@ export default function App() {
             {activeTab === 'sales' && (
               <div className="flex flex-col gap-6">
                 {loaded && (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                     <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center gap-4">
                       <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center flex-shrink-0">
                         <DollarSign size={22} />
@@ -1779,6 +1782,15 @@ export default function App() {
                       <div>
                         <span className="text-xs text-slate-400 font-semibold block">รายได้รวมของบิลที่เลือก</span>
                         <span className="text-xl font-bold text-slate-800 mt-0.5 block">{fmtMoney(salesTabStats.totalRevenue)} บาท</span>
+                      </div>
+                    </div>
+                    <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center flex-shrink-0">
+                        <Receipt size={22} />
+                      </div>
+                      <div>
+                        <span className="text-xs text-slate-400 font-semibold block">ภาษีมูลค่าเพิ่ม (VAT) รวม</span>
+                        <span className="text-xl font-bold text-slate-800 mt-0.5 block">{fmtMoney(salesTabStats.totalVat)} บาท</span>
                       </div>
                     </div>
                     <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center gap-4">
@@ -1899,6 +1911,7 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.amount)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.billTotal)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-rose-600 font-semibold">{fmtMoney(row.billCost)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap">
                                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
