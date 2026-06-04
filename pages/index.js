@@ -628,7 +628,9 @@ export default function App() {
     { key: 'kid159Amt', label: 'ยอดขาย Kid Premium 159', type: 'money' },
     { key: 'kid109Qty', label: 'จำนวน Kid Buffet 109', type: 'number' },
     { key: 'kid109Amt', label: 'ยอดขาย Kid Buffet 109', type: 'money' },
-    { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' }
+    { key: 'kidFreeQty', label: 'จำนวนเด็กฟรี (101005)', type: 'number' },
+    { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' },
+    { key: 'costPct', label: '% ต้นทุน/ยอดขาย', type: 'percent' }
   ];
 
   const getDailyColFilterValue = (row, key) => {
@@ -638,6 +640,7 @@ export default function App() {
     if (col) {
       if (col.type === 'money' || col.type === 'money_bold') return fmtMoney(row[key]);
       if (col.type === 'number') return fmtNum(row[key]);
+      if (col.type === 'percent') return `${parseFloat(row[key] || 0).toFixed(2)}%`;
     }
     return String(row[key] ?? '');
   };
@@ -711,7 +714,8 @@ export default function App() {
           kid159Qty: 0,
           kid159Amt: 0,
           kid109Qty: 0,
-          kid109Amt: 0
+          kid109Amt: 0,
+          kidFreeQty: 0
         };
       }
 
@@ -731,6 +735,8 @@ export default function App() {
       } else if (code === '101108') {
         map[key].kid109Qty += qty;
         map[key].kid109Amt += grossPrice;
+      } else if (code === '101005') {
+        map[key].kidFreeQty += qty;
       }
     });
     return map;
@@ -879,8 +885,11 @@ export default function App() {
         kid159Qty: 0,
         kid159Amt: 0,
         kid109Qty: 0,
-        kid109Amt: 0
+        kid109Amt: 0,
+        kidFreeQty: 0
       };
+
+      const costPct = netSales > 0 ? (totalCost / netSales) * 100 : 0;
 
       return {
         date,
@@ -925,7 +934,9 @@ export default function App() {
         kid159Qty: buffetData.kid159Qty,
         kid159Amt: buffetData.kid159Amt,
         kid109Qty: buffetData.kid109Qty,
-        kid109Amt: buffetData.kid109Amt
+        kid109Amt: buffetData.kid109Amt,
+        kidFreeQty: buffetData.kidFreeQty,
+        costPct
       };
     }).sort((a, b) => b.date.localeCompare(a.date) || a.outletID - b.outletID);
   }, [salesRaw, dailyCostSplitMap, dailyBuffetItemsMap]);
@@ -2522,8 +2533,10 @@ export default function App() {
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid159Amt)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kid109Qty)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid109Amt)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kidFreeQty)}</td>
 
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-rose-600">{fmtMoney(row.totalCost)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{row.costPct.toFixed(2)}%</td>
                               </tr>
                             ))
                           )}
@@ -2574,8 +2587,17 @@ export default function App() {
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.kid159Amt, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kid109Qty, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.kid109Amt, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kidFreeQty, 0))}</td>
 
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-rose-800">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.totalCost, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">
+                              {(() => {
+                                const totSales = filteredDailyReport.reduce((s, r) => s + r.netSales, 0);
+                                const totCost = filteredDailyReport.reduce((s, r) => s + r.totalCost, 0);
+                                const totPct = totSales > 0 ? (totCost / totSales) * 100 : 0;
+                                return `${totPct.toFixed(2)}%`;
+                              })()}
+                            </td>
                           </tr>
                         </tfoot>
                       </table>
