@@ -329,13 +329,13 @@ export default function App() {
     });
   }
 
-  // Table columns definition
   const SALES_COLUMNS = [
     { key: 'Date', label: 'วันที่', type: 'date' },
     { key: 'checkID', label: 'Check ID', type: 'text' },
     { key: 'outletID', label: 'สาขา', type: 'outlet' },
     { key: 'amount', label: 'Amount', type: 'amount' },
     { key: 'billTotal', label: 'Bill Total', type: 'bill' },
+    { key: 'billCost', label: 'ต้นทุนรวม', type: 'money' },
     { key: 'paidType', label: 'ประเภทชำระ', type: 'badge' },
     { key: 'memberTel', label: 'เลขที่สมาชิก', type: 'text' },
     { key: 'cover', label: 'Cover', type: 'num' },
@@ -363,11 +363,36 @@ export default function App() {
     { key: 'orderID', label: 'เลขที่ออเดอร์', type: 'text' },
   ];
 
+  // Map checkID to its total cost
+  const salesCostMap = useMemo(() => {
+    const map = {};
+    if (!detailRaw.length || !costMap) return map;
+    detailRaw.forEach(r => {
+      if (r.void || !r.chkCheckID) return;
+      const cid = String(r.chkCheckID);
+      const qty = parseFloat(r.quantity || 0);
+      const unitCost = parseFloat(costMap[r.itemCode] || 0);
+      map[cid] = (map[cid] || 0) + (qty * unitCost);
+    });
+    return map;
+  }, [detailRaw, costMap]);
+
+  // Sales data with computed billCost attached
+  const salesWithCost = useMemo(() => {
+    return salesRaw.map(row => {
+      const cid = String(row.checkID);
+      return {
+        ...row,
+        billCost: salesCostMap[cid] ?? 0
+      };
+    });
+  }, [salesRaw, salesCostMap]);
+
   // Processed Data
   const filteredSales = useMemo(() => {
-    const d = applyFilters(salesRaw, SALES_COLUMNS, salesSearch, salesColF, selectedOutlet);
+    const d = applyFilters(salesWithCost, SALES_COLUMNS, salesSearch, salesColF, selectedOutlet);
     return sortArray(d, salesSort.col, salesSort.asc);
-  }, [salesRaw, salesSearch, salesColF, selectedOutlet, salesSort]);
+  }, [salesWithCost, salesSearch, salesColF, selectedOutlet, salesSort]);
 
   const filteredDetails = useMemo(() => {
     const d = applyFilters(detailRaw, DETAIL_COLUMNS, detailSearch, detailColF, selectedOutlet);
@@ -1751,6 +1776,7 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.amount)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.billTotal)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-rose-600 font-semibold">{fmtMoney(row.billCost)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap">
                                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                                       String(row.paidType).toLowerCase().includes('cash') || String(row.paidType).includes('สด')
