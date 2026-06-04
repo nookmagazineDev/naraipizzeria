@@ -400,18 +400,21 @@ export default function App() {
     return sortArray(d, detailSort.col, detailSort.asc);
   }, [detailRaw, detailSearch, detailColF, selectedOutlet, detailSort]);
 
-  // Columns for Daily Sales report
   const DAILY_COLUMNS = [
     { key: 'date', label: 'วันที่', type: 'date' },
     { key: 'outletID', label: 'รหัสสาขา', type: 'outlet' },
     { key: 'name', label: 'ชื่อสาขา', type: 'text' },
     { key: 'dineIn', label: 'Dine-in', type: 'money' },
     { key: 'takeHome', label: 'Take-Home', type: 'money' },
-    { key: 'takeHomeBills', label: 'บิล Take-Home', type: 'number' },
-    { key: 'takeHomeCost', label: 'ต้นทุน Take-Home', type: 'money' },
     { key: 'delivery', label: 'Delivery', type: 'money' },
-    { key: 'deliveryBills', label: 'บิล Delivery', type: 'number' },
-    { key: 'deliveryCost', label: 'ต้นทุน Delivery', type: 'money' },
+    { key: 'buffet259Qty', label: 'จำนวน Buffet 259', type: 'number' },
+    { key: 'buffet259Amt', label: 'ยอดขาย Buffet 259', type: 'money' },
+    { key: 'buffet359Qty', label: 'จำนวน Premium 359', type: 'number' },
+    { key: 'buffet359Amt', label: 'ยอดขาย Premium 359', type: 'money' },
+    { key: 'kid159Qty', label: 'จำนวน Kid Premium 159', type: 'number' },
+    { key: 'kid159Amt', label: 'ยอดขาย Kid Premium 159', type: 'money' },
+    { key: 'kid109Qty', label: 'จำนวน Kid Buffet 109', type: 'number' },
+    { key: 'kid109Amt', label: 'ยอดขาย Kid Buffet 109', type: 'money' },
     { key: 'serviceChg', label: 'Service10%', type: 'money' },
     { key: 'netSales', label: 'Net Sales', type: 'money' },
     { key: 'vat', label: 'Vat', type: 'money' },
@@ -434,6 +437,10 @@ export default function App() {
     { key: 'totalSales', label: 'Total Sales', type: 'money_bold' },
     { key: 'billCount', label: 'ผลรวมบิล', type: 'number' },
     { key: 'totalCovers', label: 'จำนวนหัว', type: 'number' },
+    { key: 'takeHomeBills', label: 'บิล Take-Home', type: 'number' },
+    { key: 'takeHomeCost', label: 'ต้นทุน Take-Home', type: 'money' },
+    { key: 'deliveryBills', label: 'บิล Delivery', type: 'number' },
+    { key: 'deliveryCost', label: 'ต้นทุน Delivery', type: 'money' },
     { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' }
   ];
 
@@ -471,6 +478,49 @@ export default function App() {
     });
     return map;
   }, [detailRaw, costMap, salesRaw]);
+
+  const dailyBuffetItemsMap = useMemo(() => {
+    const map = {};
+    if (!detailRaw.length) return map;
+
+    detailRaw.forEach(r => {
+      if (r.void === 'V' || r.Void === 'V' || r.void) return;
+      const d = dateFromRow(r);
+      const oid = r.outletID;
+      const key = `${d}_${oid}`;
+      if (!map[key]) {
+        map[key] = {
+          buffet259Qty: 0,
+          buffet259Amt: 0,
+          buffet359Qty: 0,
+          buffet359Amt: 0,
+          kid159Qty: 0,
+          kid159Amt: 0,
+          kid109Qty: 0,
+          kid109Amt: 0
+        };
+      }
+
+      const qty = parseFloat(r.quantity || r.Qty || 0);
+      const grossPrice = parseFloat(r.grossPrice || r.amount || 0);
+      const code = String(r.itemCode || '').trim();
+
+      if (code === '101107' || code === '101001') {
+        map[key].buffet259Qty += qty;
+        map[key].buffet259Amt += grossPrice;
+      } else if (code === '101002') {
+        map[key].buffet359Qty += qty;
+        map[key].buffet359Amt += grossPrice;
+      } else if (code === '101104') {
+        map[key].kid159Qty += qty;
+        map[key].kid159Amt += grossPrice;
+      } else if (code === '101108') {
+        map[key].kid109Qty += qty;
+        map[key].kid109Amt += grossPrice;
+      }
+    });
+    return map;
+  }, [detailRaw]);
 
   const dailyReportData = useMemo(() => {
     if (!salesRaw.length) return [];
@@ -607,6 +657,17 @@ export default function App() {
       const deliveryCost = costData.deliveryCost;
       const totalCost = dineInCost + takeHomeCost + deliveryCost;
 
+      const buffetData = dailyBuffetItemsMap[key] || {
+        buffet259Qty: 0,
+        buffet259Amt: 0,
+        buffet359Qty: 0,
+        buffet359Amt: 0,
+        kid159Qty: 0,
+        kid159Amt: 0,
+        kid109Qty: 0,
+        kid109Amt: 0
+      };
+
       return {
         date,
         outletID,
@@ -642,10 +703,18 @@ export default function App() {
         totalCovers,
         totalCost,
         dineInBills,
-        dineInCost
+        dineInCost,
+        buffet259Qty: buffetData.buffet259Qty,
+        buffet259Amt: buffetData.buffet259Amt,
+        buffet359Qty: buffetData.buffet359Qty,
+        buffet359Amt: buffetData.buffet359Amt,
+        kid159Qty: buffetData.kid159Qty,
+        kid159Amt: buffetData.kid159Amt,
+        kid109Qty: buffetData.kid109Qty,
+        kid109Amt: buffetData.kid109Amt
       };
     }).sort((a, b) => b.date.localeCompare(a.date) || a.outletID - b.outletID);
-  }, [salesRaw, dailyCostSplitMap]);
+  }, [salesRaw, dailyCostSplitMap, dailyBuffetItemsMap]);
 
   const filteredDailyReport = useMemo(() => {
     let d = [...dailyReportData];
@@ -2142,18 +2211,6 @@ export default function App() {
                                   {fmtMoney(row.takeHome)}
                                 </td>
                                 <td 
-                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'จำนวนบิล Take-Home', r => parseInt(r.tableID || r.TableID || 0) === 300)}
-                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-slate-700 hover:text-slate-900 hover:underline font-semibold transition-all"
-                                >
-                                  {fmtNum(row.takeHomeBills)}
-                                </td>
-                                <td 
-                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'ต้นทุน Take-Home', r => parseInt(r.tableID || r.TableID || 0) === 300)}
-                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-rose-600 hover:text-rose-800 hover:underline font-semibold transition-all"
-                                >
-                                  {fmtMoney(row.takeHomeCost)}
-                                </td>
-                                <td 
                                   onClick={() => handleDailyCellClick(row.date, row.outletID, 'ยอดขาย Delivery', r => {
                                     const t = parseInt(r.tableID || r.TableID || 0);
                                     return t === 400 || t === 401;
@@ -2162,24 +2219,17 @@ export default function App() {
                                 >
                                   {fmtMoney(row.delivery)}
                                 </td>
-                                <td 
-                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'จำนวนบิล Delivery', r => {
-                                    const t = parseInt(r.tableID || r.TableID || 0);
-                                    return t === 400 || t === 401;
-                                  })}
-                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-slate-700 hover:text-slate-900 hover:underline font-semibold transition-all"
-                                >
-                                  {fmtNum(row.deliveryBills)}
-                                </td>
-                                <td 
-                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'ต้นทุน Delivery', r => {
-                                    const t = parseInt(r.tableID || r.TableID || 0);
-                                    return t === 400 || t === 401;
-                                  })}
-                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-rose-600 hover:text-rose-800 hover:underline font-semibold transition-all"
-                                >
-                                  {fmtMoney(row.deliveryCost)}
-                                </td>
+
+                                {/* Buffet columns */}
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.buffet259Qty)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.buffet259Amt)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.buffet359Qty)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.buffet359Amt)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kid159Qty)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid159Amt)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kid109Qty)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid109Amt)}</td>
+
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.serviceChg)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.netSales)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
@@ -2202,6 +2252,38 @@ export default function App() {
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-700 font-bold">{fmtMoney(row.totalSales)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.billCount)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.totalCovers)}</td>
+                                
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'จำนวนบิล Take-Home', r => parseInt(r.tableID || r.TableID || 0) === 300)}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-slate-700 hover:text-slate-900 hover:underline font-semibold transition-all"
+                                >
+                                  {fmtNum(row.takeHomeBills)}
+                                </td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'ต้นทุน Take-Home', r => parseInt(r.tableID || r.TableID || 0) === 300)}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-rose-600 hover:text-rose-800 hover:underline font-semibold transition-all"
+                                >
+                                  {fmtMoney(row.takeHomeCost)}
+                                </td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'จำนวนบิล Delivery', r => {
+                                    const t = parseInt(r.tableID || r.TableID || 0);
+                                    return t === 400 || t === 401;
+                                  })}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-slate-700 hover:text-slate-900 hover:underline font-semibold transition-all"
+                                >
+                                  {fmtNum(row.deliveryBills)}
+                                </td>
+                                <td 
+                                  onClick={() => handleDailyCellClick(row.date, row.outletID, 'ต้นทุน Delivery', r => {
+                                    const t = parseInt(r.tableID || r.TableID || 0);
+                                    return t === 400 || t === 401;
+                                  })}
+                                  className="px-3 py-2 whitespace-nowrap text-right font-mono cursor-pointer text-rose-600 hover:text-rose-800 hover:underline font-semibold transition-all"
+                                >
+                                  {fmtMoney(row.deliveryCost)}
+                                </td>
+
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-rose-600">{fmtMoney(row.totalCost)}</td>
                               </tr>
                             ))
@@ -2213,11 +2295,18 @@ export default function App() {
                             <td colSpan={2} />
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.dineIn, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.takeHome, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.takeHomeBills, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-semibold text-rose-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.takeHomeCost, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.delivery, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.deliveryBills, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono font-semibold text-rose-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.deliveryCost, 0))}</td>
+                            
+                            {/* Buffet totals */}
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.buffet259Qty, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.buffet259Amt, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.buffet359Qty, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.buffet359Amt, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kid159Qty, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.kid159Amt, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kid109Qty, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.kid109Amt, 0))}</td>
+
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.serviceChg, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.netSales, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-slate-600">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.vat, 0))}</td>
@@ -2240,6 +2329,13 @@ export default function App() {
                             <td className="px-3 py-2.5 text-right font-mono text-amber-800 font-bold">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.totalSales, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.billCount, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.totalCovers, 0))}</td>
+                            
+                            {/* Moved columns totals */}
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.takeHomeBills, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-semibold text-rose-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.takeHomeCost, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.deliveryBills, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-semibold text-rose-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.deliveryCost, 0))}</td>
+
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-rose-800">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.totalCost, 0))}</td>
                           </tr>
                         </tfoot>
