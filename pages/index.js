@@ -335,6 +335,7 @@ export default function App() {
     { key: 'checkID', label: 'Check ID', type: 'text' },
     { key: 'outletID', label: 'สาขา', type: 'outlet' },
     { key: 'amount', label: 'Amount', type: 'amount' },
+    { key: 'beforeVat', label: 'ยอดขายก่อน Vat', type: 'money' },
     { key: 'billTotal', label: 'Bill Total', type: 'bill' },
     { key: 'vat', label: 'Vat', type: 'money' },
     { key: 'billCost', label: 'ต้นทุนรวม', type: 'money' },
@@ -383,10 +384,13 @@ export default function App() {
   const salesWithCost = useMemo(() => {
     return salesRaw.map(row => {
       const cid = String(row.checkID);
+      const amt = parseFloat(row.amount || row.Amount || 0);
+      const vatVal = parseFloat(row.vat || row.Vat || 0);
       return {
         ...row,
         billCost: salesCostMap[cid] ?? 0,
-        vat: parseFloat(row.vat || row.Vat || 0)
+        vat: vatVal,
+        beforeVat: amt - vatVal
       };
     });
   }, [salesRaw, salesCostMap]);
@@ -1910,6 +1914,7 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono">{row.checkID}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.amount)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-600 font-semibold">{fmtMoney(row.beforeVat)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.billTotal)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-rose-600 font-semibold">{fmtMoney(row.billCost)}</td>
