@@ -2529,10 +2529,11 @@ export default function App() {
                         <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ชื่อรายการอาหาร</th>
                         <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">จำนวน</th>
                         <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ราคาต่อหน่วย</th>
-                        <th className="px-4 py-3 text-slate-600 text-right text-rose-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ต้นทุนต่อหน่วย</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ราคาก่อน Vat</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ภาษี (Vat)</th>
                         <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ราคารวม</th>
                         <th className="px-4 py-3 text-slate-600 text-right text-rose-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ต้นทุนรวม</th>
-                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ภาษี</th>
+                        <th className="px-4 py-3 text-slate-600 text-right text-rose-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ต้นทุนต่อหน่วย</th>
                         <th className="px-4 py-3 text-slate-600 text-center sticky top-0 bg-slate-50 z-20 border-b border-slate-200">โต๊ะ</th>
                         <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">เวลาที่สั่ง</th>
                         <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">สถานะ</th>
@@ -2545,16 +2546,20 @@ export default function App() {
                         const qty = parseFloat(r.quantity) || 0;
                         const unitCost = costMap[r.itemCode] ?? 0;
                         const totalCost = unitCost * qty;
+                        const lineVat = parseFloat(r.tax || 0);
+                        const lineGross = parseFloat(r.grossPrice || 0);
+                        const lineTotal = lineGross + lineVat;
                         return (
                           <tr key={i} className={`hover:bg-slate-50/50 transition-colors ${isVoided ? 'row-void bg-rose-50/10' : ''}`}>
                             <td className="px-4 py-2.5 font-mono text-slate-500">{r.itemCode || '-'}</td>
                             <td className="px-4 py-2.5 font-semibold text-slate-800">{r.nameThai || '-'}</td>
                             <td className="px-4 py-2.5 text-right font-mono">{fmtNum(r.quantity)}</td>
                             <td className="px-4 py-2.5 text-right font-mono text-slate-500">{fmtMoney(r.unitPrice)}</td>
-                            <td className="px-4 py-2.5 text-right font-mono text-rose-500/80">{fmtMoney(unitCost)}</td>
-                            <td className="px-4 py-2.5 text-right font-mono text-emerald-600 font-semibold">{fmtMoney(r.grossPrice)}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-emerald-600 font-semibold">{fmtMoney(lineGross)}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-slate-400">{fmtMoney(lineVat)}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-amber-600 font-bold">{fmtMoney(lineTotal)}</td>
                             <td className="px-4 py-2.5 text-right font-mono text-rose-600 font-semibold">{fmtMoney(totalCost)}</td>
-                            <td className="px-4 py-2.5 text-right font-mono text-slate-400">{fmtMoney(r.tax)}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-rose-500/80">{fmtMoney(unitCost)}</td>
                             <td className="px-4 py-2.5 text-center font-mono">{r.tableID || '-'}</td>
                             <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{r.prtOrdTime || '-'}</td>
                             <td className="px-4 py-2.5">
@@ -2576,64 +2581,51 @@ export default function App() {
                       })}
                     </tbody>
                     <tfoot>
-                      {/* Total row */}
-                      <tr className="bg-amber-50/50 border-t-2 border-amber-500 font-bold text-slate-800">
-                        <td className="px-4 py-3" colSpan={2}>ยอดรวมทั้งหมด</td>
-                        <td className="px-4 py-3 text-right font-mono">
-                          {fmtNum(modal.rows.reduce((s, r) => s + (parseFloat(r.quantity) || 0), 0))}
-                        </td>
-                        <td />
-                        <td />
-                        <td className="px-4 py-3 text-right font-mono text-amber-700">
-                          {fmtMoney(modal.rows.reduce((s, r) => s + (parseFloat(r.grossPrice) || 0), 0))}
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono text-rose-700">
-                          {fmtMoney(modal.rows.reduce((sum, r) => {
-                            if (r.void) return sum;
-                            const qty = parseFloat(r.quantity) || 0;
-                            const unitCost = costMap[r.itemCode] ?? 0;
-                            return sum + (unitCost * qty);
-                          }, 0))}
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono text-slate-500">
-                          {fmtMoney(modal.rows.reduce((s, r) => s + (parseFloat(r.tax) || 0), 0))}
-                        </td>
-                        <td colSpan={4} />
-                      </tr>
-                      {/* Profit row */}
-                      <tr className="bg-emerald-50 border-t border-emerald-200 font-bold text-slate-800">
-                        <td className="px-4 py-3 text-slate-700" colSpan={2}>กำไร / ขาดทุนสุทธิ (ของบิลนี้)</td>
-                        <td colSpan={3} />
-                        <td className="px-4 py-3 text-right font-mono text-amber-700">
-                          {fmtMoney(modal.rows.reduce((sum, r) => sum + (r.void ? 0 : parseFloat(r.grossPrice) || 0), 0))}
-                        </td>
-                        <td className="px-4 py-3 text-right font-mono text-rose-700">
-                          {fmtMoney(modal.rows.reduce((sum, r) => {
-                            if (r.void) return sum;
-                            const qty = parseFloat(r.quantity) || 0;
-                            const unitCost = costMap[r.itemCode] ?? 0;
-                            return sum + (unitCost * qty);
-                          }, 0))}
-                        </td>
-                        <td className={`px-4 py-3 text-right font-mono font-bold`} colSpan={2}>
-                          {(() => {
-                            const totalSales = modal.rows.reduce((sum, r) => sum + (r.void ? 0 : parseFloat(r.grossPrice) || 0), 0);
-                            const totalCost = modal.rows.reduce((sum, r) => {
-                              if (r.void) return sum;
-                              const qty = parseFloat(r.quantity) || 0;
-                              const unitCost = costMap[r.itemCode] ?? 0;
-                              return sum + (unitCost * qty);
-                            }, 0);
-                            const profit = totalSales - totalCost;
-                            return (
-                              <span className={profit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
-                                {profit >= 0 ? '+' : ''}{fmtMoney(profit)}
-                              </span>
-                            );
-                          })()}
-                        </td>
-                        <td colSpan={3} />
-                      </tr>
+                      {(() => {
+                        const totalQty = modal.rows.reduce((s, r) => s + (parseFloat(r.quantity) || 0), 0);
+                        const totalGross = modal.rows.reduce((s, r) => s + (parseFloat(r.grossPrice) || 0), 0);
+                        const totalVat = modal.rows.reduce((s, r) => s + (parseFloat(r.tax) || 0), 0);
+                        const totalCombined = totalGross + totalVat;
+                        const totalCost = modal.rows.reduce((sum, r) => {
+                          if (r.void) return sum;
+                          const qty = parseFloat(r.quantity) || 0;
+                          const unitCost = costMap[r.itemCode] ?? 0;
+                          return sum + (unitCost * qty);
+                        }, 0);
+                        const profit = totalGross - totalCost;
+
+                        return (
+                          <>
+                            {/* Total row */}
+                            <tr className="bg-amber-50/50 border-t-2 border-amber-500 font-bold text-slate-800">
+                              <td className="px-4 py-3" colSpan={2}>ยอดรวมทั้งหมด</td>
+                              <td className="px-4 py-3 text-right font-mono">{fmtNum(totalQty)}</td>
+                              <td />
+                              <td className="px-4 py-3 text-right font-mono text-emerald-700">{fmtMoney(totalGross)}</td>
+                              <td className="px-4 py-3 text-right font-mono text-slate-500">{fmtMoney(totalVat)}</td>
+                              <td className="px-4 py-3 text-right font-mono text-amber-700">{fmtMoney(totalCombined)}</td>
+                              <td className="px-4 py-3 text-right font-mono text-rose-700">{fmtMoney(totalCost)}</td>
+                              <td />
+                              <td colSpan={4} />
+                            </tr>
+                            {/* Profit row */}
+                            <tr className="bg-emerald-50 border-t border-emerald-200 font-bold text-slate-800">
+                              <td className="px-4 py-3 text-slate-700" colSpan={2}>กำไร / ขาดทุนสุทธิ (ของบิลนี้)</td>
+                              <td colSpan={2} />
+                              <td className="px-4 py-3 text-right font-mono text-emerald-700">{fmtMoney(totalGross)}</td>
+                              <td />
+                              <td />
+                              <td className="px-4 py-3 text-right font-mono text-rose-700">{fmtMoney(totalCost)}</td>
+                              <td className="px-4 py-3 text-right font-mono font-bold" colSpan={2}>
+                                <span className={profit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                                  {profit >= 0 ? '+' : ''}{fmtMoney(profit)}
+                                </span>
+                              </td>
+                              <td colSpan={3} />
+                            </tr>
+                          </>
+                        );
+                      })()}
                     </tfoot>
                   </table>
                 </div>
