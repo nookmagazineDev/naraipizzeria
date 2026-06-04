@@ -2221,72 +2221,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {selectedItem && (
-                      <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
-                        <div className="bg-slate-900 px-6 py-4 flex items-center justify-between">
-                          <div>
-                            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                              <Building2 size={16} className="text-amber-400" />
-                              จำนวนแยกตามสาขา: <span className="text-amber-400 font-mono">{selectedItem.nameThai}</span>
-                            </h3>
-                            <p className="text-xs text-slate-400 mt-0.5">รหัส: {selectedItem.itemCode} | ทั้งหมด {itemBranchData.length} สาขาที่มีการใช้งาน</p>
-                          </div>
-                          <button onClick={() => setSelectedItem(null)} className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all">
-                            <X size={18} />
-                          </button>
-                        </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-xs">
-                            <thead className="bg-slate-50 border-b border-slate-200">
-                              <tr>
-                                <th className="px-5 py-3 text-left font-bold text-slate-600">สาขา</th>
-                                <th className="px-5 py-3 text-right font-bold text-slate-600">จำนวน (ชิ้น)</th>
-                                <th className="px-5 py-3 text-right font-bold text-slate-600">มูลค่ารวม</th>
-                                <th className="px-5 py-3 text-right font-bold text-slate-600">ต้นทุน</th>
-                                <th className="px-5 py-3 text-right font-bold text-slate-600">กำไร</th>
-                                <th className="px-5 py-3 text-left font-bold text-slate-600">สัดส่วน (%)</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                              {(() => {
-                                const totalAllQty = itemBranchData.reduce((s, b) => s + b.totalQty, 0);
-                                return itemBranchData.map((branch, i) => (
-                                  <tr key={branch.outletID} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                                    <td className="px-5 py-3 font-semibold text-slate-800">{branch.name}</td>
-                                    <td className="px-5 py-3 text-right font-mono font-bold text-amber-700">{fmtNum(branch.totalQty)}</td>
-                                    <td className="px-5 py-3 text-right font-mono text-slate-700">{fmtMoney(branch.totalGross)}</td>
-                                    <td className="px-5 py-3 text-right font-mono text-rose-600">{fmtMoney(branch.totalCost)}</td>
-                                    <td className={`px-5 py-3 text-right font-mono font-bold ${branch.profit >= 0 ? 'text-emerald-600' : 'text-rose-700'}`}>
-                                      {branch.profit >= 0 ? '+' : ''}{fmtMoney(branch.profit)}
-                                    </td>
-                                    <td className="px-5 py-3">
-                                      <div className="flex items-center gap-2">
-                                        <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                                          <div className="h-full bg-amber-500 rounded-full transition-all" style={{ width: `${(branch.totalQty / (itemBranchData[0]?.totalQty || 1)) * 100}%` }} />
-                                        </div>
-                                        <span className="text-slate-500 font-mono w-10 text-right">
-                                          {totalAllQty > 0 ? ((branch.totalQty / totalAllQty) * 100).toFixed(1) : '0.0'}%
-                                        </span>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                ));
-                              })()}
-                            </tbody>
-                            <tfoot>
-                              <tr className="bg-amber-50/60 border-t-2 border-amber-500 font-bold">
-                                <td className="px-5 py-3 text-slate-800">รวมทั้งหมด</td>
-                                <td className="px-5 py-3 text-right font-mono text-amber-700">{fmtNum(itemBranchData.reduce((s, b) => s + b.totalQty, 0))}</td>
-                                <td className="px-5 py-3 text-right font-mono">{fmtMoney(itemBranchData.reduce((s, b) => s + b.totalGross, 0))}</td>
-                                <td className="px-5 py-3 text-right font-mono text-rose-700">{fmtMoney(itemBranchData.reduce((s, b) => s + b.totalCost, 0))}</td>
-                                <td className="px-5 py-3 text-right font-mono text-emerald-700">{fmtMoney(itemBranchData.reduce((s, b) => s + b.profit, 0))}</td>
-                                <td className="px-5 py-3 text-slate-500 text-xs">100%</td>
-                              </tr>
-                            </tfoot>
-                          </table>
-                        </div>
-                      </div>
-                    )}
+
                   </>
                 )}
               </div>
@@ -2491,6 +2426,95 @@ export default function App() {
               <button 
                 onClick={() => setModal(m => ({ ...m, open: false }))}
                 className="bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-5 py-2 rounded-xl transition-all self-end md:self-auto"
+              >
+                ปิดหน้าต่าง
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ITEM BRANCH BREAKDOWN MODAL */}
+      {selectedItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setSelectedItem(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <Building2 size={18} className="text-amber-400" />
+                  <span>จำนวนการใช้งานแยกตามสาขา</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  รายการอาหาร: <span className="font-semibold text-white bg-slate-800 px-2 py-0.5 rounded mr-2">{selectedItem.nameThai}</span>
+                  รหัสไอเทม: <span className="font-mono font-bold text-white bg-slate-800 px-2 py-0.5 rounded">{selectedItem.itemCode}</span>
+                </p>
+              </div>
+              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setSelectedItem(null)}>
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="overflow-auto border border-slate-100 rounded-xl">
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-5 py-3 text-slate-600 sticky top-0 bg-slate-50 z-10 border-b border-slate-200 font-bold">สาขา</th>
+                      <th className="px-5 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-10 border-b border-slate-200 font-bold">จำนวน (ชิ้น)</th>
+                      <th className="px-5 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-10 border-b border-slate-200 font-bold">มูลค่ารวม</th>
+                      <th className="px-5 py-3 text-slate-600 text-right text-rose-600 sticky top-0 bg-slate-50 z-10 border-b border-slate-200 font-bold">ต้นทุน</th>
+                      <th className="px-5 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-10 border-b border-slate-200 font-bold">กำไร</th>
+                      <th className="px-5 py-3 text-slate-600 sticky top-0 bg-slate-50 z-10 border-b border-slate-200 font-bold">สัดส่วน (%)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {(() => {
+                      const totalAllQty = itemBranchData.reduce((s, b) => s + b.totalQty, 0);
+                      return itemBranchData.map((branch, i) => (
+                        <tr key={branch.outletID} className={`hover:bg-slate-50/50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}`}>
+                          <td className="px-5 py-3 font-semibold text-slate-800">{branch.name}</td>
+                          <td className="px-5 py-3 text-right font-mono font-bold text-amber-700">{fmtNum(branch.totalQty)}</td>
+                          <td className="px-5 py-3 text-right font-mono text-slate-700">{fmtMoney(branch.totalGross)}</td>
+                          <td className="px-5 py-3 text-right font-mono text-rose-600">{fmtMoney(branch.totalCost)}</td>
+                          <td className={`px-5 py-3 text-right font-mono font-bold ${branch.profit >= 0 ? 'text-emerald-600' : 'text-rose-700'}`}>
+                            {branch.profit >= 0 ? '+' : ''}{fmtMoney(branch.profit)}
+                          </td>
+                          <td className="px-5 py-3 whitespace-nowrap">
+                            <div className="flex items-center gap-2 min-w-[120px]">
+                              <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                <div className="h-full bg-amber-500 rounded-full transition-all" style={{ width: `${(branch.totalQty / (itemBranchData[0]?.totalQty || 1)) * 100}%` }} />
+                              </div>
+                              <span className="text-slate-500 font-mono w-10 text-right">
+                                {totalAllQty > 0 ? ((branch.totalQty / totalAllQty) * 100).toFixed(1) : '0.0'}%
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-amber-50/60 border-t-2 border-amber-500 font-bold text-slate-800">
+                      <td className="px-5 py-3">รวมทั้งหมด</td>
+                      <td className="px-5 py-3 text-right font-mono text-amber-700">{fmtNum(itemBranchData.reduce((s, b) => s + b.totalQty, 0))}</td>
+                      <td className="px-5 py-3 text-right font-mono">{fmtMoney(itemBranchData.reduce((s, b) => s + b.totalGross, 0))}</td>
+                      <td className="px-5 py-3 text-right font-mono text-rose-700">{fmtMoney(itemBranchData.reduce((s, b) => s + b.totalCost, 0))}</td>
+                      <td className="px-5 py-3 text-right font-mono text-emerald-700">{fmtMoney(itemBranchData.reduce((s, b) => s + b.profit, 0))}</td>
+                      <td className="px-5 py-3 text-slate-500 text-xs">100%</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between flex-shrink-0">
+              <span className="text-xs text-slate-400 font-medium">ทั้งหมด {itemBranchData.length} สาขาที่มีการใช้งาน</span>
+              <button 
+                onClick={() => setSelectedItem(null)}
+                className="bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-5 py-2 rounded-xl transition-all"
               >
                 ปิดหน้าต่าง
               </button>
