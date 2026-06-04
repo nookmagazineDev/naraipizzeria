@@ -104,6 +104,7 @@ function ExcelFilterDropdown({
 
   // Get all unique values from dataset
   const allUniqueOptions = useMemo(() => {
+    if (!isOpen) return [];
     if (!dataset || !dataset.length) return [];
     const set = new Set();
     dataset.forEach(row => {
@@ -115,7 +116,7 @@ function ExcelFilterDropdown({
       if (!isNaN(na) && !isNaN(nb)) return na - nb;
       return String(a).localeCompare(String(b), 'th');
     });
-  }, [dataset, columnKey, getValFn]);
+  }, [dataset, columnKey, getValFn, isOpen]);
 
   // Click outside listener to close dropdown
   useEffect(() => {
@@ -253,6 +254,141 @@ function ExcelFilterDropdown({
     </div>
   );
 }
+
+/* ───────── COLUMN DEFINITIONS & FILTER VALUE HELPERS ───────── */
+const SALES_COLUMNS = [
+  { key: 'Date', label: 'วันที่', type: 'date' },
+  { key: 'checkID', label: 'Check ID', type: 'text' },
+  { key: 'outletID', label: 'สาขา', type: 'outlet' },
+  { key: 'amount', label: 'Amount', type: 'amount' },
+  { key: 'beforeVat', label: 'ยอดขายก่อน Vat', type: 'money' },
+  { key: 'billTotal', label: 'Bill Total', type: 'bill' },
+  { key: 'vat', label: 'Vat', type: 'money' },
+  { key: 'billCost', label: 'ต้นทุนรวม', type: 'money' },
+  { key: 'paidType', label: 'ประเภทชำระ', type: 'badge' },
+  { key: 'memberTel', label: 'เลขที่สมาชิก', type: 'text' },
+  { key: 'cover', label: 'Cover', type: 'num' },
+  { key: 'coverAd', label: 'Cover Ad', type: 'num' },
+  { key: 'coverAll', label: 'Cover All', type: 'num' },
+  { key: 'startTime', label: 'เวลาเริ่ม', type: 'datetime' },
+  { key: 'checkDesc', label: 'รายละเอียด', type: 'text' },
+  { key: 'orderID', label: 'Order ID', type: 'text' },
+];
+
+const DETAIL_COLUMNS = [
+  { key: '_date', label: 'วันที่', type: 'date' },
+  { key: 'chkCheckID', label: 'เลขที่บิล', type: 'text' },
+  { key: 'outletID', label: 'สาขา', type: 'outlet' },
+  { key: 'itemCode', label: 'รหัสสินค้า', type: 'text' },
+  { key: 'nameThai', label: 'ชื่อรายการ', type: 'text' },
+  { key: 'quantity', label: 'จำนวน', type: 'num' },
+  { key: 'unitPrice', label: 'ราคา/หน่วย', type: 'money' },
+  { key: 'grossPrice', label: 'มูลค่ารวม', type: 'money' },
+  { key: 'tax', label: 'ภาษี', type: 'money' },
+  { key: 'tableID', label: 'เลขที่โต๊ะ', type: 'num' },
+  { key: 'prtOrdTime', label: 'เวลาสั่ง', type: 'datetime' },
+  { key: 'void', label: 'การยกเลิก', type: 'void' },
+  { key: 'voidTime', label: 'เวลายกเลิก', type: 'datetime' },
+  { key: 'orderID', label: 'เลขที่ออเดอร์', type: 'text' },
+];
+
+const DAILY_COLUMNS = [
+  { key: 'date', label: 'วันที่', type: 'date' },
+  { key: 'outletID', label: 'รหัสสาขา', type: 'outlet' },
+  { key: 'name', label: 'ชื่อสาขา', type: 'text' },
+  { key: 'dineIn', label: 'Dine-in', type: 'money' },
+  { key: 'takeHome', label: 'Take-Home', type: 'money' },
+  { key: 'delivery', label: 'Delivery', type: 'money' },
+  { key: 'serviceChg', label: 'Service10%', type: 'money' },
+  { key: 'netSales', label: 'Net Sales', type: 'money' },
+  { key: 'vat', label: 'Vat', type: 'money' },
+  { key: 'grossSales', label: 'Gross Sales', type: 'money' },
+  { key: 'cash', label: 'Cash', type: 'money' },
+  { key: 'credit', label: 'Credit', type: 'money' },
+  { key: 'qrCredit', label: 'QRcredit', type: 'money' },
+  { key: 'qr', label: 'QR', type: 'money' },
+  { key: 'oc', label: 'OC', type: 'money' },
+  { key: 'grab', label: 'GRAB', type: 'money' },
+  { key: 'robinhood', label: 'ROBINHOOD', type: 'money' },
+  { key: 'shopee', label: 'SHOPEE', type: 'money' },
+  { key: 'lineMan', label: 'LINE MAN', type: 'money' },
+  { key: 'voucher', label: 'Voucher', type: 'money' },
+  { key: 'alipay', label: 'Alipay', type: 'money' },
+  { key: 'wechat', label: 'WeChat', type: 'money' },
+  { key: 'copay', label: 'คนละครึ่ง 2', type: 'money' },
+  { key: 'catering', label: 'จัดเลี้ยง', type: 'money' },
+  { key: 'gojek', label: 'Gojek', type: 'money' },
+  { key: 'totalSales', label: 'Total Sales', type: 'money_bold' },
+  { key: 'billCount', label: 'ผลรวมบิล', type: 'number' },
+  { key: 'totalCovers', label: 'จำนวนหัว', type: 'number' },
+  { key: 'takeHomeBills', label: 'บิล Take-Home', type: 'number' },
+  { key: 'takeHomeCost', label: 'ต้นทุน Take-Home', type: 'money' },
+  { key: 'deliveryBills', label: 'บิล Delivery', type: 'number' },
+  { key: 'deliveryCost', label: 'ต้นทุน Delivery', type: 'money' },
+  { key: 'buffet259Qty', label: 'จำนวน Buffet 259', type: 'number' },
+  { key: 'buffet259Amt', label: 'ยอดขาย Buffet 259', type: 'money' },
+  { key: 'buffet359Qty', label: 'จำนวน Premium 359', type: 'number' },
+  { key: 'buffet359Amt', label: 'ยอดขาย Premium 359', type: 'money' },
+  { key: 'kid159Qty', label: 'จำนวน Kid Premium 159', type: 'number' },
+  { key: 'kid159Amt', label: 'ยอดขาย Kid Premium 159', type: 'money' },
+  { key: 'kid109Qty', label: 'จำนวน Kid Buffet 109', type: 'number' },
+  { key: 'kid109Amt', label: 'ยอดขาย Kid Buffet 109', type: 'money' },
+  { key: 'kidFreeQty', label: 'จำนวนเด็กฟรี (101005)', type: 'number' },
+  { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' },
+  { key: 'costPct', label: '% ต้นทุน/ยอดขาย', type: 'percent' }
+];
+
+const ITEM_COLUMNS = [
+  { key: 'itemCode', label: 'รหัสไอเทม', type: 'text' },
+  { key: 'nameThai', label: 'ชื่อรายการ (ไทย)', type: 'text' },
+  { key: 'nameEng', label: 'ชื่อ (Eng)', type: 'text' },
+  { key: 'totalQty', label: 'จำนวนรวม', type: 'num' },
+  { key: 'totalGross', label: 'มูลค่ารวม (฿)', type: 'money' },
+  { key: 'totalCost', label: 'ต้นทุนรวม (฿)', type: 'money' },
+  { key: 'profit', label: 'กำไร (฿)', type: 'money' }
+];
+
+function getColFilterValue(row, key) {
+  if (key === '_date') {
+    const t = row.prtOrdTime || row.postTime || row.startTime;
+    return t ? String(t).slice(0, 10) : '';
+  }
+  if (key === 'Date') return dateFromRow(row);
+  if (key === 'startTime' || key === 'prtOrdTime' || key === 'voidTime') {
+    const v = row[key];
+    return v ? String(v).slice(0, 19) : '';
+  }
+  if (key === 'outletID') return outletLabel(row[key]);
+  if (key === 'void') return row[key] ? 'ยกเลิก' : 'ปกติ';
+
+  // Formatting money and numbers for exact match/display
+  const isSalesCol = SALES_COLUMNS.find(c => c.key === key);
+  const isDetailCol = DETAIL_COLUMNS.find(c => c.key === key);
+  const col = isSalesCol || isDetailCol;
+  if (col) {
+    if (col.type === 'money' || col.type === 'money_bold' || col.type === 'amount' || col.type === 'bill') return fmtMoney(row[key]);
+    if (col.type === 'number' || col.type === 'num') return fmtNum(row[key]);
+  }
+  return String(row[key] ?? '');
+}
+
+const getDailyColFilterValue = (row, key) => {
+  if (key === 'outletID') return outletLabel(row.outletID);
+  if (key === 'date') return String(row.date ?? '').slice(0, 10);
+  const col = DAILY_COLUMNS.find(c => c.key === key);
+  if (col) {
+    if (col.type === 'money' || col.type === 'money_bold') return fmtMoney(row[key]);
+    if (col.type === 'number') return fmtNum(row[key]);
+    if (col.type === 'percent') return `${parseFloat(row[key] || 0).toFixed(2)}%`;
+  }
+  return String(row[key] ?? '');
+};
+
+const getItemColFilterValue = (row, key) => {
+  if (key === 'totalQty') return fmtNum(row[key]);
+  if (key === 'totalGross' || key === 'totalCost' || key === 'profit') return fmtMoney(row[key]);
+  return String(row[key] ?? '');
+};
 
 export default function App() {
   const [isMounted, setIsMounted] = useState(false);
@@ -444,30 +580,7 @@ export default function App() {
     }
   }
 
-  // local helpers for column filter value matching
-  function getColFilterValue(row, key) {
-    if (key === '_date') {
-      const t = row.prtOrdTime || row.postTime || row.startTime;
-      return t ? String(t).slice(0, 10) : '';
-    }
-    if (key === 'Date') return dateFromRow(row);
-    if (key === 'startTime' || key === 'prtOrdTime' || key === 'voidTime') {
-      const v = row[key];
-      return v ? String(v).slice(0, 19) : '';
-    }
-    if (key === 'outletID') return outletLabel(row[key]);
-    if (key === 'void') return row[key] ? 'ยกเลิก' : 'ปกติ';
 
-    // Formatting money and numbers for exact match/display
-    const isSalesCol = SALES_COLUMNS.find(c => c.key === key);
-    const isDetailCol = DETAIL_COLUMNS.find(c => c.key === key);
-    const col = isSalesCol || isDetailCol;
-    if (col) {
-      if (col.type === 'money' || col.type === 'money_bold' || col.type === 'amount' || col.type === 'bill') return fmtMoney(row[key]);
-      if (col.type === 'number' || col.type === 'num') return fmtNum(row[key]);
-    }
-    return String(row[key] ?? '');
-  }
 
   function applyFilters(arr, cols, searchVal, colFilters, selectedBranch) {
     let d = [...arr];
@@ -510,43 +623,6 @@ export default function App() {
       return va < vb ? (asc ? -1 : 1) : va > vb ? (asc ? 1 : -1) : 0;
     });
   }
-
-  const SALES_COLUMNS = [
-    { key: 'Date', label: 'วันที่', type: 'date' },
-    { key: 'checkID', label: 'Check ID', type: 'text' },
-    { key: 'outletID', label: 'สาขา', type: 'outlet' },
-    { key: 'amount', label: 'Amount', type: 'amount' },
-    { key: 'beforeVat', label: 'ยอดขายก่อน Vat', type: 'money' },
-    { key: 'billTotal', label: 'Bill Total', type: 'bill' },
-    { key: 'vat', label: 'Vat', type: 'money' },
-    { key: 'billCost', label: 'ต้นทุนรวม', type: 'money' },
-    { key: 'paidType', label: 'ประเภทชำระ', type: 'badge' },
-    { key: 'memberTel', label: 'เลขที่สมาชิก', type: 'text' },
-    { key: 'cover', label: 'Cover', type: 'num' },
-    { key: 'coverAd', label: 'Cover Ad', type: 'num' },
-    { key: 'coverAll', label: 'Cover All', type: 'num' },
-    { key: 'startTime', label: 'เวลาเริ่ม', type: 'datetime' },
-    { key: 'checkDesc', label: 'รายละเอียด', type: 'text' },
-    { key: 'orderID', label: 'Order ID', type: 'text' },
-  ];
-
-  const DETAIL_COLUMNS = [
-    { key: '_date', label: 'วันที่', type: 'date' },
-    { key: 'chkCheckID', label: 'เลขที่บิล', type: 'text' },
-    { key: 'outletID', label: 'สาขา', type: 'outlet' },
-    { key: 'itemCode', label: 'รหัสสินค้า', type: 'text' },
-    { key: 'nameThai', label: 'ชื่อรายการ', type: 'text' },
-    { key: 'quantity', label: 'จำนวน', type: 'num' },
-    { key: 'unitPrice', label: 'ราคา/หน่วย', type: 'money' },
-    { key: 'grossPrice', label: 'มูลค่ารวม', type: 'money' },
-    { key: 'tax', label: 'ภาษี', type: 'money' },
-    { key: 'tableID', label: 'เลขที่โต๊ะ', type: 'num' },
-    { key: 'prtOrdTime', label: 'เวลาสั่ง', type: 'datetime' },
-    { key: 'void', label: 'การยกเลิก', type: 'void' },
-    { key: 'voidTime', label: 'เวลายกเลิก', type: 'datetime' },
-    { key: 'orderID', label: 'เลขที่ออเดอร์', type: 'text' },
-  ];
-
   // Map checkID to its total cost
   const salesCostMap = useMemo(() => {
     const map = {};
@@ -586,80 +662,6 @@ export default function App() {
     const d = applyFilters(detailRaw, DETAIL_COLUMNS, detailSearch, detailColF, selectedOutlet);
     return sortArray(d, detailSort.col, detailSort.asc);
   }, [detailRaw, detailSearch, detailColF, selectedOutlet, detailSort]);
-
-  const DAILY_COLUMNS = [
-    { key: 'date', label: 'วันที่', type: 'date' },
-    { key: 'outletID', label: 'รหัสสาขา', type: 'outlet' },
-    { key: 'name', label: 'ชื่อสาขา', type: 'text' },
-    { key: 'dineIn', label: 'Dine-in', type: 'money' },
-    { key: 'takeHome', label: 'Take-Home', type: 'money' },
-    { key: 'delivery', label: 'Delivery', type: 'money' },
-    { key: 'serviceChg', label: 'Service10%', type: 'money' },
-    { key: 'netSales', label: 'Net Sales', type: 'money' },
-    { key: 'vat', label: 'Vat', type: 'money' },
-    { key: 'grossSales', label: 'Gross Sales', type: 'money' },
-    { key: 'cash', label: 'Cash', type: 'money' },
-    { key: 'credit', label: 'Credit', type: 'money' },
-    { key: 'qrCredit', label: 'QRcredit', type: 'money' },
-    { key: 'qr', label: 'QR', type: 'money' },
-    { key: 'oc', label: 'OC', type: 'money' },
-    { key: 'grab', label: 'GRAB', type: 'money' },
-    { key: 'robinhood', label: 'ROBINHOOD', type: 'money' },
-    { key: 'shopee', label: 'SHOPEE', type: 'money' },
-    { key: 'lineMan', label: 'LINE MAN', type: 'money' },
-    { key: 'voucher', label: 'Voucher', type: 'money' },
-    { key: 'alipay', label: 'Alipay', type: 'money' },
-    { key: 'wechat', label: 'WeChat', type: 'money' },
-    { key: 'copay', label: 'คนละครึ่ง 2', type: 'money' },
-    { key: 'catering', label: 'จัดเลี้ยง', type: 'money' },
-    { key: 'gojek', label: 'Gojek', type: 'money' },
-    { key: 'totalSales', label: 'Total Sales', type: 'money_bold' },
-    { key: 'billCount', label: 'ผลรวมบิล', type: 'number' },
-    { key: 'totalCovers', label: 'จำนวนหัว', type: 'number' },
-    { key: 'takeHomeBills', label: 'บิล Take-Home', type: 'number' },
-    { key: 'takeHomeCost', label: 'ต้นทุน Take-Home', type: 'money' },
-    { key: 'deliveryBills', label: 'บิล Delivery', type: 'number' },
-    { key: 'deliveryCost', label: 'ต้นทุน Delivery', type: 'money' },
-    { key: 'buffet259Qty', label: 'จำนวน Buffet 259', type: 'number' },
-    { key: 'buffet259Amt', label: 'ยอดขาย Buffet 259', type: 'money' },
-    { key: 'buffet359Qty', label: 'จำนวน Premium 359', type: 'number' },
-    { key: 'buffet359Amt', label: 'ยอดขาย Premium 359', type: 'money' },
-    { key: 'kid159Qty', label: 'จำนวน Kid Premium 159', type: 'number' },
-    { key: 'kid159Amt', label: 'ยอดขาย Kid Premium 159', type: 'money' },
-    { key: 'kid109Qty', label: 'จำนวน Kid Buffet 109', type: 'number' },
-    { key: 'kid109Amt', label: 'ยอดขาย Kid Buffet 109', type: 'money' },
-    { key: 'kidFreeQty', label: 'จำนวนเด็กฟรี (101005)', type: 'number' },
-    { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' },
-    { key: 'costPct', label: '% ต้นทุน/ยอดขาย', type: 'percent' }
-  ];
-
-  const getDailyColFilterValue = (row, key) => {
-    if (key === 'outletID') return outletLabel(row.outletID);
-    if (key === 'date') return String(row.date ?? '').slice(0, 10);
-    const col = DAILY_COLUMNS.find(c => c.key === key);
-    if (col) {
-      if (col.type === 'money' || col.type === 'money_bold') return fmtMoney(row[key]);
-      if (col.type === 'number') return fmtNum(row[key]);
-      if (col.type === 'percent') return `${parseFloat(row[key] || 0).toFixed(2)}%`;
-    }
-    return String(row[key] ?? '');
-  };
-
-  const ITEM_COLUMNS = [
-    { key: 'itemCode', label: 'รหัสไอเทม', type: 'text' },
-    { key: 'nameThai', label: 'ชื่อรายการ (ไทย)', type: 'text' },
-    { key: 'nameEng', label: 'ชื่อ (Eng)', type: 'text' },
-    { key: 'totalQty', label: 'จำนวนรวม', type: 'num' },
-    { key: 'totalGross', label: 'มูลค่ารวม (฿)', type: 'money' },
-    { key: 'totalCost', label: 'ต้นทุนรวม (฿)', type: 'money' },
-    { key: 'profit', label: 'กำไร (฿)', type: 'money' }
-  ];
-
-  const getItemColFilterValue = (row, key) => {
-    if (key === 'totalQty') return fmtNum(row[key]);
-    if (key === 'totalGross' || key === 'totalCost' || key === 'profit') return fmtMoney(row[key]);
-    return String(row[key] ?? '');
-  };
 
   const dailyCostSplitMap = useMemo(() => {
     const map = {};
