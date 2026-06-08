@@ -284,6 +284,8 @@ const DETAIL_COLUMNS = [
   { key: 'quantity', label: 'จำนวน', type: 'num' },
   { key: 'unitPrice', label: 'ราคา/หน่วย', type: 'money' },
   { key: 'grossPrice', label: 'มูลค่ารวม', type: 'money' },
+  { key: 'unitCost', label: 'ต้นทุน/หน่วย', type: 'money' },
+  { key: 'lineCost', label: 'ต้นทุนรวม', type: 'money' },
   { key: 'tax', label: 'ภาษี', type: 'money' },
   { key: 'tableID', label: 'เลขที่โต๊ะ', type: 'num' },
   { key: 'prtOrdTime', label: 'เวลาสั่ง', type: 'datetime' },
@@ -317,7 +319,6 @@ const DAILY_COLUMNS = [
   { key: 'wechat', label: 'WeChat', type: 'money' },
   { key: 'copay', label: 'คนละครึ่ง 2', type: 'money' },
   { key: 'catering', label: 'จัดเลี้ยง', type: 'money' },
-  { key: 'gojek', label: 'Gojek', type: 'money' },
   { key: 'totalSales', label: 'Total Sales', type: 'money_bold' },
   { key: 'billCount', label: 'ผลรวมบิล', type: 'number' },
   { key: 'totalCovers', label: 'จำนวนหัว', type: 'number' },
@@ -658,10 +659,16 @@ export default function App() {
     return sortArray(d, salesSort.col, salesSort.asc);
   }, [salesWithCost, salesSearch, salesColF, selectedOutlet, salesSort]);
 
+  // Enrich detail rows with unit cost & line cost (ต้นทุน/หน่วย, ต้นทุนรวม)
+  const detailsWithCost = useMemo(() => detailRaw.map(r => {
+    const unitCost = costMap[r.itemCode] ?? 0;
+    return { ...r, unitCost, lineCost: unitCost * (parseFloat(r.quantity) || 0) };
+  }), [detailRaw, costMap]);
+
   const filteredDetails = useMemo(() => {
-    const d = applyFilters(detailRaw, DETAIL_COLUMNS, detailSearch, detailColF, selectedOutlet);
+    const d = applyFilters(detailsWithCost, DETAIL_COLUMNS, detailSearch, detailColF, selectedOutlet);
     return sortArray(d, detailSort.col, detailSort.asc);
-  }, [detailRaw, detailSearch, detailColF, selectedOutlet, detailSort]);
+  }, [detailsWithCost, detailSearch, detailColF, selectedOutlet, detailSort]);
 
   const dailyCostSplitMap = useMemo(() => {
     const map = {};
@@ -2277,7 +2284,7 @@ export default function App() {
                                     setDetailColF(prev => ({ ...prev, [c.key]: val }));
                                     setDetailPage(1);
                                   }}
-                                  dataset={detailRaw}
+                                  dataset={detailsWithCost}
                                   getValFn={getColFilterValue}
                                 />
                               </th>
@@ -2307,6 +2314,8 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono font-semibold">{fmtNum(row.quantity)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.unitPrice)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-bold">{fmtMoney(row.grossPrice)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-rose-500">{fmtMoney(row.unitCost)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-rose-600 font-bold">{fmtMoney(row.lineCost)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-400">{fmtMoney(row.tax)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-center font-mono">{row.tableID || '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-slate-400">{row.prtOrdTime || '-'}</td>
@@ -2340,6 +2349,10 @@ export default function App() {
                             <td />
                             <td className="px-4 py-3 text-right font-mono text-amber-700">
                               {fmtMoney(filteredDetails.reduce((s, r) => s + (parseFloat(r.grossPrice) || 0), 0))}
+                            </td>
+                            <td />
+                            <td className="px-4 py-3 text-right font-mono text-rose-700">
+                              {fmtMoney(filteredDetails.reduce((s, r) => s + (r.lineCost || 0), 0))}
                             </td>
                             <td colSpan={6} />
                           </tr>
@@ -2502,7 +2515,6 @@ export default function App() {
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.wechat)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.copay)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.catering)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.gojek)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-700 font-bold">{fmtMoney(row.totalSales)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.billCount)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.totalCovers)}</td>
@@ -2581,7 +2593,6 @@ export default function App() {
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.wechat, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.copay, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.catering, 0))}</td>
-                            <td className="px-3 py-2.5 text-right font-mono">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.gojek, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono text-amber-800 font-bold">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.totalSales, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.billCount, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.totalCovers, 0))}</td>
