@@ -58,6 +58,20 @@ const OUTLET_LIST = Object.entries(OUTLETS).map(([id, name]) => ({
   name
 })).sort((a, b) => a.id - b.id);
 
+/* ───────── EXCLUSIONS (ไม่นำมาคำนวณ) ───────── */
+const EXCLUDE_TABLES = [500, 600];                 // โต๊ะที่ตัดออก
+const EXCLUDE_ITEMS = [206001];                    // itemCode เดี่ยวที่ตัดออก
+const EXCLUDE_ITEM_RANGES = [[500002, 500026]];    // ช่วง itemCode ที่ตัดออก
+
+function isExcludedTable(tid) {
+  return EXCLUDE_TABLES.indexOf(parseInt(tid)) >= 0;
+}
+function isExcludedItem(code) {
+  const ic = parseInt(code);
+  if (EXCLUDE_ITEMS.indexOf(ic) >= 0) return true;
+  return EXCLUDE_ITEM_RANGES.some(r => ic >= r[0] && ic <= r[1]);
+}
+
 /* ───────── HELPERS ───────── */
 const fmtMoney = v => {
   const n = parseFloat(v);
@@ -555,8 +569,13 @@ export default function App() {
 
       const costJson = await costPromise;
 
-      setSalesRaw(allSales);
-      setDetailRaw(allDetails);
+      // กรองโต๊ะ/ไอเทมที่ไม่นำมาคำนวณ (เช่น โต๊ะ 500/600, ไอเทมเตรียมของ)
+      const cleanSales = allSales.filter(r => !isExcludedTable(r.tableID ?? r.TableID));
+      const cleanDetails = allDetails.filter(r =>
+        !isExcludedTable(r.tableID ?? r.TableID) && !isExcludedItem(r.itemCode));
+
+      setSalesRaw(cleanSales);
+      setDetailRaw(cleanDetails);
       setCostMap(costJson);
       setLoaded(true);
 
