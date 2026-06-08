@@ -1001,6 +1001,8 @@ export default function App() {
     const count = sales.length;
     const sumAmount = sales.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
     const sumBill = sales.reduce((s, r) => s + (parseFloat(r.billTotal) || 0), 0);
+    const sumVat = sales.reduce((s, r) => s + (parseFloat(r.vat || r.Vat || 0) || 0), 0);
+    const sumBeforeVat = sumBill - sumVat;
     const sumCover = sales.reduce((s, r) => s + (parseFloat(r.cover) || 0), 0);
     const avgBill = count ? sumBill / count : 0;
 
@@ -1012,15 +1014,15 @@ export default function App() {
       return sum + (unitCost * qty);
     }, 0);
 
-    const sumProfit = sumBill - sumCost;
+    const sumProfit = sumBeforeVat - sumCost;
 
-    return { count, sumAmount, sumBill, sumCover, avgBill, sumCost, sumProfit };
+    return { count, sumAmount, sumBill, sumVat, sumBeforeVat, sumCover, avgBill, sumCost, sumProfit };
   }, [salesRaw, detailRaw, selectedOutlet, costMap]);
 
   // Tab 2 (Sales Report) stats
   const salesTabStats = useMemo(() => {
     if (!filteredSales.length) {
-      return { totalRevenue: 0, totalCost: 0, totalProfit: 0, totalVat: 0 };
+      return { totalRevenue: 0, totalBeforeVat: 0, totalCost: 0, totalProfit: 0, totalVat: 0 };
     }
     const filteredCheckIDs = new Set(filteredSales.map(r => String(r.checkID)));
     const totalRevenue = filteredSales.reduce((sum, r) => sum + (parseFloat(r.billTotal) || 0), 0);
@@ -1034,8 +1036,9 @@ export default function App() {
       }
       return sum;
     }, 0);
-    const totalProfit = totalRevenue - totalCost;
-    return { totalRevenue, totalCost, totalProfit, totalVat };
+    const totalBeforeVat = totalRevenue - totalVat;
+    const totalProfit = totalBeforeVat - totalCost;
+    return { totalRevenue, totalBeforeVat, totalCost, totalProfit, totalVat };
   }, [filteredSales, detailRaw, costMap]);
 
   // Chart 1: Daily Sales Trend
@@ -1654,8 +1657,8 @@ export default function App() {
                       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">ยอดขายรวมทั้งหมด</span>
-                          <h3 className="text-lg font-bold text-emerald-600 truncate">{fmtMoney(stats.sumBill)}</h3>
-                          <p className="text-[10px] text-slate-400">สุทธิ (Bill Total)</p>
+                          <h3 className="text-lg font-bold text-emerald-600 truncate">{fmtMoney(stats.sumBeforeVat)}</h3>
+                          <p className="text-[10px] text-slate-400">ก่อน VAT (Bill − VAT)</p>
                         </div>
                         <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-500 flex-shrink-0">
                           <DollarSign size={20} />
@@ -2009,14 +2012,23 @@ export default function App() {
             {activeTab === 'sales' && (
               <div className="flex flex-col gap-6">
                 {loaded && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
                     <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center gap-4">
                       <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center flex-shrink-0">
                         <DollarSign size={22} />
                       </div>
                       <div>
-                        <span className="text-xs text-slate-400 font-semibold block">รายได้รวมของบิลที่เลือก</span>
+                        <span className="text-xs text-slate-400 font-semibold block">ยอดขายรวม VAT</span>
                         <span className="text-xl font-bold text-slate-800 mt-0.5 block">{fmtMoney(salesTabStats.totalRevenue)} บาท</span>
+                      </div>
+                    </div>
+                    <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center flex-shrink-0">
+                        <DollarSign size={22} />
+                      </div>
+                      <div>
+                        <span className="text-xs text-slate-400 font-semibold block">ยอดขายก่อน VAT</span>
+                        <span className="text-xl font-bold text-slate-800 mt-0.5 block">{fmtMoney(salesTabStats.totalBeforeVat)} บาท</span>
                       </div>
                     </div>
                     <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm flex items-center gap-4">
