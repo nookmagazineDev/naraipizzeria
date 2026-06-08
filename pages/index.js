@@ -446,6 +446,7 @@ export default function App() {
 
   // Modal
   const [modal, setModal] = useState({ open: false, checkID: null, rows: [], loading: false, error: '' });
+  const [costModalOpen, setCostModalOpen] = useState(false);
 
   // Comparison State
   const [compareOutlets, setCompareOutlets] = useState([]); // Array of outlet IDs
@@ -1044,6 +1045,24 @@ export default function App() {
 
     return { count, sumAmount, sumBill, sumVat, sumBeforeVat, sumCover, avgBill, sumCost, sumProfit };
   }, [salesRaw, detailRaw, selectedOutlet, costMap]);
+
+  // Breakdown ต้นทุนต่อไอเทม (ใช้ในการ์ดต้นทุนแดชบอร์ดที่กดได้)
+  const costBreakdown = useMemo(() => {
+    const details = selectedOutlet
+      ? detailRaw.filter(r => String(r.outletID) === String(selectedOutlet))
+      : detailRaw;
+    const grouped = {};
+    details.forEach(r => {
+      if (r.void) return;
+      const code = String(r.itemCode || '');
+      const unitCost = costMap[code] ?? 0;
+      const qty = parseFloat(r.quantity) || 0;
+      if (!grouped[code]) grouped[code] = { itemCode: code, name: r.nameThai || r.nameEng || '-', unitCost, qty: 0, totalCost: 0 };
+      grouped[code].qty += qty;
+      grouped[code].totalCost += unitCost * qty;
+    });
+    return Object.values(grouped).filter(g => g.totalCost > 0).sort((a, b) => b.totalCost - a.totalCost);
+  }, [detailRaw, selectedOutlet, costMap]);
 
   // Tab 2 (Sales Report) stats
   const salesTabStats = useMemo(() => {
@@ -1691,17 +1710,17 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Card 2: Total Cost */}
-                      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+                      {/* Card 2: Total Cost (กดดูรายละเอียดได้) */}
+                      <button type="button" onClick={() => setCostModalOpen(true)} className="w-full text-left bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:border-rose-300 hover:shadow-md transition-all">
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">ต้นทุนรวมทั้งหมด</span>
                           <h3 className="text-lg font-bold text-rose-600 truncate">{fmtMoney(stats.sumCost)}</h3>
-                          <p className="text-[10px] text-slate-400">ต้นทุนขาย</p>
+                          <p className="text-[10px] text-rose-500 font-semibold">คลิกดูรายละเอียด →</p>
                         </div>
                         <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center text-rose-500 flex-shrink-0">
                           <Layers size={20} />
                         </div>
-                      </div>
+                      </button>
 
                       {/* Card 3: Profit / Loss */}
                       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
@@ -2779,6 +2798,68 @@ export default function App() {
       </div>
 
       {/* BILL DETAILS MODAL */}
+      {costModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setCostModalOpen(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <Layers size={18} className="text-rose-400" />
+                  <span>รายละเอียดต้นทุน</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {costBreakdown.length.toLocaleString('th-TH')} รายการที่มีต้นทุน
+                </p>
+              </div>
+              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setCostModalOpen(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              {costBreakdown.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                  <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
+                  <p className="text-sm">ไม่มีข้อมูลต้นทุน</p>
+                </div>
+              ) : (
+                <div className="overflow-auto max-h-[55vh] border border-slate-100 rounded-xl">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="text-slate-500 font-bold">
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">รหัสไอเทม</th>
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ชื่อรายการ</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">จำนวน</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ต้นทุน/หน่วย</th>
+                        <th className="px-4 py-3 text-rose-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ต้นทุนรวม</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {costBreakdown.map((c, i) => (
+                        <tr key={i} className="hover:bg-slate-50/50">
+                          <td className="px-4 py-2.5 font-mono text-slate-500">{c.itemCode}</td>
+                          <td className="px-4 py-2.5 font-semibold text-slate-800">{c.name}</td>
+                          <td className="px-4 py-2.5 text-right font-mono">{fmtNum(c.qty)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-500">{fmtMoney(c.unitCost)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-rose-600 font-bold">{fmtMoney(c.totalCost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-rose-50 border-t-2 border-rose-500 font-bold text-slate-800 sticky bottom-0">
+                        <td className="px-4 py-3" colSpan={2}>ต้นทุนรวมทั้งหมด</td>
+                        <td className="px-4 py-3 text-right font-mono">{fmtNum(costBreakdown.reduce((s, c) => s + c.qty, 0))}</td>
+                        <td />
+                        <td className="px-4 py-3 text-right font-mono text-rose-700">{fmtMoney(stats.sumCost)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {modal.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setModal(m => ({ ...m, open: false }))}>
           <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
