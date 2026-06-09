@@ -447,6 +447,8 @@ export default function App() {
   // Modal
   const [modal, setModal] = useState({ open: false, checkID: null, rows: [], loading: false, error: '' });
   const [costModalOpen, setCostModalOpen] = useState(false);
+  const [excludedRaw, setExcludedRaw] = useState([]);
+  const [excludedModalOpen, setExcludedModalOpen] = useState(false);
 
   // Comparison State
   const [compareOutlets, setCompareOutlets] = useState([]); // Array of outlet IDs
@@ -574,9 +576,12 @@ export default function App() {
       const cleanSales = allSales.filter(r => !isExcludedTable(r.tableID ?? r.TableID));
       const cleanDetails = allDetails.filter(r =>
         !isExcludedTable(r.tableID ?? r.TableID) && !isExcludedItem(r.itemCode));
+      // เก็บแถวโต๊ะ 500/600 ที่ถูกตัดออก ไว้แสดงในการ์ด "ไม่นับ"
+      const excludedDetails = allDetails.filter(r => isExcludedTable(r.tableID ?? r.TableID));
 
       setSalesRaw(cleanSales);
       setDetailRaw(cleanDetails);
+      setExcludedRaw(excludedDetails);
       setCostMap(costJson);
       setLoaded(true);
 
@@ -1063,6 +1068,32 @@ export default function App() {
     });
     return Object.values(grouped).filter(g => g.totalCost > 0).sort((a, b) => b.totalCost - a.totalCost);
   }, [detailRaw, selectedOutlet, costMap]);
+
+  // Breakdown รายการโต๊ะ 500/600 ที่ไม่ถูกนำมาคำนวณ (แยกตามโต๊ะ + ไอเทม)
+  const excludedBreakdown = useMemo(() => {
+    const rows = selectedOutlet
+      ? excludedRaw.filter(r => String(r.outletID) === String(selectedOutlet))
+      : excludedRaw;
+    const grouped = {};
+    rows.forEach(r => {
+      if (r.void) return;
+      const code = String(r.itemCode || '');
+      const tid = parseInt(r.tableID ?? r.TableID) || 0;
+      const key = tid + '|' + code;
+      const unitCost = costMap[code] ?? 0;
+      const qty = parseFloat(r.quantity) || 0;
+      if (!grouped[key]) grouped[key] = { tableID: tid, itemCode: code, name: r.nameThai || r.nameEng || '-', unitCost, qty: 0, totalCost: 0 };
+      grouped[key].qty += qty;
+      grouped[key].totalCost += unitCost * qty;
+    });
+    return Object.values(grouped).sort((a, b) => b.totalCost - a.totalCost || b.qty - a.qty);
+  }, [excludedRaw, selectedOutlet, costMap]);
+
+  const excludedStats = useMemo(() => ({
+    totalQty: excludedBreakdown.reduce((s, c) => s + c.qty, 0),
+    totalCost: excludedBreakdown.reduce((s, c) => s + c.totalCost, 0),
+    lines: excludedBreakdown.length,
+  }), [excludedBreakdown]);
 
   // Tab 2 (Sales Report) stats
   const salesTabStats = useMemo(() => {
@@ -1771,6 +1802,18 @@ export default function App() {
                           <Users size={20} />
                         </div>
                       </div>
+
+                      {/* Card 7: Excluded tables 500/600 (กดดูได้) */}
+                      <button type="button" onClick={() => setExcludedModalOpen(true)} className="w-full text-left bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:border-slate-300 hover:shadow-md transition-all">
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">โต๊ะ 500/600 (ไม่นับ)</span>
+                          <h3 className="text-lg font-bold text-slate-500 truncate">{fmtMoney(excludedStats.totalCost)}</h3>
+                          <p className="text-[10px] text-slate-500 font-semibold">{fmtNum(excludedStats.totalQty)} ชิ้น • คลิกดู →</p>
+                        </div>
+                        <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 flex-shrink-0">
+                          <Layers size={20} />
+                        </div>
+                      </button>
                     </div>
 
                     {/* CHART PANELS GRID */}
@@ -2798,6 +2841,70 @@ export default function App() {
       </div>
 
       {/* BILL DETAILS MODAL */}
+      {excludedModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setExcludedModalOpen(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <Layers size={18} className="text-slate-400" />
+                  <span>โต๊ะ 500/600 ที่ไม่นำมาคำนวณ</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {excludedStats.lines.toLocaleString('th-TH')} รายการ • {fmtNum(excludedStats.totalQty)} ชิ้น
+                </p>
+              </div>
+              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setExcludedModalOpen(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              {excludedBreakdown.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                  <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
+                  <p className="text-sm">ไม่มีรายการโต๊ะ 500/600 ในช่วงที่เลือก</p>
+                </div>
+              ) : (
+                <div className="overflow-auto max-h-[55vh] border border-slate-100 rounded-xl">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="text-slate-500 font-bold">
+                        <th className="px-4 py-3 text-slate-600 text-center sticky top-0 bg-slate-50 z-20 border-b border-slate-200">โต๊ะ</th>
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">รหัสไอเทม</th>
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ชื่อรายการ</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">จำนวน</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ต้นทุน/หน่วย</th>
+                        <th className="px-4 py-3 text-rose-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ต้นทุนรวม</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {excludedBreakdown.map((c, i) => (
+                        <tr key={i} className="hover:bg-slate-50/50">
+                          <td className="px-4 py-2.5 text-center font-mono font-semibold text-slate-600">{c.tableID}</td>
+                          <td className="px-4 py-2.5 font-mono text-slate-500">{c.itemCode}</td>
+                          <td className="px-4 py-2.5 font-semibold text-slate-800">{c.name}</td>
+                          <td className="px-4 py-2.5 text-right font-mono">{fmtNum(c.qty)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-500">{fmtMoney(c.unitCost)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-rose-600 font-bold">{fmtMoney(c.totalCost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-slate-100 border-t-2 border-slate-400 font-bold text-slate-800 sticky bottom-0">
+                        <td className="px-4 py-3" colSpan={3}>รวมทั้งหมด</td>
+                        <td className="px-4 py-3 text-right font-mono">{fmtNum(excludedStats.totalQty)}</td>
+                        <td />
+                        <td className="px-4 py-3 text-right font-mono text-rose-700">{fmtMoney(excludedStats.totalCost)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {costModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setCostModalOpen(false)}>
           <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
