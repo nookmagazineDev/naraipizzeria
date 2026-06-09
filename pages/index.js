@@ -62,6 +62,7 @@ const OUTLET_LIST = Object.entries(OUTLETS).map(([id, name]) => ({
 const EXCLUDE_TABLES = [600];                       // โต๊ะที่ตัดออก (500 กลับไปนับต้นทุนจริงแล้ว)
 const EXCLUDE_ITEMS = [206001];                    // itemCode เดี่ยวที่ตัดออก
 const EXCLUDE_ITEM_RANGES = [[500002, 500026]];    // ช่วง itemCode ที่ตัดออก
+const COVER_ITEMS = [101001, 101002, 101003, 101004]; // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน"
 
 function isExcludedTable(tid) {
   return EXCLUDE_TABLES.indexOf(parseInt(tid)) >= 0;
@@ -766,7 +767,7 @@ export default function App() {
       } else if (code === '101002') {
         map[key].buffet359Qty += qty;
         map[key].buffet359Amt += grossPrice;
-      } else if (code === '101104') {
+      } else if (code === '101004' || code === '101104') {
         map[key].kid159Qty += qty;
         map[key].kid159Amt += grossPrice;
       } else if (code === '101108') {
@@ -1038,7 +1039,11 @@ export default function App() {
     const sumBill = sales.reduce((s, r) => s + (parseFloat(r.billTotal) || 0), 0);
     const sumVat = sales.reduce((s, r) => s + (parseFloat(r.vat || r.Vat || 0) || 0), 0);
     const sumBeforeVat = sumBill - sumVat;
-    const sumCover = sales.reduce((s, r) => s + (parseFloat(r.cover) || 0), 0);
+    // จำนวนคน = ผลรวมจำนวนไอเทมบุฟเฟ่ 101001-101004 (ไม่นับรายการ void)
+    const sumCover = details.reduce((s, r) => {
+      if (r.void) return s;
+      return COVER_ITEMS.indexOf(parseInt(r.itemCode)) >= 0 ? s + (parseFloat(r.quantity) || 0) : s;
+    }, 0);
     const avgBill = count ? sumBill / count : 0;
 
     // Calculate total cost for non-voided details
