@@ -59,7 +59,7 @@ const OUTLET_LIST = Object.entries(OUTLETS).map(([id, name]) => ({
 })).sort((a, b) => a.id - b.id);
 
 /* ───────── EXCLUSIONS (ไม่นำมาคำนวณ) ───────── */
-const EXCLUDE_TABLES = [500, 600];                 // โต๊ะที่ตัดออก
+const EXCLUDE_TABLES = [600];                       // โต๊ะที่ตัดออก (500 กลับไปนับต้นทุนจริงแล้ว)
 const EXCLUDE_ITEMS = [206001];                    // itemCode เดี่ยวที่ตัดออก
 const EXCLUDE_ITEM_RANGES = [[500002, 500026]];    // ช่วง itemCode ที่ตัดออก
 
@@ -576,8 +576,9 @@ export default function App() {
       const cleanSales = allSales.filter(r => !isExcludedTable(r.tableID ?? r.TableID));
       const cleanDetails = allDetails.filter(r =>
         !isExcludedTable(r.tableID ?? r.TableID) && !isExcludedItem(r.itemCode));
-      // เก็บแถวโต๊ะ 500/600 ที่ถูกตัดออก ไว้แสดงในการ์ด "ไม่นับ"
-      const excludedDetails = allDetails.filter(r => isExcludedTable(r.tableID ?? r.TableID));
+      // เก็บแถวที่ถูกตัดออก (โต๊ะ 600 + ไอเทม 206001/500002-500026) ไว้แสดงในการ์ด "ไม่นับ"
+      const excludedDetails = allDetails.filter(r =>
+        isExcludedTable(r.tableID ?? r.TableID) || isExcludedItem(r.itemCode));
 
       setSalesRaw(cleanSales);
       setDetailRaw(cleanDetails);
@@ -1079,10 +1080,11 @@ export default function App() {
       if (r.void) return;
       const code = String(r.itemCode || '');
       const tid = parseInt(r.tableID ?? r.TableID) || 0;
-      const key = tid + '|' + code;
+      const reason = isExcludedTable(tid) ? `โต๊ะ ${tid}` : 'ไอเทมเตรียม';
+      const key = reason + '|' + code;
       const unitCost = costMap[code] ?? 0;
       const qty = parseFloat(r.quantity) || 0;
-      if (!grouped[key]) grouped[key] = { tableID: tid, itemCode: code, name: r.nameThai || r.nameEng || '-', unitCost, qty: 0, totalCost: 0 };
+      if (!grouped[key]) grouped[key] = { reason, tableID: tid, itemCode: code, name: r.nameThai || r.nameEng || '-', unitCost, qty: 0, totalCost: 0 };
       grouped[key].qty += qty;
       grouped[key].totalCost += unitCost * qty;
     });
@@ -1806,7 +1808,7 @@ export default function App() {
                       {/* Card 7: Excluded tables 500/600 (กดดูได้) */}
                       <button type="button" onClick={() => setExcludedModalOpen(true)} className="w-full text-left bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:border-slate-300 hover:shadow-md transition-all">
                         <div className="space-y-1">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">โต๊ะ 500/600 (ไม่นับ)</span>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">รายการไม่นับคำนวณ</span>
                           <h3 className="text-lg font-bold text-slate-500 truncate">{fmtMoney(excludedStats.totalCost)}</h3>
                           <p className="text-[10px] text-slate-500 font-semibold">{fmtNum(excludedStats.totalQty)} ชิ้น • คลิกดู →</p>
                         </div>
@@ -2848,7 +2850,7 @@ export default function App() {
               <div>
                 <h3 className="text-base font-bold flex items-center gap-2">
                   <Layers size={18} className="text-slate-400" />
-                  <span>โต๊ะ 500/600 ที่ไม่นำมาคำนวณ</span>
+                  <span>รายการที่ไม่นำมาคำนวณ (โต๊ะ 600 + ไอเทมเตรียม)</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
                   {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {excludedStats.lines.toLocaleString('th-TH')} รายการ • {fmtNum(excludedStats.totalQty)} ชิ้น
@@ -2862,14 +2864,14 @@ export default function App() {
               {excludedBreakdown.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-slate-400">
                   <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
-                  <p className="text-sm">ไม่มีรายการโต๊ะ 500/600 ในช่วงที่เลือก</p>
+                  <p className="text-sm">ไม่มีรายการที่ถูกตัดออกในช่วงที่เลือก</p>
                 </div>
               ) : (
                 <div className="overflow-auto max-h-[55vh] border border-slate-100 rounded-xl">
                   <table className="w-full text-left text-xs border-collapse">
                     <thead>
                       <tr className="text-slate-500 font-bold">
-                        <th className="px-4 py-3 text-slate-600 text-center sticky top-0 bg-slate-50 z-20 border-b border-slate-200">โต๊ะ</th>
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">เหตุผล</th>
                         <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">รหัสไอเทม</th>
                         <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ชื่อรายการ</th>
                         <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">จำนวน</th>
@@ -2880,7 +2882,7 @@ export default function App() {
                     <tbody className="divide-y divide-slate-100 text-slate-700">
                       {excludedBreakdown.map((c, i) => (
                         <tr key={i} className="hover:bg-slate-50/50">
-                          <td className="px-4 py-2.5 text-center font-mono font-semibold text-slate-600">{c.tableID}</td>
+                          <td className="px-4 py-2.5 font-semibold text-slate-600 whitespace-nowrap">{c.reason}</td>
                           <td className="px-4 py-2.5 font-mono text-slate-500">{c.itemCode}</td>
                           <td className="px-4 py-2.5 font-semibold text-slate-800">{c.name}</td>
                           <td className="px-4 py-2.5 text-right font-mono">{fmtNum(c.qty)}</td>
