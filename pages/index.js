@@ -62,7 +62,7 @@ const OUTLET_LIST = Object.entries(OUTLETS).map(([id, name]) => ({
 const EXCLUDE_TABLES = [600];                       // โต๊ะที่ตัดออก (500 กลับไปนับต้นทุนจริงแล้ว)
 const EXCLUDE_ITEMS = [206001];                    // itemCode เดี่ยวที่ตัดออก
 const EXCLUDE_ITEM_RANGES = [[500002, 500026]];    // ช่วง itemCode ที่ตัดออก
-const COVER_ITEMS = [101001, 101002, 101003, 101004]; // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน"
+const COVER_ITEMS = [101001, 101002, 101003, 101004, 101107, 101108]; // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน"
 
 function isExcludedTable(tid) {
   return EXCLUDE_TABLES.indexOf(parseInt(tid)) >= 0;
