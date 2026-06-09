@@ -419,7 +419,8 @@ export default function App() {
 
   // Datasets
   const [salesRaw, setSalesRaw] = useState([]);
-  const [detailRaw, setDetailRaw] = useState([]);
+  const [detailRaw, setDetailRaw] = useState([]);        // กรองแล้ว (ใช้คำนวณ)
+  const [detailAllRaw, setDetailAllRaw] = useState([]);  // ครบทุกแถว (ใช้แสดงหน้ารายละเอียด)
   const [costMap, setCostMap] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -582,6 +583,7 @@ export default function App() {
 
       setSalesRaw(cleanSales);
       setDetailRaw(cleanDetails);
+      setDetailAllRaw(allDetails);
       setExcludedRaw(excludedDetails);
       setCostMap(costJson);
       setLoaded(true);
@@ -686,10 +688,10 @@ export default function App() {
   }, [salesWithCost, salesSearch, salesColF, selectedOutlet, salesSort]);
 
   // Enrich detail rows with unit cost & line cost (ต้นทุน/หน่วย, ต้นทุนรวม)
-  const detailsWithCost = useMemo(() => detailRaw.map(r => {
+  const detailsWithCost = useMemo(() => detailAllRaw.map(r => {
     const unitCost = costMap[r.itemCode] ?? 0;
     return { ...r, unitCost, lineCost: unitCost * (parseFloat(r.quantity) || 0) };
-  }), [detailRaw, costMap]);
+  }), [detailAllRaw, costMap]);
 
   const filteredDetails = useMemo(() => {
     const d = applyFilters(detailsWithCost, DETAIL_COLUMNS, detailSearch, detailColF, selectedOutlet);
@@ -2387,13 +2389,17 @@ export default function App() {
                           ) : (
                             filteredDetails.slice((detailPage - 1) * PAGE_SIZE, detailPage * PAGE_SIZE).map((row, i) => {
                               const isVoided = row.void;
+                              const isExcluded = isExcludedTable(row.tableID ?? row.TableID) || isExcludedItem(row.itemCode);
                               return (
-                                <tr key={i} className={`hover:bg-slate-50/50 transition-colors ${isVoided ? 'row-void bg-rose-50/20' : ''}`}>
+                                <tr key={i} className={`hover:bg-slate-50/50 transition-colors ${isVoided ? 'row-void bg-rose-50/20' : isExcluded ? 'bg-amber-50/40' : ''}`}>
                                   <td className="px-4 py-2.5 whitespace-nowrap">{row.prtOrdTime ? row.prtOrdTime.slice(0, 10) : '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono">{row.chkCheckID}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-500">{row.itemCode || '-'}</td>
-                                  <td className="px-4 py-2.5 whitespace-nowrap font-semibold text-slate-800">{row.nameThai || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-semibold text-slate-800">
+                                    {row.nameThai || '-'}
+                                    {isExcluded && <span className="ml-2 text-[9px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">ไม่นับ</span>}
+                                  </td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono font-semibold">{fmtNum(row.quantity)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.unitPrice)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-bold">{fmtMoney(row.grossPrice)}</td>
