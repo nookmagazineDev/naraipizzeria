@@ -808,9 +808,10 @@ export default function App() {
       let deliveryBills = 0;
 
       bills.forEach(r => {
-        const amount = parseFloat(r.amount || r.Amount || 0);
+        // ใช้ billTotal (ยอดจริงต่อบิล) เพื่อให้ตรงกับหน้ารายงานยอดขาย
+        const billTotal = parseFloat(r.billTotal || r.BillTotal || r.amount || r.Amount || 0);
         const vat = parseFloat(r.vat || r.Vat || 0);
-        const net = amount - vat;
+        const net = billTotal - vat;
         
         const tid = parseInt(r.tableID || r.TableID || 0);
         if (tid === 300) {
