@@ -2779,7 +2779,7 @@ export default function App() {
                     </div>
 
                     <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
-                      <div className="overflow-auto max-h-[70vh]">
+                      <div className="overflow-auto max-h-[70vh] min-h-[480px]">
                         <table className="lock-table-dark w-full text-xs">
                           <thead className="bg-slate-900 text-white sticky top-0 z-10">
                             <tr>
