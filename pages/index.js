@@ -2190,7 +2190,7 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      <div className="overflow-auto max-h-[70vh] w-full">
+                      <div className="overflow-auto max-h-[70vh] min-h-[480px] w-full">
                         <table className="lock-table w-full text-left text-xs border-collapse">
                           <thead>
                             <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold">
@@ -2344,7 +2344,7 @@ export default function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="overflow-auto max-h-[70vh] w-full">
+                    <div className="overflow-auto max-h-[70vh] min-h-[480px] w-full">
                       <table className="lock-table w-full text-left text-xs border-collapse">
                         <thead>
                           <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold">
@@ -2513,7 +2513,7 @@ export default function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="overflow-auto max-h-[70vh] w-full">
+                    <div className="overflow-auto max-h-[70vh] min-h-[480px] w-full">
                       <table className="lock-table w-full text-left text-[11px] border-collapse">
                         <thead>
                           <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold">
