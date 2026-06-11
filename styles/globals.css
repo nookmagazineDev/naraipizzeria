@@ -41,3 +41,51 @@ tr.row-void td:nth-child(5) {
   text-decoration: none;
   opacity: 1;
 }
+
+/* ===== ล็อก header + คอลัมน์แรกของตาราง (ทุกหน้า) ===== */
+.lock-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background-color: #f1f5f9;
+}
+.lock-table thead tr + tr th {        /* แถวฟิลเตอร์ (header แถวที่ 2) ติดใต้แถวแรก */
+  top: 42px;
+  z-index: 19;
+  background-color: #f8fafc;
+}
+.lock-table tbody td:first-child,
+.lock-table tfoot td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 10;
+  background-color: #ffffff;
+}
+.lock-table thead th:first-child {
+  left: 0;
+  z-index: 30;
+}
+
+/* ตารางหัวสีเข้ม (เช่น ค้นหาไอเทม) */
+.lock-table-dark thead th {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background-color: #0f172a;
+}
+.lock-table-dark thead tr + tr th {
+  top: 42px;
+  z-index: 19;
+  background-color: #1e293b;
+}
+.lock-table-dark tbody td:first-child,
+.lock-table-dark tfoot td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 10;
+  background-color: #ffffff;
+}
+.lock-table-dark thead th:first-child {
+  left: 0;
+  z-index: 30;
+}

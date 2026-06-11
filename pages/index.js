@@ -2189,8 +2189,8 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      <div className="overflow-x-auto w-full">
-                        <table className="w-full text-left text-xs border-collapse">
+                      <div className="overflow-auto max-h-[70vh] w-full">
+                        <table className="lock-table w-full text-left text-xs border-collapse">
                           <thead>
                             <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold">
                               <th className="px-4 py-3 text-slate-600">ตัวช่วย</th>
@@ -2256,8 +2256,8 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.amount)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-600 font-semibold">{fmtMoney(row.beforeVat)}</td>
-                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.billTotal)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.billTotal)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-rose-600 font-semibold">{fmtMoney(row.billCost)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap">
                                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -2343,8 +2343,8 @@ export default function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="overflow-x-auto w-full">
-                      <table className="w-full text-left text-xs border-collapse">
+                    <div className="overflow-auto max-h-[70vh] w-full">
+                      <table className="lock-table w-full text-left text-xs border-collapse">
                         <thead>
                           <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold">
                             {DETAIL_COLUMNS.map(c => {
@@ -2512,8 +2512,8 @@ export default function App() {
                   </div>
                 ) : (
                   <>
-                    <div className="overflow-x-auto w-full">
-                      <table className="w-full text-left text-[11px] border-collapse">
+                    <div className="overflow-auto max-h-[70vh] w-full">
+                      <table className="lock-table w-full text-left text-[11px] border-collapse">
                         <thead>
                           <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold">
                             {DAILY_COLUMNS.map(c => {
@@ -2778,8 +2778,8 @@ export default function App() {
                     </div>
 
                     <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
+                      <div className="overflow-auto max-h-[70vh]">
+                        <table className="lock-table-dark w-full text-xs">
                           <thead className="bg-slate-900 text-white sticky top-0 z-10">
                             <tr>
                               {ITEM_COLUMNS.map(col => (
