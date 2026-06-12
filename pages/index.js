@@ -281,6 +281,8 @@ const SALES_COLUMNS = [
   { key: 'Date', label: 'วันที่', type: 'date' },
   { key: 'checkID', label: 'Check ID', type: 'text' },
   { key: 'outletID', label: 'สาขา', type: 'outlet' },
+  { key: 'tableID', label: 'โต๊ะ', type: 'num' },
+  { key: 'cashierName', label: 'แคชเชียร์', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'amount' },
   { key: 'beforeVat', label: 'ยอดขายก่อน Vat', type: 'money' },
   { key: 'vat', label: 'Vat', type: 'money' },
@@ -2377,6 +2379,8 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap">{dateFromRow(row)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono">{row.checkID}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-center font-mono text-slate-600">{row.tableID ?? '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-slate-600">{row.cashierName || '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.amount)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-600 font-semibold">{fmtMoney(row.beforeVat)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
