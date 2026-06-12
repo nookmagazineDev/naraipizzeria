@@ -454,6 +454,7 @@ export default function App() {
   const [modal, setModal] = useState({ open: false, checkID: null, rows: [], loading: false, error: '' });
   const [costModalOpen, setCostModalOpen] = useState(false);
   const [prepModalOpen, setPrepModalOpen] = useState(false);
+  const [dailyCostModal, setDailyCostModal] = useState({ open: false, type: 'cost', date: null, outletID: null });
   const [excludedRaw, setExcludedRaw] = useState([]);
   const [excludedModalOpen, setExcludedModalOpen] = useState(false);
 
@@ -1113,6 +1114,32 @@ export default function App() {
     totalCost: prepBreakdown.reduce((s, c) => s + c.totalCost, 0),
     lines: prepBreakdown.length,
   }), [prepBreakdown]);
+
+  // รายละเอียดต้นทุนต่อ "วัน+สาขา" (ใช้ตอนกดเซลล์ในตารางรายวัน) — type: 'cost' (หลัก) หรือ 'prep'
+  const dailyCostDetail = useMemo(() => {
+    const { open, type, date, outletID } = dailyCostModal;
+    if (!open) return { rows: [], totalCost: 0, totalQty: 0 };
+    const grouped = {};
+    detailRaw.forEach(r => {
+      if (r.void) return;
+      if (dateFromRow(r) !== date || String(r.outletID) !== String(outletID)) return;
+      const isPrep = isPrepKgItem(r.itemCode);
+      if (type === 'prep' ? !isPrep : isPrep) return;
+      const code = String(r.itemCode || '');
+      const unitCost = costMap[code] ?? 0;
+      const qty = parseFloat(r.quantity) || 0;
+      if (!grouped[code]) grouped[code] = { itemCode: code, name: r.nameThai || r.nameEng || '-', unitCost, qty: 0, totalCost: 0 };
+      grouped[code].qty += qty;
+      grouped[code].totalCost += unitCost * qty;
+    });
+    let rows = Object.values(grouped).sort((a, b) => b.totalCost - a.totalCost);
+    if (type === 'cost') rows = rows.filter(g => g.totalCost > 0);
+    return {
+      rows,
+      totalCost: rows.reduce((s, c) => s + c.totalCost, 0),
+      totalQty: rows.reduce((s, c) => s + c.qty, 0),
+    };
+  }, [dailyCostModal, detailRaw, costMap]);
 
   // Breakdown รายการโต๊ะ 500/600 ที่ไม่ถูกนำมาคำนวณ (แยกตามโต๊ะ + ไอเทม)
   const excludedBreakdown = useMemo(() => {
@@ -2705,8 +2732,12 @@ export default function App() {
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid109Amt)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kidFreeQty)}</td>
 
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-rose-600">{fmtMoney(row.totalCost)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-orange-500">{fmtMoney(row.prepCost)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-rose-600">
+                                  <button onClick={() => setDailyCostModal({ open: true, type: 'cost', date: row.date, outletID: row.outletID })} className="hover:underline cursor-pointer">{fmtMoney(row.totalCost)}</button>
+                                </td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-orange-500">
+                                  <button onClick={() => setDailyCostModal({ open: true, type: 'prep', date: row.date, outletID: row.outletID })} className="hover:underline cursor-pointer">{fmtMoney(row.prepCost)}</button>
+                                </td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{row.costPct.toFixed(2)}%</td>
                               </tr>
                             ))
@@ -2960,6 +2991,68 @@ export default function App() {
                         <td className="px-4 py-3 text-right font-mono">{fmtNum(excludedStats.totalQty)}</td>
                         <td />
                         <td className="px-4 py-3 text-right font-mono text-rose-700">{fmtMoney(excludedStats.totalCost)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dailyCostModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setDailyCostModal(m => ({ ...m, open: false }))}>
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <Layers size={18} className={dailyCostModal.type === 'prep' ? 'text-orange-400' : 'text-rose-400'} />
+                  <span>{dailyCostModal.type === 'prep' ? 'ต้นทุนโต๊ะเตรียม(กก)' : 'ต้นทุนรวม'}</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  {dailyCostModal.date} • {outletLabel(dailyCostModal.outletID)} • {dailyCostDetail.rows.length} รายการ
+                </p>
+              </div>
+              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setDailyCostModal(m => ({ ...m, open: false }))}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              {dailyCostDetail.rows.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                  <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
+                  <p className="text-sm">ไม่มีรายการในวันนี้</p>
+                </div>
+              ) : (
+                <div className="overflow-auto max-h-[55vh] border border-slate-100 rounded-xl">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="text-slate-500 font-bold">
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">รหัสไอเทม</th>
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ชื่อรายการ</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">จำนวน</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ต้นทุน/หน่วย</th>
+                        <th className={`px-4 py-3 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200 ${dailyCostModal.type === 'prep' ? 'text-orange-600' : 'text-rose-600'}`}>ต้นทุนรวม</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {dailyCostDetail.rows.map((c, i) => (
+                        <tr key={i} className="hover:bg-slate-50/50">
+                          <td className="px-4 py-2.5 font-mono text-slate-500">{c.itemCode}</td>
+                          <td className="px-4 py-2.5 font-semibold text-slate-800">{c.name}</td>
+                          <td className="px-4 py-2.5 text-right font-mono">{fmtNum(c.qty)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-500">{fmtMoney(c.unitCost)}</td>
+                          <td className={`px-4 py-2.5 text-right font-mono font-bold ${dailyCostModal.type === 'prep' ? 'text-orange-600' : 'text-rose-600'}`}>{fmtMoney(c.totalCost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className={`border-t-2 font-bold text-slate-800 sticky bottom-0 ${dailyCostModal.type === 'prep' ? 'bg-orange-50 border-orange-500' : 'bg-rose-50 border-rose-500'}`}>
+                        <td className="px-4 py-3" colSpan={2}>รวมทั้งหมด</td>
+                        <td className="px-4 py-3 text-right font-mono">{fmtNum(dailyCostDetail.totalQty)}</td>
+                        <td />
+                        <td className={`px-4 py-3 text-right font-mono ${dailyCostModal.type === 'prep' ? 'text-orange-700' : 'text-rose-700'}`}>{fmtMoney(dailyCostDetail.totalCost)}</td>
                       </tr>
                     </tfoot>
                   </table>
