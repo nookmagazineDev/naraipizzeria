@@ -24,8 +24,11 @@ import {
   CheckCircle,
   XCircle,
   HelpCircle,
-  Filter
+  Filter,
+  PackageSearch
 } from 'lucide-react';
+import StockList from '../components/StockList';
+import StockTotalList from '../components/StockTotalList';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -415,6 +418,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'sales', 'dailySale', 'details', 'itemSearch'
   const [accOpen, setAccOpen] = useState(true);
+  const [stockOpen, setStockOpen] = useState(true);
   const [branchChartMode, setBranchChartMode] = useState('sales'); // 'sales' or 'covers'
 
   // Date filters
@@ -1606,6 +1610,39 @@ export default function App() {
               )}
             </div>
 
+            {/* STOCK Main Menu */}
+            <div className="pt-2">
+              <button
+                onClick={() => setStockOpen(!stockOpen)}
+                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${stockOpen ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+              >
+                <div className="flex items-center gap-3">
+                  <PackageSearch size={18} className="text-amber-500" />
+                  <span>STOCK</span>
+                </div>
+                {stockOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              </button>
+
+              {stockOpen && (
+                <div className="pl-4 space-y-1.5 mt-1 border-l border-slate-800 ml-6">
+                  <button
+                    onClick={() => { setActiveTab('stockList'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'stockList' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <PackageSearch size={16} />
+                    <span>นับสต๊อกและขอเบิก</span>
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('stockTotal'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'stockTotal' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <Eye size={16} />
+                    <span>ดูยอดรวมทุกสาขา</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* HR Main Menu (Placeholder) */}
             <div className="pt-2">
               <button 
@@ -1643,10 +1680,13 @@ export default function App() {
                 {activeTab === 'dailySale' && <Receipt size={20} className="text-amber-600" />}
                 {activeTab === 'details' && <Layers size={20} className="text-amber-600" />}
                 {activeTab === 'itemSearch' && <Search size={20} className="text-amber-600" />}
-                {activeTab === 'dashboard' ? 'แดชบอร์ดหลัก' 
-                  : activeTab === 'sales' ? 'รายงานยอดการขาย' 
-                  : activeTab === 'dailySale' ? 'รายงานยอดรายวันทุกสาขา' 
+                {(activeTab === 'stockList' || activeTab === 'stockTotal') && <PackageSearch size={20} className="text-amber-600" />}
+                {activeTab === 'dashboard' ? 'แดชบอร์ดหลัก'
+                  : activeTab === 'sales' ? 'รายงานยอดการขาย'
+                  : activeTab === 'dailySale' ? 'รายงานยอดรายวันทุกสาขา'
                   : activeTab === 'itemSearch' ? 'ค้นหารายไอเทม'
+                  : activeTab === 'stockList' ? 'นับสต๊อกและขอเบิก'
+                  : activeTab === 'stockTotal' ? 'ดูยอดรวมทุกสาขา'
                   : 'รายละเอียดรายการ'}
               </h1>
             </div>
@@ -1675,7 +1715,12 @@ export default function App() {
               </div>
             )}
 
+            {/* STOCK VIEWS (จาก Narai-branch — โหมดดูอย่างเดียว) */}
+            {activeTab === 'stockList' && <StockList />}
+            {activeTab === 'stockTotal' && <StockTotalList />}
+
             {/* FILTER PANEL */}
+            {!(activeTab === 'stockList' || activeTab === 'stockTotal') && (
             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">กำหนดช่วงวันที่และสาขา</h2>
               <div className="flex flex-col lg:flex-row gap-4 items-end">
@@ -1760,6 +1805,7 @@ export default function App() {
                 </div>
               </div>
             </div>
+            )}
 
             {/* TAB CONTENT OR PROGRESS */}
             {loading && loadProgress ? (
