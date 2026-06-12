@@ -303,6 +303,7 @@ const SALES_COLUMNS = [
   { key: 'outletID', label: 'สาขา', type: 'outlet' },
   { key: 'tableID', label: 'โต๊ะ', type: 'num' },
   { key: 'cashierName', label: 'แคชเชียร์', type: 'text' },
+  { key: 'waiterName', label: 'พนักงานรับออเดอร์', type: 'text' },
   { key: 'amount', label: 'Amount', type: 'amount' },
   { key: 'beforeVat', label: 'ยอดขายก่อน Vat', type: 'money' },
   { key: 'vat', label: 'Vat', type: 'money' },
@@ -699,6 +700,17 @@ export default function App() {
     return map;
   }, [detailRaw, costMap]);
 
+  // Map checkID -> waiterName (พนักงานรับออเดอร์ จากข้อมูลรายละเอียด)
+  const checkWaiterMap = useMemo(() => {
+    const map = {};
+    detailRaw.forEach(r => {
+      if (!r.chkCheckID) return;
+      const cid = String(r.chkCheckID);
+      if (!map[cid] && r.waiterName) map[cid] = r.waiterName;
+    });
+    return map;
+  }, [detailRaw]);
+
   // Sales data with computed billCost attached
   const salesWithCost = useMemo(() => {
     return salesRaw.map(row => {
@@ -709,10 +721,11 @@ export default function App() {
         ...row,
         billCost: salesCostMap[cid] ?? 0,
         vat: vatVal,
-        beforeVat: amt - vatVal
+        beforeVat: amt - vatVal,
+        waiterName: checkWaiterMap[cid] || ''
       };
     });
-  }, [salesRaw, salesCostMap]);
+  }, [salesRaw, salesCostMap, checkWaiterMap]);
 
   // Processed Data
   const filteredSales = useMemo(() => {
@@ -2401,6 +2414,7 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-center font-mono text-slate-600">{row.tableID ?? '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-slate-600">{row.cashierName || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-slate-600">{row.waiterName || '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.amount)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-600 font-semibold">{fmtMoney(row.beforeVat)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
