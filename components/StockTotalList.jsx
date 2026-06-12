@@ -304,7 +304,7 @@ export default function StockTotalList() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-24">หมวดจัดเก็บ</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้รวม</th>
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">ยอดคงเหลือรวม</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">ยอดคงเหลือรวมล่าสุด</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-100">
@@ -330,19 +330,22 @@ export default function StockTotalList() {
                         </div>
                       </td>
 
-                      {/* ยอดคงเหลือล่าสุดรวม (นับล่าสุด + รับ - ใช้ จนถึงปัจจุบัน) */}
+                      {/* ยอดคงเหลือรวมล่าสุด = ผลรวมยอดนับล่าสุดของทุกสาขา (จากชีทข้อมูลนับสตอค) */}
                       <td className="px-4 py-3 text-center bg-indigo-50/30">
-                        <div 
-                          className={`font-semibold text-sm ${item.newBranchDetails && item.newBranchDetails.length > 0 ? 'text-indigo-700 cursor-pointer hover:underline' : 'text-indigo-700'}`}
-                          onClick={() => {
-                            if (item.newBranchDetails && item.newBranchDetails.length > 0) {
-                              setSelectedBranchDetails({ name: item.name, details: item.newBranchDetails });
-                            }
-                          }}
-                          title={item.newBranchDetails && item.newBranchDetails.length > 0 ? "คลิกเพื่อดูรายละเอียดคงเหลือระบบแต่ละสาขา" : ""}
-                        >
-                          {item.calculatedTotalRemaining !== '' ? item.calculatedTotalRemaining : '-'}
-                        </div>
+                        {(() => {
+                          const bd = item.branchDetails || [];
+                          const hasData = bd.length > 0;
+                          const latestTotal = bd.reduce((s, b) => s + (parseFloat(b.remaining) || 0), 0);
+                          return (
+                            <div
+                              className={`font-semibold text-sm ${hasData ? 'text-indigo-700 cursor-pointer hover:underline' : 'text-gray-400'}`}
+                              onClick={() => hasData && setSelectedBranchDetails({ name: item.name, details: bd })}
+                              title={hasData ? 'คลิกดูยอดนับล่าสุดแต่ละสาขา + วันที่นับ' : ''}
+                            >
+                              {hasData ? Number(latestTotal.toFixed(2)) : '-'}
+                            </div>
+                          );
+                        })()}
                       </td>
                     </tr>
                   );
@@ -370,18 +373,22 @@ export default function StockTotalList() {
                     <div key={idx} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
                       <div>
                         <div className="font-medium text-gray-800 text-sm uppercase">{entry.branch}</div>
-                        {entry.date && <div className="text-[10px] text-gray-400 mt-0.5">นับล่าสุด: {entry.date.split(' ')[0]} <span className="ml-1 text-indigo-400">({entry.type})</span></div>}
+                        {entry.date && <div className="text-[11px] text-gray-500 mt-0.5">📅 ลงยอด ณ วันที่: <span className="font-semibold text-indigo-500">{String(entry.date).split(' ')[0]}</span>{entry.type && <span className="ml-1 text-gray-400">({entry.type})</span>}</div>}
                       </div>
                       <div className="text-right">
-                        <div className={`font-bold ${entry.calculatedRemaining < 0 ? 'text-red-500' : 'text-indigo-600'}`}>
-                          {entry.calculatedRemaining}
+                        <div className={`font-bold text-lg ${parseFloat(entry.remaining) < 0 ? 'text-red-500' : 'text-indigo-600'}`}>
+                          {entry.remaining}
                         </div>
-                        <div className="text-[10px] text-gray-500 mt-0.5">
-                          (นับ {entry.remaining} + รับ {entry.receivedSinceCount} - ใช้ {entry.usageSinceCount})
-                        </div>
+                        <div className="text-[10px] text-gray-400 mt-0.5">ยอดคงเหลือ</div>
                       </div>
                     </div>
                   ))}
+                  <div className="flex justify-between items-center p-3 bg-indigo-50 rounded-xl border-2 border-indigo-200 font-bold">
+                    <span className="text-indigo-800 text-sm">รวมทุกสาขา</span>
+                    <span className="text-indigo-700 text-lg">
+                      {Number(selectedBranchDetails.details.reduce((s, b) => s + (parseFloat(b.remaining) || 0), 0).toFixed(2))}
+                    </span>
+                  </div>
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400 text-sm">ไม่มีข้อมูลสาขา</div>
