@@ -70,6 +70,26 @@ const COVER_ITEMS = [101001, 101002, 101003, 101004, 101107, 101108]; // ไอ�
 const PREP_KG_ITEMS = [206041, 206038, 205003, 205002, 205007, 205006, 205021, 206035, 206040, 205014, 205004, 206034];
 function isPrepKgItem(code) { return PREP_KG_ITEMS.indexOf(parseInt(code)) >= 0; }
 
+// ช่องทางการจ่ายในตารางรายวัน → predicate หาบิลที่เข้าช่องนั้น (กดดูรายการบิลได้)
+const _pt = r => String(r.paidType || r.PaidType || '').toUpperCase();
+const PAYMENT_CELLS = {
+  cash:      { label: 'Cash',      fn: r => parseFloat(r.cash || r._Cash || r._cash || 0) > 0 },
+  credit:    { label: 'Credit',    fn: r => parseFloat(r.credit || r._Credit || r._credit || 0) > 0 },
+  qrCredit:  { label: 'QRcredit',  fn: r => parseFloat(r.qrCredit || r._QRcredit || r._qrCredit || r._qrcredit || 0) > 0 },
+  qr:        { label: 'QR',        fn: r => parseFloat(r.qr || r._QR || r._qr || 0) > 0 },
+  oc:        { label: 'OC',        fn: r => parseFloat(r.oc || r._OC || r._oc || 0) > 0 },
+  grab:      { label: 'GRAB',      fn: r => _pt(r).includes('GRAB') || parseFloat(r.grab || 0) > 0 },
+  robinhood: { label: 'ROBINHOOD', fn: r => _pt(r).includes('ROBINHOOD') || parseFloat(r.robinhood || 0) > 0 },
+  shopee:    { label: 'SHOPEE',    fn: r => _pt(r).includes('SHOPEE') || parseFloat(r.shopee || 0) > 0 },
+  lineMan:   { label: 'LINE MAN',  fn: r => _pt(r).includes('LINE MAN') || _pt(r).includes('LINEMAN') || parseFloat(r.lineMan || 0) > 0 },
+  voucher:   { label: 'Voucher',   fn: r => parseFloat(r.voucher || r._Voucher || r._voucher || 0) > 0 || _pt(r).includes('VOUCHER') },
+  alipay:    { label: 'Alipay',    fn: r => parseFloat(r.alipay || r._Alipay || r._alipay || 0) > 0 || _pt(r).includes('ALIPAY') },
+  wechat:    { label: 'WeChat',    fn: r => parseFloat(r.weChat || r.wechat || r._WeChat || r._wechat || 0) > 0 || _pt(r).includes('WECHAT') },
+  copay:     { label: 'คนละครึ่ง 2', fn: r => _pt(r).includes('SPAYLATE2') || _pt(r).includes('คนละครึ่ง') || _pt(r).includes('HALF') || parseFloat(r.copay || 0) > 0 },
+  catering:  { label: 'จัดเลี้ยง', fn: r => _pt(r).includes('CATERING') || _pt(r).includes('จัดเลี้ยง') || parseFloat(r.catering || 0) > 0 },
+  totalSales:{ label: 'Total Sales', fn: () => true },
+};
+
 function isExcludedTable(tid) {
   return EXCLUDE_TABLES.indexOf(parseInt(tid)) >= 0;
 }
@@ -2722,21 +2742,14 @@ export default function App() {
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-emerald-600 font-semibold">{fmtMoney(row.netSales)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.vat)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-600 font-bold">{fmtMoney(row.grossSales)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.cash)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.credit)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.qrCredit)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.qr)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.oc)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.grab)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.robinhood)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.shopee)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.lineMan)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.voucher)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.alipay)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.wechat)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.copay)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{fmtMoney(row.catering)}</td>
-                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-700 font-bold">{fmtMoney(row.totalSales)}</td>
+                                {['cash','credit','qrCredit','qr','oc','grab','robinhood','shopee','lineMan','voucher','alipay','wechat','copay','catering'].map(k => (
+                                  <td key={k} className="px-3 py-2 whitespace-nowrap text-right font-mono">
+                                    <button onClick={() => handleDailyCellClick(row.date, row.outletID, PAYMENT_CELLS[k].label, PAYMENT_CELLS[k].fn)} className="hover:underline cursor-pointer">{fmtMoney(row[k])}</button>
+                                  </td>
+                                ))}
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-700 font-bold">
+                                  <button onClick={() => handleDailyCellClick(row.date, row.outletID, PAYMENT_CELLS.totalSales.label, PAYMENT_CELLS.totalSales.fn)} className="hover:underline cursor-pointer">{fmtMoney(row.totalSales)}</button>
+                                </td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.billCount)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.totalCovers)}</td>
                                 
