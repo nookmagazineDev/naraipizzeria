@@ -10,6 +10,7 @@
   "dependencies": {
     "autoprefixer": "^10.5.0",
     "lucide-react": "^1.17.0",
+    "mysql2": "^3.22.5",
     "next": "14.2.5",
     "postcss": "^8.5.15",
     "react": "18.3.1",
