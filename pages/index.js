@@ -116,11 +116,20 @@ const outletLabel = id => {
   return name ? `${id} · ${name}` : (id != null ? String(id) : '-');
 };
 
+// ยึด "วันที่เปิดบิล" (startTime) เป็นหลักทุกเมนู; fallback เป็นวันปิด/ชำระ (date) ถ้าไม่มี
 const dateFromRow = row => {
-  const d = row['Date'] || row['date'];
-  if (d) return String(d).slice(0, 10);
   const t = row['startTime'];
-  return t ? String(t).slice(0, 10) : '-';
+  if (t) return String(t).slice(0, 10);
+  const d = row['Date'] || row['date'];
+  return d ? String(d).slice(0, 10) : '-';
+};
+
+// ดึงข้อมูลเผื่อท้ายช่วงไว้กี่วัน (รองรับบิลที่ "เปิด" ในช่วง แต่ "ปิด/ชำระ" ข้ามวัน)
+const OPEN_DATE_BUFFER_DAYS = 2;
+const addDaysStr = (str, days) => {
+  const d = new Date(str);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 };
 
 const normalizeArray = json =>
@@ -315,6 +324,7 @@ const SALES_COLUMNS = [
   { key: 'coverAd', label: 'Cover Ad', type: 'num' },
   { key: 'coverAll', label: 'Cover All', type: 'num' },
   { key: 'startTime', label: 'เวลาเริ่ม', type: 'datetime' },
+  { key: 'date', label: 'เวลาปิดบิล', type: 'datetime' },
   { key: 'checkDesc', label: 'รายละเอียด', type: 'text' },
   { key: 'orderID', label: 'Order ID', type: 'text' },
 ];
@@ -400,7 +410,7 @@ function getColFilterValue(row, key) {
     return t ? String(t).slice(0, 10) : '';
   }
   if (key === 'Date') return dateFromRow(row);
-  if (key === 'startTime' || key === 'prtOrdTime' || key === 'voidTime') {
+  if (key === 'startTime' || key === 'date' || key === 'prtOrdTime' || key === 'voidTime') {
     const v = row[key];
     return v ? String(v).slice(0, 19) : '';
   }
@@ -563,7 +573,9 @@ export default function App() {
     setItemColF({});
 
     try {
-      const chunks = getChunks(startDate, endDate, 5); // 5-day chunks
+      // ดึงเผื่อท้ายช่วง +buffer วัน เพื่อให้ได้บิลที่เปิดในช่วงแต่ปิด/ชำระข้ามวันมาด้วย
+      const fetchEndDate = addDaysStr(endDate, OPEN_DATE_BUFFER_DAYS);
+      const chunks = getChunks(startDate, fetchEndDate, 5); // 5-day chunks
       let allSales = [];
       let allDetails = [];
       
@@ -598,6 +610,15 @@ export default function App() {
         allSales = allSales.concat(normalizeArray(salesJson));
         allDetails = allDetails.concat(normalizeArray(detailJson));
       }
+
+      // คัดเฉพาะแถวที่ "วันเปิดบิล" (startTime) อยู่ในช่วงที่เลือกจริง ๆ
+      // (ตัดบิลส่วนเกินที่ดึงเผื่อมาจาก buffer ท้ายช่วงออก)
+      const inOpenRange = r => {
+        const d = dateFromRow(r);
+        return d >= startDate && d <= endDate;
+      };
+      allSales = allSales.filter(inOpenRange);
+      allDetails = allDetails.filter(inOpenRange);
 
       setLoadProgress({
         current: chunks.length,
@@ -2436,6 +2457,7 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono">{fmtNum(row.coverAd)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono">{fmtNum(row.coverAll)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{row.startTime || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{row.date || '-'}</td>
                                   <td className="px-4 py-2.5 max-w-[200px] truncate text-slate-500" title={row.checkDesc}>{row.checkDesc || '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-400">{row.orderID || '-'}</td>
                                 </tr>
