@@ -588,6 +588,11 @@ export default function App() {
         return r.json();
       });
 
+      // ออเดอร์เพิ่มเติมจาก Google Sheet (สาขา XUM โต๊ะ 800) — ดึงขนานกันไป
+      const extraPromise = fetch(`/api/extra-orders`)
+        .then(r => r.ok ? r.json() : { sales: [], details: [] })
+        .catch(() => ({ sales: [], details: [] }));
+
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
         setLoadProgress({
@@ -610,6 +615,11 @@ export default function App() {
         allSales = allSales.concat(normalizeArray(salesJson));
         allDetails = allDetails.concat(normalizeArray(detailJson));
       }
+
+      // รวมออเดอร์เพิ่มเติมจาก Google Sheet (XUM โต๊ะ 800) ก่อนกรองช่วงวัน
+      const extra = await extraPromise;
+      allSales = allSales.concat(extra.sales || []);
+      allDetails = allDetails.concat(extra.details || []);
 
       // คัดเฉพาะแถวที่ "วันเปิดบิล" (startTime) อยู่ในช่วงที่เลือกจริง ๆ
       // (ตัดบิลส่วนเกินที่ดึงเผื่อมาจาก buffer ท้ายช่วงออก)
