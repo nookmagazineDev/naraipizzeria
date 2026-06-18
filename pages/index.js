@@ -976,8 +976,7 @@ export default function App() {
       const totalSales = cash + credit + qrCredit + qr + oc + grab + robinhood + shopee + lineMan + voucher + alipay + wechat + copay + catering + gojek;
 
       const billCount = bills.length;
-      const totalCovers = bills.reduce((sum, r) => sum + parseInt(r.cover || r.coverAll || r.coverAd || 0), 0);
-      
+
       const costData = dailyCostSplitMap[key] || { dineInCost: 0, takeHomeCost: 0, deliveryCost: 0, prepCost: 0 };
       const dineInCost = costData.dineInCost;
       const takeHomeCost = costData.takeHomeCost;
@@ -996,6 +995,9 @@ export default function App() {
         kid109Amt: 0,
         kidFreeQty: 0
       };
+
+      // จำนวนหัว = จำนวนหัวที่ "จ่ายเงิน" = ผลรวมจานบุฟเฟต์ที่ขายจริง (ไม่รวมเด็กฟรี 101005)
+      const totalCovers = buffetData.buffet259Qty + buffetData.buffet359Qty + buffetData.kid159Qty + buffetData.kid109Qty;
 
       const costPct = netSales > 0 ? (totalCost / netSales) * 100 : 0;
 
