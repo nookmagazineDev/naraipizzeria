@@ -37,3 +37,9 @@ find_old_urls.py
 
 # IDE
 .claude
+
+# ไฟล์ CSV ชั่วคราว/debug
+gs.csv
+pay.csv
+*_tmp.json
+*_tmp.csv
