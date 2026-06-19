@@ -185,8 +185,14 @@ export default async function handler(req, res) {
 
       // ── รายการสินค้า (details) 1 แถวต่อ 1 บรรทัดในชีต ──
       lines.forEach((r, li) => {
-        const name = (r[col.itemDetail] || '').trim();
+        const rawName = (r[col.itemDetail] || '').trim();
         const price = parseFloat(r[col.price] || 0) || 0;
+        // ถ้าชื่อลงท้ายด้วย (xN) เช่น "ข้าวมันไก่ไหหลำ (x5)" -> ดึง N มาเป็นจำนวน,
+        // ตัด (xN) ออกจากชื่อ และคิดราคา/หน่วย = ราคารวม ÷ N (มูลค่ารวมคงเดิม)
+        const qm = rawName.match(/\(\s*[xX]\s*(\d+)\s*\)\s*$/);
+        const quantity = qm ? parseInt(qm[1], 10) : 1;
+        const name = qm ? rawName.replace(/\(\s*[xX]\s*\d+\s*\)\s*$/, '').trim() : rawName;
+        const unitPrice = quantity > 0 ? price / quantity : price;
         details.push({
           outletID: OUTLET_ID,
           chkCheckID: checkID,
@@ -198,8 +204,8 @@ export default async function handler(req, res) {
           menuCode: '',
           nameThai: name,
           nameEng: '',
-          quantity: 1,
-          unitPrice: price,
+          quantity,
+          unitPrice,
           grossPrice: price,
           tax: 0,
           svc: 0,
