@@ -25,7 +25,8 @@ import {
   XCircle,
   HelpCircle,
   Filter,
-  PackageSearch
+  PackageSearch,
+  AlertTriangle
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
@@ -89,6 +90,40 @@ const PAYMENT_CELLS = {
   catering:  { label: 'จัดเลี้ยง', fn: r => _pt(r).includes('CATERING') || _pt(r).includes('จัดเลี้ยง') || parseFloat(r.catering || 0) > 0 },
   totalSales:{ label: 'Total Sales', fn: () => true },
 };
+
+// ผลรวมยอดช่องทางจ่ายแบบดิบของบิล (ใช้ตรวจบิลยอด 0 ที่มีรับเงินค้าง)
+function billRawPayment(r) {
+  const f = k => parseFloat(r[k] || 0);
+  return f('cash') + f('credit') + f('qrCredit') + f('qr') + f('oc') + f('grab')
+    + f('robinhood') + f('shopee') + f('lineMan') + f('voucher') + f('alipay')
+    + f('weChat') + f('wechat') + f('copay') + f('catering') + f('gojek');
+}
+
+// ยอดที่บิลนี้ "ถูกนับ" เข้า Total Sales (ตรงกับตรรกะการรวมช่องทางจ่ายในตารางรายวัน)
+// คืน 0 ถ้า billTotal = 0 (บิล void/ยอด 0 ไม่ถูกนับ) — ใช้เทียบกับ billTotal เพื่อหาสาเหตุที่ Total != Gross
+function billCountedToTotal(r) {
+  const bt = parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+  if (!(bt > 0)) return 0;
+  const pt = _pt(r);
+  const ptTH = String(r.paidType || r.PaidType || '');
+  const f = k => parseFloat(r[k] || 0);
+  let s = (f('cash') + f('_Cash') + f('_cash'))
+    + (f('credit') + f('_Credit') + f('_credit'))
+    + (f('qrCredit') + f('_QRcredit') + f('_qrCredit') + f('_qrcredit'))
+    + (f('qr') + f('_QR') + f('_qr'))
+    + (f('oc') + f('_OC') + f('_oc'));
+  s += pt.includes('GRAB') ? bt : f('grab');
+  s += pt.includes('ROBINHOOD') ? bt : f('robinhood');
+  s += pt.includes('SHOPEE') ? bt : f('shopee');
+  s += (pt.includes('LINE MAN') || pt.includes('LINEMAN')) ? bt : f('lineMan');
+  s += Math.max(f('voucher') + f('_Voucher') + f('_voucher'), pt.includes('VOUCHER') ? bt : 0);
+  s += Math.max(f('alipay') + f('_Alipay') + f('_alipay'), pt.includes('ALIPAY') ? bt : 0);
+  s += Math.max(f('weChat') + f('wechat') + f('_WeChat') + f('_wechat'), pt.includes('WECHAT') ? bt : 0);
+  s += (pt.includes('SPAYLATE2') || ptTH.includes('คนละครึ่ง') || pt.includes('HALF')) ? bt : f('copay');
+  s += (pt.includes('CATERING') || ptTH.includes('จัดเลี้ยง')) ? bt : f('catering');
+  s += pt.includes('GOJEK') ? bt : f('gojek');
+  return s;
+}
 
 function isExcludedTable(tid) {
   return EXCLUDE_TABLES.indexOf(parseInt(tid)) >= 0;
@@ -504,6 +539,7 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState(null); // { itemCode, nameThai, nameEng }
   const [itemColF, setItemColF] = useState({});
   const [showDailyBillsModal, setShowDailyBillsModal] = useState({ open: false, title: '', bills: [] });
+  const [showTotalDiffModal, setShowTotalDiffModal] = useState({ open: false, date: '', outletID: null, gross: 0, total: 0, diff: 0, issues: [] });
 
   useEffect(() => {
     setIsMounted(true);
@@ -913,70 +949,74 @@ export default function App() {
       const grossSales = netSales + vat;
 
       // 4. Payments
-      const cash = bills.reduce((sum, r) => sum + parseFloat(r.cash || r._Cash || r._cash || 0), 0);
-      const credit = bills.reduce((sum, r) => sum + parseFloat(r.credit || r._Credit || r._credit || 0), 0);
-      const qrCredit = bills.reduce((sum, r) => sum + parseFloat(r.qrCredit || r._QRcredit || r._qrCredit || r._qrcredit || 0), 0);
-      const qr = bills.reduce((sum, r) => sum + parseFloat(r.qr || r._QR || r._qr || 0), 0);
-      const oc = bills.reduce((sum, r) => sum + parseFloat(r.oc || r._OC || r._oc || 0), 0);
-      
-      const grab = bills.reduce((sum, r) => {
+      // นับช่องทางจ่ายเฉพาะบิลที่มียอดจริง (billTotal > 0) เพื่อกันบิล void/ยอด 0
+      // ที่มีรับเงินค้างอยู่ (เช่น qr มีค่าแต่ billTotal=0) ไม่ให้ทำให้ Total Sales เกิน Gross
+      const paidBills = bills.filter(r => parseFloat(r.billTotal || r.BillTotal || r.amount || 0) > 0);
+
+      const cash = paidBills.reduce((sum, r) => sum + parseFloat(r.cash || r._Cash || r._cash || 0), 0);
+      const credit = paidBills.reduce((sum, r) => sum + parseFloat(r.credit || r._Credit || r._credit || 0), 0);
+      const qrCredit = paidBills.reduce((sum, r) => sum + parseFloat(r.qrCredit || r._QRcredit || r._qrCredit || r._qrcredit || 0), 0);
+      const qr = paidBills.reduce((sum, r) => sum + parseFloat(r.qr || r._QR || r._qr || 0), 0);
+      const oc = paidBills.reduce((sum, r) => sum + parseFloat(r.oc || r._OC || r._oc || 0), 0);
+
+      const grab = paidBills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         if (pt.includes('GRAB')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
         return sum + parseFloat(r.grab || 0);
       }, 0);
-      
-      const robinhood = bills.reduce((sum, r) => {
+
+      const robinhood = paidBills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         if (pt.includes('ROBINHOOD')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
         return sum + parseFloat(r.robinhood || 0);
       }, 0);
-      
-      const shopee = bills.reduce((sum, r) => {
+
+      const shopee = paidBills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         if (pt.includes('SHOPEE')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
         return sum + parseFloat(r.shopee || 0);
       }, 0);
-      
-      const lineMan = bills.reduce((sum, r) => {
+
+      const lineMan = paidBills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         if (pt.includes('LINE MAN') || pt.includes('LINEMAN')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
         return sum + parseFloat(r.lineMan || 0);
       }, 0);
 
-      const voucher = bills.reduce((sum, r) => {
+      const voucher = paidBills.reduce((sum, r) => {
         const fromCol = parseFloat(r.voucher || r._Voucher || r._voucher || 0);
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         const fromPt = pt.includes('VOUCHER') ? parseFloat(r.billTotal || r.BillTotal || r.amount || 0) : 0;
         return sum + Math.max(fromCol, fromPt);
       }, 0);
 
-      const alipay = bills.reduce((sum, r) => {
+      const alipay = paidBills.reduce((sum, r) => {
         const fromCol = parseFloat(r.alipay || r._Alipay || r._alipay || 0);
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         const fromPt = pt.includes('ALIPAY') ? parseFloat(r.billTotal || r.BillTotal || r.amount || 0) : 0;
         return sum + Math.max(fromCol, fromPt);
       }, 0);
 
-      const wechat = bills.reduce((sum, r) => {
+      const wechat = paidBills.reduce((sum, r) => {
         const fromCol = parseFloat(r.weChat || r.wechat || r._WeChat || r._wechat || 0);
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         const fromPt = pt.includes('WECHAT') ? parseFloat(r.billTotal || r.BillTotal || r.amount || 0) : 0;
         return sum + Math.max(fromCol, fromPt);
       }, 0);
 
-      const copay = bills.reduce((sum, r) => {
+      const copay = paidBills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         if (pt.includes('SPAYLATE2') || pt.includes('คนละครึ่ง') || pt.includes('HALF')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
         return sum + parseFloat(r.copay || 0);
       }, 0);
 
-      const catering = bills.reduce((sum, r) => {
+      const catering = paidBills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         if (pt.includes('CATERING') || pt.includes('จัดเลี้ยง')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
         return sum + parseFloat(r.catering || 0);
       }, 0);
 
-      const gojek = bills.reduce((sum, r) => {
+      const gojek = paidBills.reduce((sum, r) => {
         const pt = String(r.paidType || r.PaidType || '').toUpperCase();
         if (pt.includes('GOJEK')) return sum + parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
         return sum + parseFloat(r.gojek || 0);
@@ -1579,6 +1619,38 @@ export default function App() {
       open: true,
       title: `${typeLabel} - สาขา ${OUTLETS[outletID] || 'Unknown'} วันที่ ${date}`,
       bills: matchingBills
+    });
+  };
+
+  // หาสาเหตุที่ Total Sales (รวมช่องทางจ่าย) ไม่เท่ากับ Gross Sales ของวัน/สาขานั้น
+  const openTotalSalesDiff = (date, outletID, grossSales, totalSales) => {
+    const rows = salesWithCost.filter(r =>
+      dateFromRow(r) === date && String(r.outletID) === String(outletID));
+    const issues = [];
+    rows.forEach(r => {
+      const bt = parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+      const ptLabel = r.paidType || r.PaidType || '-';
+      if (bt > 0) {
+        const counted = billCountedToTotal(r);
+        if (Math.abs(counted - bt) > 0.01) {
+          const reason = counted === 0
+            ? `บิลจ่ายแบบ "${ptLabel}" แต่ไม่มียอดบันทึกในช่องทางจ่าย จึงไม่ถูกนับเข้า Total Sales`
+            : counted > bt
+              ? `รับเงินเกินยอดบิล (รับ ${fmtMoney(counted)} / บิล ${fmtMoney(bt)})`
+              : `รับเงินไม่ครบยอดบิล (รับ ${fmtMoney(counted)} / บิล ${fmtMoney(bt)})`;
+          issues.push({ r, bt, counted, diff: bt - counted, reason });
+        }
+      } else {
+        const paid = billRawPayment(r);
+        if (paid > 0.01) {
+          issues.push({ r, bt, counted: 0, diff: 0, reason: `บิลยอด 0 แต่มีรับเงิน ${fmtMoney(paid)} → ไม่นำมาคิด (ปกติเป็นบิล void)` });
+        }
+      }
+    });
+    setShowTotalDiffModal({
+      open: true, date, outletID,
+      gross: grossSales, total: totalSales, diff: grossSales - totalSales,
+      issues,
     });
   };
 
@@ -2796,7 +2868,18 @@ export default function App() {
                                   </td>
                                 ))}
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-amber-700 font-bold">
-                                  <button onClick={() => handleDailyCellClick(row.date, row.outletID, PAYMENT_CELLS.totalSales.label, PAYMENT_CELLS.totalSales.fn)} className="hover:underline cursor-pointer">{fmtMoney(row.totalSales)}</button>
+                                  {Math.abs((row.grossSales || 0) - (row.totalSales || 0)) > 0.01 ? (
+                                    <button
+                                      onClick={() => openTotalSalesDiff(row.date, row.outletID, row.grossSales, row.totalSales)}
+                                      title="Total Sales ไม่เท่ากับ Gross Sales — กดเพื่อดูสาเหตุ"
+                                      className="inline-flex items-center gap-1 text-rose-600 hover:underline cursor-pointer"
+                                    >
+                                      <AlertTriangle size={12} className="text-rose-500" />
+                                      {fmtMoney(row.totalSales)}
+                                    </button>
+                                  ) : (
+                                    <button onClick={() => handleDailyCellClick(row.date, row.outletID, PAYMENT_CELLS.totalSales.label, PAYMENT_CELLS.totalSales.fn)} className="hover:underline cursor-pointer">{fmtMoney(row.totalSales)}</button>
+                                  )}
                                 </td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.billCount)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.totalCovers)}</td>
@@ -3665,6 +3748,89 @@ export default function App() {
               <span className="text-xs text-slate-400 font-medium">ทั้งหมด {showDailyBillsModal.bills.length} บิล</span>
               <button 
                 onClick={() => setShowDailyBillsModal(prev => ({ ...prev, open: false }))}
+                className="bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-5 py-2 rounded-xl transition-all"
+              >
+                ปิดหน้าต่าง
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: สาเหตุที่ Total Sales != Gross Sales */}
+      {showTotalDiffModal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setShowTotalDiffModal(prev => ({ ...prev, open: false }))}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-rose-600 to-rose-500 text-white flex items-start justify-between flex-shrink-0">
+              <div>
+                <div className="flex items-center gap-2">
+                  <AlertTriangle size={18} />
+                  <h3 className="text-base font-bold">สาเหตุที่ Total Sales ไม่เท่ากับ Gross Sales</h3>
+                </div>
+                <p className="text-xs text-rose-100 mt-1">สาขา {outletLabel(showTotalDiffModal.outletID)} • วันที่ {showTotalDiffModal.date}</p>
+              </div>
+              <button className="text-rose-100 hover:text-white p-1 rounded-lg hover:bg-rose-700/40 transition-all" onClick={() => setShowTotalDiffModal(prev => ({ ...prev, open: false }))}>
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Summary */}
+            <div className="px-6 py-4 grid grid-cols-3 gap-3 border-b border-slate-100 flex-shrink-0">
+              <div className="bg-amber-50 rounded-xl px-4 py-3">
+                <p className="text-[10px] text-amber-700 font-semibold">Gross Sales</p>
+                <p className="text-sm font-bold font-mono text-amber-800">{fmtMoney(showTotalDiffModal.gross)}</p>
+              </div>
+              <div className="bg-slate-50 rounded-xl px-4 py-3">
+                <p className="text-[10px] text-slate-500 font-semibold">Total Sales</p>
+                <p className="text-sm font-bold font-mono text-slate-700">{fmtMoney(showTotalDiffModal.total)}</p>
+              </div>
+              <div className="bg-rose-50 rounded-xl px-4 py-3">
+                <p className="text-[10px] text-rose-600 font-semibold">ส่วนต่าง (Gross − Total)</p>
+                <p className="text-sm font-bold font-mono text-rose-700">{fmtMoney(showTotalDiffModal.diff)}</p>
+              </div>
+            </div>
+
+            {/* Issues */}
+            <div className="overflow-auto px-2 py-2">
+              {showTotalDiffModal.issues.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                  <HelpCircle size={40} className="mb-3 stroke-[1.5]" />
+                  <p className="text-sm">ไม่พบบิลที่ผิดปกติแบบรายใบ — ส่วนต่างอาจมาจากการปัดเศษ/ภาษี</p>
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-slate-400 border-b border-slate-100">
+                      <th className="px-3 py-2 text-left font-semibold">เลขที่บิล</th>
+                      <th className="px-3 py-2 text-center font-semibold">โต๊ะ</th>
+                      <th className="px-3 py-2 text-left font-semibold">ช่องทาง</th>
+                      <th className="px-3 py-2 text-right font-semibold">ยอดบิล</th>
+                      <th className="px-3 py-2 text-right font-semibold">ยอดที่นับ</th>
+                      <th className="px-3 py-2 text-left font-semibold">สาเหตุ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {showTotalDiffModal.issues.map((it, i) => (
+                      <tr key={i} className="hover:bg-rose-50/40">
+                        <td className="px-3 py-2 font-mono text-slate-700">{it.r.checkID}</td>
+                        <td className="px-3 py-2 text-center font-mono text-slate-500">{it.r.tableID ?? '-'}</td>
+                        <td className="px-3 py-2 text-slate-600">{it.r.paidType || '-'}</td>
+                        <td className="px-3 py-2 text-right font-mono text-amber-700">{fmtMoney(it.bt)}</td>
+                        <td className="px-3 py-2 text-right font-mono text-slate-600">{fmtMoney(it.counted)}</td>
+                        <td className="px-3 py-2 text-rose-600">{it.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between flex-shrink-0 mt-auto">
+              <span className="text-xs text-slate-400 font-medium">พบ {showTotalDiffModal.issues.length} บิลที่เกี่ยวข้อง</span>
+              <button
+                onClick={() => setShowTotalDiffModal(prev => ({ ...prev, open: false }))}
                 className="bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-5 py-2 rounded-xl transition-all"
               >
                 ปิดหน้าต่าง
