@@ -74,10 +74,10 @@ function isPrepKgItem(code) { return PREP_KG_ITEMS.indexOf(parseInt(code)) >= 0;
 // ช่องทางการจ่ายในตารางรายวัน → predicate หาบิลที่เข้าช่องนั้น (กดดูรายการบิลได้)
 const _pt = r => String(r.paidType || r.PaidType || '').toUpperCase();
 const PAYMENT_CELLS = {
-  cash:      { label: 'Cash',      fn: r => parseFloat(r.cash || r._Cash || r._cash || 0) > 0 },
-  credit:    { label: 'Credit',    fn: r => parseFloat(r.credit || r._Credit || r._credit || 0) > 0 },
-  qrCredit:  { label: 'QRcredit',  fn: r => parseFloat(r.qrCredit || r._QRcredit || r._qrCredit || r._qrcredit || 0) > 0 },
-  qr:        { label: 'QR',        fn: r => parseFloat(r.qr || r._QR || r._qr || 0) > 0 },
+  cash:      { label: 'Cash',      fn: r => billChannelAmount(r, 'cash') > 0 },
+  credit:    { label: 'Credit',    fn: r => billChannelAmount(r, 'credit') > 0 },
+  qrCredit:  { label: 'QRcredit',  fn: r => billChannelAmount(r, 'qrCredit') > 0 },
+  qr:        { label: 'QR',        fn: r => billChannelAmount(r, 'qr') > 0 },
   oc:        { label: 'OC',        fn: r => parseFloat(r.oc || r._OC || r._oc || 0) > 0 },
   grab:      { label: 'GRAB',      fn: r => _pt(r).includes('GRAB') || parseFloat(r.grab || 0) > 0 },
   robinhood: { label: 'ROBINHOOD', fn: r => _pt(r).includes('ROBINHOOD') || parseFloat(r.robinhood || 0) > 0 },
@@ -99,6 +99,34 @@ function billRawPayment(r) {
     + f('weChat') + f('wechat') + f('copay') + f('catering') + f('gojek');
 }
 
+// ยอดของช่องทางจ่ายหลัก (cash/credit/qrCredit/qr) ของบิล
+// ปกติอ่านจากช่องตัวเลข แต่ถ้าช่องตัวเลข = 0 และ paidType บอกช่องนั้น
+// และบิลไม่มียอดในช่องทางตัวเลขใดเลย -> ใช้ billTotal แทน
+// (รองรับบิลที่ POS บันทึก paidType ไว้ แต่ไม่ลงยอดในช่อง เช่น paidType=QR แต่ qr=0)
+function billChannelAmount(r, ch) {
+  const f = k => parseFloat(r[k] || 0);
+  const pt = _pt(r);
+  const ptTH = String(r.paidType || r.PaidType || '');
+  const bt = parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+  let v = 0, match = false;
+  if (ch === 'cash') {
+    v = f('cash') + f('_Cash') + f('_cash');
+    match = pt.includes('CASH') || ptTH.includes('เงินสด');
+  } else if (ch === 'credit') {
+    v = f('credit') + f('_Credit') + f('_credit');
+    match = (pt.includes('CREDIT') && !pt.includes('QRCREDIT')) || ptTH.includes('บัตร');
+  } else if (ch === 'qrCredit') {
+    v = f('qrCredit') + f('_QRcredit') + f('_qrCredit') + f('_qrcredit');
+    match = pt.includes('QRCREDIT');
+  } else if (ch === 'qr') {
+    v = f('qr') + f('_QR') + f('_qr');
+    match = (pt.includes('QR') && !pt.includes('QRCREDIT')) || ptTH.includes('โอน') || ptTH.includes('พร้อม');
+  }
+  if (v) return v;
+  if (match && bt > 0 && billRawPayment(r) === 0) return bt;   // fallback ตาม paidType
+  return 0;
+}
+
 // ยอดที่บิลนี้ "ถูกนับ" เข้า Total Sales (ตรงกับตรรกะการรวมช่องทางจ่ายในตารางรายวัน)
 // คืน 0 ถ้า billTotal = 0 (บิล void/ยอด 0 ไม่ถูกนับ) — ใช้เทียบกับ billTotal เพื่อหาสาเหตุที่ Total != Gross
 function billCountedToTotal(r) {
@@ -107,10 +135,10 @@ function billCountedToTotal(r) {
   const pt = _pt(r);
   const ptTH = String(r.paidType || r.PaidType || '');
   const f = k => parseFloat(r[k] || 0);
-  let s = (f('cash') + f('_Cash') + f('_cash'))
-    + (f('credit') + f('_Credit') + f('_credit'))
-    + (f('qrCredit') + f('_QRcredit') + f('_qrCredit') + f('_qrcredit'))
-    + (f('qr') + f('_QR') + f('_qr'))
+  let s = billChannelAmount(r, 'cash')
+    + billChannelAmount(r, 'credit')
+    + billChannelAmount(r, 'qrCredit')
+    + billChannelAmount(r, 'qr')
     + (f('oc') + f('_OC') + f('_oc'));
   s += pt.includes('GRAB') ? bt : f('grab');
   s += pt.includes('ROBINHOOD') ? bt : f('robinhood');
@@ -953,10 +981,10 @@ export default function App() {
       // ที่มีรับเงินค้างอยู่ (เช่น qr มีค่าแต่ billTotal=0) ไม่ให้ทำให้ Total Sales เกิน Gross
       const paidBills = bills.filter(r => parseFloat(r.billTotal || r.BillTotal || r.amount || 0) > 0);
 
-      const cash = paidBills.reduce((sum, r) => sum + parseFloat(r.cash || r._Cash || r._cash || 0), 0);
-      const credit = paidBills.reduce((sum, r) => sum + parseFloat(r.credit || r._Credit || r._credit || 0), 0);
-      const qrCredit = paidBills.reduce((sum, r) => sum + parseFloat(r.qrCredit || r._QRcredit || r._qrCredit || r._qrcredit || 0), 0);
-      const qr = paidBills.reduce((sum, r) => sum + parseFloat(r.qr || r._QR || r._qr || 0), 0);
+      const cash = paidBills.reduce((sum, r) => sum + billChannelAmount(r, 'cash'), 0);
+      const credit = paidBills.reduce((sum, r) => sum + billChannelAmount(r, 'credit'), 0);
+      const qrCredit = paidBills.reduce((sum, r) => sum + billChannelAmount(r, 'qrCredit'), 0);
+      const qr = paidBills.reduce((sum, r) => sum + billChannelAmount(r, 'qr'), 0);
       const oc = paidBills.reduce((sum, r) => sum + parseFloat(r.oc || r._OC || r._oc || 0), 0);
 
       const grab = paidBills.reduce((sum, r) => {
