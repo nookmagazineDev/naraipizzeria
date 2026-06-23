@@ -1147,6 +1147,14 @@ export default function App() {
     return d;
   }, [dailyReportData, dailySearch, dailyColF, selectedOutlet, dailySort]);
 
+  // วัน/สาขา ที่ Total Sales ไม่ตรงกับ Gross Sales (ใช้แจ้งเตือนหลังดึงข้อมูล)
+  const dailyDiffRows = useMemo(() =>
+    dailyReportData
+      .filter(r => Math.abs((r.grossSales || 0) - (r.totalSales || 0)) > 0.01)
+      .map(r => ({ date: r.date, outletID: r.outletID, gross: r.grossSales, total: r.totalSales, diff: r.grossSales - r.totalSales }))
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.outletID - b.outletID),
+    [dailyReportData]);
+
   // Tab 1 (Dashboard) Calculations
   const stats = useMemo(() => {
     const sales = selectedOutlet 
@@ -2771,6 +2779,36 @@ export default function App() {
                     </div>
                   )}
                 </div>
+
+                {loaded && dailyDiffRows.length > 0 && (
+                  <div className="mx-6 mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle size={16} className="text-rose-500 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-rose-700">
+                          ⚠ พบ {dailyDiffRows.length} วัน/สาขา ที่ Total Sales ไม่ตรงกับ Gross Sales
+                        </p>
+                        <p className="text-[11px] text-rose-500 mb-2">กดที่รายการเพื่อดูสาเหตุ (บิลที่ทำให้ยอดไม่ตรง)</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {dailyDiffRows.map((d, i) => (
+                            <button
+                              key={i}
+                              onClick={() => openTotalSalesDiff(d.date, d.outletID, d.gross, d.total)}
+                              title="กดดูสาเหตุ"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white border border-rose-200 text-rose-700 text-[11px] font-medium hover:bg-rose-100 transition-colors"
+                            >
+                              <span className="font-mono">{d.date}</span>
+                              <span className="text-rose-300">•</span>
+                              <span className="font-semibold">{OUTLETS[d.outletID] || d.outletID}</span>
+                              <span className="text-rose-300">•</span>
+                              <span className="font-mono">ต่าง {fmtMoney(d.diff)}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {!loaded ? (
                   <div className="flex flex-col items-center justify-center py-20 text-slate-400">
