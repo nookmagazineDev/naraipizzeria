@@ -452,6 +452,7 @@ const DAILY_COLUMNS = [
   { key: 'kid109Qty', label: 'จำนวน Kid Buffet 109', type: 'number' },
   { key: 'kid109Amt', label: 'ยอดขาย Kid Buffet 109', type: 'money' },
   { key: 'kidFreeQty', label: 'จำนวนเด็กฟรี (101005)', type: 'number' },
+  { key: 'elderFreeQty', label: 'จำนวนผู้สูงอายุฟรี', type: 'number' },
   { key: 'totalCost', label: 'ต้นทุนรวม', type: 'money' },
   { key: 'prepCost', label: 'ต้นทุนโต๊ะเตรียม(กก)', type: 'money' },
   { key: 'costPct', label: '% ต้นทุน/ยอดขาย', type: 'percent' }
@@ -895,7 +896,8 @@ export default function App() {
           kid159Amt: 0,
           kid109Qty: 0,
           kid109Amt: 0,
-          kidFreeQty: 0
+          kidFreeQty: 0,
+          elderFreeQty: 0
         };
       }
 
@@ -917,6 +919,8 @@ export default function App() {
         map[key].kid109Amt += grossPrice;
       } else if (code === '101005') {
         map[key].kidFreeQty += qty;
+      } else if (code === '401087' || code === '401105' || code === '401112') {
+        map[key].elderFreeQty += qty;
       }
     });
     return map;
@@ -1071,7 +1075,8 @@ export default function App() {
         kid159Amt: 0,
         kid109Qty: 0,
         kid109Amt: 0,
-        kidFreeQty: 0
+        kidFreeQty: 0,
+        elderFreeQty: 0
       };
 
       // จำนวนหัว = จำนวนหัวที่ "จ่ายเงิน" = ผลรวมจานบุฟเฟต์ที่ขายจริง (ไม่รวมเด็กฟรี 101005)
@@ -1125,6 +1130,7 @@ export default function App() {
         kid109Qty: buffetData.kid109Qty,
         kid109Amt: buffetData.kid109Amt,
         kidFreeQty: buffetData.kidFreeQty,
+        elderFreeQty: buffetData.elderFreeQty,
         costPct
       };
     }).sort((a, b) => b.date.localeCompare(a.date) || a.outletID - b.outletID);
@@ -2991,6 +2997,7 @@ export default function App() {
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kid109Qty)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-emerald-600">{fmtMoney(row.kid109Amt)}</td>
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.kidFreeQty)}</td>
+                                <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-slate-700">{fmtNum(row.elderFreeQty)}</td>
 
                                 <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-semibold text-rose-600">
                                   <button onClick={() => setDailyCostModal({ open: true, type: 'cost', date: row.date, outletID: row.outletID })} className="hover:underline cursor-pointer">{fmtMoney(row.totalCost)}</button>
@@ -3049,6 +3056,7 @@ export default function App() {
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kid109Qty, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.kid109Amt, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.kidFreeQty, 0))}</td>
+                            <td className="px-3 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(filteredDailyReport.reduce((s, r) => s + r.elderFreeQty, 0))}</td>
 
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-rose-800">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.totalCost, 0))}</td>
                             <td className="px-3 py-2.5 text-right font-mono font-bold text-orange-600">{fmtMoney(filteredDailyReport.reduce((s, r) => s + r.prepCost, 0))}</td>
