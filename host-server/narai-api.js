@@ -77,13 +77,20 @@ const mapRow = row => {
 
 // ── /ctranbetweendate : รายการสินค้า (กรองด้วย PostTime) ──
 app.get('/ctranbetweendate', async (req, res) => {
-  const { start, end } = req.query;
+  const { start, end, outlet } = req.query;
   if (!start || !end) return res.status(400).json({ error: 'ต้องมี start และ end' });
   try {
     const pool = await poolPromise;
-    const result = await pool.request()
+    const dbReq = pool.request()
       .input('start', sql.VarChar, start + ' 00:00:00')
-      .input('end',   sql.VarChar, end   + ' 23:59:59')
+      .input('end',   sql.VarChar, end   + ' 23:59:59');
+    // ระบุสาขา (ไม่บังคับ) → กรองที่ SQL เพื่อลดข้อมูลที่ส่งกลับ
+    let outletFilter = '';
+    if (outlet != null && String(outlet).trim() !== '') {
+      dbReq.input('outlet', sql.Int, parseInt(outlet, 10));
+      outletFilter = ' AND [OutletID] = @outlet';
+    }
+    const result = await dbReq
       .query(`
         SELECT
           [PostTime]    AS postTime,
@@ -104,7 +111,7 @@ app.get('/ctranbetweendate', async (req, res) => {
           [Void]        AS [void],
           [VoidTime]    AS voidTime
         FROM dbo.Ctrans
-        WHERE [PostTime] >= @start AND [PostTime] <= @end
+        WHERE [PostTime] >= @start AND [PostTime] <= @end${outletFilter}
       `);
     res.json({ data: result.recordset.map(mapRow) });
   } catch (e) {
@@ -115,13 +122,20 @@ app.get('/ctranbetweendate', async (req, res) => {
 
 // ── /cpaidbetweendate : รายบิล/การชำระ (กรองด้วย PAID_DATE_COL) ──
 app.get('/cpaidbetweendate', async (req, res) => {
-  const { start, end } = req.query;
+  const { start, end, outlet } = req.query;
   if (!start || !end) return res.status(400).json({ error: 'ต้องมี start และ end' });
   try {
     const pool = await poolPromise;
-    const result = await pool.request()
+    const dbReq = pool.request()
       .input('start', sql.VarChar, start + ' 00:00:00')
-      .input('end',   sql.VarChar, end   + ' 23:59:59')
+      .input('end',   sql.VarChar, end   + ' 23:59:59');
+    // ระบุสาขา (ไม่บังคับ) → กรองที่ SQL เพื่อลดข้อมูลที่ส่งกลับ
+    let outletFilter = '';
+    if (outlet != null && String(outlet).trim() !== '') {
+      dbReq.input('outlet', sql.Int, parseInt(outlet, 10));
+      outletFilter = ' AND [OutletID] = @outlet';
+    }
+    const result = await dbReq
       .query(`
         SELECT
           [OutletID]     AS outletID,
@@ -169,7 +183,7 @@ app.get('/cpaidbetweendate', async (req, res) => {
           [_Voucher]     AS voucher,
           [_OC]          AS oc
         FROM ${PAID_TABLE}
-        WHERE [${PAID_DATE_COL}] >= @start AND [${PAID_DATE_COL}] <= @end
+        WHERE [${PAID_DATE_COL}] >= @start AND [${PAID_DATE_COL}] <= @end${outletFilter}
       `);
     res.json({ data: result.recordset.map(mapRow) });
   } catch (e) {

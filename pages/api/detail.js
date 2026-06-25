@@ -10,6 +10,7 @@ export default async function handler(req) {
   const { searchParams } = new URL(req.url);
   const start = searchParams.get('start');
   const end = searchParams.get('end');
+  const outlet = searchParams.get('outlet'); // ระบุสาขา (ไม่บังคับ) → ดึงเฉพาะสาขานั้น
 
   if (!start || !end) {
     return new Response(JSON.stringify({ error: 'start and end required' }), {
@@ -19,7 +20,8 @@ export default async function handler(req) {
   }
 
   try {
-    const url = `${STORE_API_BASE}/ctranbetweendate?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+    let url = `${STORE_API_BASE}/ctranbetweendate?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+    if (outlet) url += `&outlet=${encodeURIComponent(outlet)}`;
     const upstream = await fetch(url, {
       cache: 'no-store',
       signal: AbortSignal.timeout(25000),

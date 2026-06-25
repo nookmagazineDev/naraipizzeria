@@ -653,10 +653,16 @@ export default function App() {
         return r.json();
       });
 
-      // ออเดอร์เพิ่มเติมจาก Google Sheet (สาขา XUM โต๊ะ 800) — ดึงขนานกันไป
-      const extraPromise = fetch(`/api/extra-orders`)
-        .then(r => r.ok ? r.json() : { sales: [], details: [] })
-        .catch(() => ({ sales: [], details: [] }));
+      // ถ้าระบุสาขา → ดึงเฉพาะสาขานั้น (เร็วขึ้นมาก) ; ไม่ระบุ → ดึงทุกสาขาเหมือนเดิม
+      const outletParam = selectedOutlet ? `&outlet=${encodeURIComponent(selectedOutlet)}` : '';
+
+      // ออเดอร์เพิ่มเติมจาก Google Sheet (สาขา XUM โต๊ะ 800) — ดึงเฉพาะตอนดูทุกสาขา หรือเลือกสาขา XUM (59)
+      const wantExtra = !selectedOutlet || String(selectedOutlet) === '59';
+      const extraPromise = wantExtra
+        ? fetch(`/api/extra-orders`)
+            .then(r => r.ok ? r.json() : { sales: [], details: [] })
+            .catch(() => ({ sales: [], details: [] }))
+        : Promise.resolve({ sales: [], details: [] });
 
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -667,8 +673,8 @@ export default function App() {
         });
 
         const [salesRes, detailRes] = await Promise.all([
-          fetch(`/api/sales?start=${chunk.start}&end=${chunk.end}`),
-          fetch(`/api/detail?start=${chunk.start}&end=${chunk.end}`)
+          fetch(`/api/sales?start=${chunk.start}&end=${chunk.end}${outletParam}`),
+          fetch(`/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`)
         ]);
 
         const salesJson = await salesRes.json();
