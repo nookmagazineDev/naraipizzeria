@@ -153,6 +153,9 @@ export default async function handler(req, res) {
       const startTime = toDateTime(first[col.start]);
       const closeTime = toDateTime(first[col.complete] || first[col.start]);
       const total = parseFloat(first[col.total] || 0) || 0;
+      // total จากชีตเป็นยอดรวม VAT แล้ว → แยก VAT 7% แบบรวมใน ออกมาใส่ช่อง vat
+      // (ยอดก่อน VAT = total - vat ; ก่อน VAT + VAT = total เท่าที่ได้จาก API)
+      const vat = Math.round((total * 7 / 107) * 100) / 100;
       const recordedBy = (first[col.recordedBy] || '').trim();
       const pay = mapPayment(paymentByOrder.get((first[col.orderNo] || '').trim()), total);
 
@@ -173,7 +176,7 @@ export default async function handler(req, res) {
         startTime,              // เวลาเปิดบิล
         tableID: TABLE_ID,
         taxInvNo: '',
-        vat: 0,
+        vat,
         paidType: pay.paidType,
         paidNote: '',
         memberTel: '',
