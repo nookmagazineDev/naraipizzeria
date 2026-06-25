@@ -956,9 +956,12 @@ export default function App() {
       bills.forEach(r => {
         // ใช้ billTotal (ยอดจริงต่อบิล) เพื่อให้ตรงกับหน้ารายงานยอดขาย
         const billTotal = parseFloat(r.billTotal || r.BillTotal || r.amount || r.Amount || 0);
+        // บิลยอดติดลบ (ปรับลด/คืนเงิน) → ตัดเป็น 0 ไม่นำเข้ายอด
+        // เพราะ Total Sales ก็ไม่นับบิลยอดติดลบ การข้ามตรงนี้ทำให้ Gross = Total (ไม่เกิดส่วนต่างแจ้งเตือน)
+        if (billTotal < 0) return;
         const vat = parseFloat(r.vat || r.Vat || 0);
         const net = billTotal - vat;
-        
+
         const tid = parseInt(r.tableID || r.TableID || 0);
         if (tid === 300) {
           takeHome += net;
@@ -977,7 +980,12 @@ export default function App() {
 
       // 3. Net, Vat, Gross Sales
       const netSales = dineIn + takeHome + delivery;
-      const vat = bills.reduce((sum, r) => sum + parseFloat(r.vat || r.Vat || 0), 0);
+      // vat รวมเฉพาะบิลที่ไม่ติดลบ (ให้สอดคล้องกับการตัดบิลยอดติดลบเป็น 0 ด้านบน)
+      const vat = bills.reduce((sum, r) => {
+        const bt = parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
+        if (bt < 0) return sum;
+        return sum + parseFloat(r.vat || r.Vat || 0);
+      }, 0);
       const grossSales = netSales + vat;
 
       // 4. Payments
@@ -1084,7 +1092,11 @@ export default function App() {
       // - สาขาอื่น: จำนวนหัวที่ "จ่ายเงิน" = ผลรวมจานบุฟเฟต์ที่ขายจริง (ไม่รวมเด็กฟรี 101005)
       const COVERALL_OUTLETS = [501, 503];
       const totalCovers = COVERALL_OUTLETS.includes(outletID)
-        ? bills.reduce((s, r) => s + (parseFloat(r.coverAll ?? r.CoverAll ?? 0) || 0), 0)
+        ? bills.reduce((s, r) => {
+            // ข้ามบิลยอดติดลบ (ปรับลด/คืนเงิน) ไม่ให้นับจำนวนหัวซ้ำ
+            if ((parseFloat(r.billTotal ?? r.BillTotal ?? r.amount ?? 0) || 0) < 0) return s;
+            return s + (parseFloat(r.coverAll ?? r.CoverAll ?? 0) || 0);
+          }, 0)
         : buffetData.buffet259Qty + buffetData.buffet359Qty + buffetData.kid159Qty + buffetData.kid109Qty;
 
       const costPct = netSales > 0 ? (totalCost / netSales) * 100 : 0;
