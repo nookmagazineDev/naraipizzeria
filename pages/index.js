@@ -1079,8 +1079,13 @@ export default function App() {
         elderFreeQty: 0
       };
 
-      // จำนวนหัว = จำนวนหัวที่ "จ่ายเงิน" = ผลรวมจานบุฟเฟต์ที่ขายจริง (ไม่รวมเด็กฟรี 101005)
-      const totalCovers = buffetData.buffet259Qty + buffetData.buffet359Qty + buffetData.kid159Qty + buffetData.kid109Qty;
+      // จำนวนหัว
+      // - สาขา 501, 503: ดึงจาก Cover All (ผลรวม coverAll ของทุกบิลในวัน+สาขานั้น)
+      // - สาขาอื่น: จำนวนหัวที่ "จ่ายเงิน" = ผลรวมจานบุฟเฟต์ที่ขายจริง (ไม่รวมเด็กฟรี 101005)
+      const COVERALL_OUTLETS = [501, 503];
+      const totalCovers = COVERALL_OUTLETS.includes(outletID)
+        ? bills.reduce((s, r) => s + (parseFloat(r.coverAll ?? r.CoverAll ?? 0) || 0), 0)
+        : buffetData.buffet259Qty + buffetData.buffet359Qty + buffetData.kid159Qty + buffetData.kid109Qty;
 
       const costPct = netSales > 0 ? (totalCost / netSales) * 100 : 0;
 
