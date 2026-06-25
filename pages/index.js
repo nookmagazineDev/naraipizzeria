@@ -963,7 +963,8 @@ export default function App() {
         const net = billTotal - vat;
 
         const tid = parseInt(r.tableID || r.TableID || 0);
-        if (tid === 300) {
+        // โต๊ะ 800 = ออเดอร์เพิ่มเติม XUM (Google Sheet) → นับเข้า Take-Home (net = ยอดก่อน VAT)
+        if (tid === 300 || tid === 800) {
           takeHome += net;
           takeHomeBills++;
         } else if (tid === 400 || tid === 401) {
