@@ -2,6 +2,10 @@ export const config = {
   runtime: 'edge',
 };
 
+// ปลายทาง API บนโฮสต์ (SQL Server ผ่าน ngrok) — ตั้งทับด้วย env STORE_API_BASE ได้
+const STORE_API_BASE =
+  process.env.STORE_API_BASE || 'https://disparate-hurray-detective.ngrok-free.dev';
+
 export default async function handler(req) {
   const { searchParams } = new URL(req.url);
   const start = searchParams.get('start');
@@ -15,10 +19,11 @@ export default async function handler(req) {
   }
 
   try {
-    const url = `http://storenarai.dyndns.tv:14365/express/cpaidbetweendate?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+    const url = `${STORE_API_BASE}/cpaidbetweendate?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
     const upstream = await fetch(url, {
       cache: 'no-store',
       signal: AbortSignal.timeout(25000),
+      headers: { 'ngrok-skip-browser-warning': 'true' }, // ข้ามหน้าเตือนของ ngrok free
     });
 
     if (!upstream.ok) throw new Error(`Upstream HTTP ${upstream.status}`);
