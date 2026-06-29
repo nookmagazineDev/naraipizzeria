@@ -416,6 +416,7 @@ const SALES_COLUMNS = [
   { key: 'date', label: 'เวลาปิดบิล', type: 'datetime' },
   { key: 'checkDesc', label: 'รายละเอียด', type: 'text' },
   { key: 'orderID', label: 'Order ID', type: 'text' },
+  { key: 'voidCount', label: 'Void', type: 'void_count' },
 ];
 
 const DETAIL_COLUMNS = [
@@ -506,6 +507,7 @@ function getColFilterValue(row, key) {
   }
   if (key === 'outletID') return outletLabel(row[key]);
   if (key === 'void') return row[key] ? 'ยกเลิก' : 'ปกติ';
+  if (key === 'voidCount') return (row.voidCount > 0) ? `มี Void (${row.voidCount})` : 'ปกติ';
 
   // Formatting money and numbers for exact match/display
   const isSalesCol = SALES_COLUMNS.find(c => c.key === key);
@@ -840,6 +842,17 @@ export default function App() {
     return map;
   }, [detailRaw]);
 
+  // Map checkID -> จำนวนรายการที่ถูก void ในบิลนั้น (ใช้ไฮไลต์แถวสีแดง + คอลัมน์ Void)
+  const checkVoidMap = useMemo(() => {
+    const map = {};
+    detailRaw.forEach(r => {
+      if (!r.chkCheckID || !r.void) return;
+      const cid = String(r.chkCheckID);
+      map[cid] = (map[cid] || 0) + 1;
+    });
+    return map;
+  }, [detailRaw]);
+
   // Sales data with computed billCost attached
   const salesWithCost = useMemo(() => {
     return salesRaw.map(row => {
@@ -851,10 +864,11 @@ export default function App() {
         billCost: salesCostMap[cid] ?? 0,
         vat: vatVal,
         beforeVat: amt - vatVal,
-        waiterName: checkWaiterMap[cid] || ''
+        waiterName: checkWaiterMap[cid] || '',
+        voidCount: checkVoidMap[cid] || 0
       };
     });
-  }, [salesRaw, salesCostMap, checkWaiterMap]);
+  }, [salesRaw, salesCostMap, checkWaiterMap, checkVoidMap]);
 
   // Processed Data
   const filteredSales = useMemo(() => {
@@ -2736,9 +2750,9 @@ export default function App() {
                               </tr>
                             ) : (
                               filteredSales.slice((salesPage - 1) * PAGE_SIZE, salesPage * PAGE_SIZE).map((row, i) => (
-                                <tr key={i} className="hover:bg-slate-50/50 transition-colors">
-                                  <td className="px-4 py-2.5">
-                                    <button 
+                                <tr key={i} className={`transition-colors ${row.voidCount > 0 ? 'bg-rose-50 hover:bg-rose-100/70' : 'hover:bg-slate-50/50'}`}>
+                                  <td className={`px-4 py-2.5 ${row.voidCount > 0 ? 'border-l-4 border-rose-500' : ''}`}>
+                                    <button
                                       onClick={() => openDetail(row)}
                                       className="flex items-center gap-1 px-2.5 py-1 border border-amber-200 hover:bg-amber-50 text-amber-700 font-semibold rounded-lg text-[10px] transition-colors"
                                     >
@@ -2776,6 +2790,16 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{row.date || '-'}</td>
                                   <td className="px-4 py-2.5 max-w-[200px] truncate text-slate-500" title={row.checkDesc}>{row.checkDesc || '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-400">{row.orderID || '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap">
+                                    {row.voidCount > 0 ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700">
+                                        <XCircle size={11} />
+                                        <span>Void ({row.voidCount})</span>
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-300">-</span>
+                                    )}
+                                  </td>
                                 </tr>
                               ))
                             )}
