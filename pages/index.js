@@ -1656,6 +1656,30 @@ export default function App() {
     ws['!cols'] = [{ wch: 12 }, { wch: 34 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 11 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'รายไอเทมแยกสาขา');
+
+    // ชีตที่ 2: ดูเฉพาะ "จำนวน" แบบ pivot — สาขาเป็นหัวคอลัมน์, รายการเป็นแถว
+    const branchOidSet = new Set();
+    items.forEach(item => {
+      const m = branchMap[String(item.itemCode)];
+      if (m) Object.keys(m).forEach(oid => branchOidSet.add(parseInt(oid)));
+    });
+    const branchOids = [...branchOidSet].sort((a, b) => a - b);
+    const shortName = oid => OUTLETS[parseInt(oid)] || String(oid);
+    const pivotHeader = ['รหัสไอเทม', 'ชื่อรายการ (ไทย)', ...branchOids.map(shortName), 'รวม'];
+    const pivotAoa = [pivotHeader];
+    items.forEach(item => {
+      const code = String(item.itemCode);
+      const m = branchMap[code] || {};
+      const qtyCells = branchOids.map(oid => {
+        const q = m[oid] ? m[oid].totalQty : 0;
+        return q ? r2(q) : '';   // เว้นว่างถ้าสาขานั้นไม่ได้ขาย เพื่ออ่านง่าย
+      });
+      pivotAoa.push([code, item.nameThai, ...qtyCells, r2(item.totalQty)]);
+    });
+    const ws2 = XLSX.utils.aoa_to_sheet(pivotAoa);
+    ws2['!cols'] = [{ wch: 12 }, { wch: 32 }, ...branchOids.map(() => ({ wch: 8 })), { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, ws2, 'จำนวนแยกสาขา');
+
     XLSX.writeFile(wb, `item_report_${startDate}_to_${endDate}.xlsx`);
   }
 
