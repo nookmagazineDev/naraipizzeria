@@ -507,7 +507,7 @@ function getColFilterValue(row, key) {
   }
   if (key === 'outletID') return outletLabel(row[key]);
   if (key === 'void') return row[key] ? 'ยกเลิก' : 'ปกติ';
-  if (key === 'voidCount') return (row.voidCount > 0) ? `มี Void (${row.voidCount})` : 'ปกติ';
+  if (key === 'voidCount') return (row.voidCount > 0) ? `มี Void (${row.voidCount})${row.voidTypes ? ' · ' + row.voidTypes : ''}` : 'ปกติ';
 
   // Formatting money and numbers for exact match/display
   const isSalesCol = SALES_COLUMNS.find(c => c.key === key);
@@ -842,14 +842,19 @@ export default function App() {
     return map;
   }, [detailRaw]);
 
-  // Map checkID -> จำนวนรายการที่ถูก void ในบิลนั้น (ใช้ไฮไลต์แถวสีแดง + คอลัมน์ Void)
+  // Map checkID -> { count, types } ของรายการที่ถูก void ในบิลนั้น (ไฮไลต์แดง + คอลัมน์ Void/VoidType)
   const checkVoidMap = useMemo(() => {
-    const map = {};
+    const acc = {};
     detailRaw.forEach(r => {
       if (!r.chkCheckID || !r.void) return;
       const cid = String(r.chkCheckID);
-      map[cid] = (map[cid] || 0) + 1;
+      if (!acc[cid]) acc[cid] = { count: 0, types: new Set() };
+      acc[cid].count += 1;
+      const vt = String(r.voidType ?? '').trim();
+      if (vt) acc[cid].types.add(vt);
     });
+    const map = {};
+    Object.entries(acc).forEach(([cid, v]) => { map[cid] = { count: v.count, types: [...v.types].join(', ') }; });
     return map;
   }, [detailRaw]);
 
@@ -865,7 +870,8 @@ export default function App() {
         vat: vatVal,
         beforeVat: amt - vatVal,
         waiterName: checkWaiterMap[cid] || '',
-        voidCount: checkVoidMap[cid] || 0
+        voidCount: checkVoidMap[cid]?.count || 0,
+        voidTypes: checkVoidMap[cid]?.types || ''
       };
     });
   }, [salesRaw, salesCostMap, checkWaiterMap, checkVoidMap]);
@@ -2792,10 +2798,13 @@ export default function App() {
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-400">{row.orderID || '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap">
                                     {row.voidCount > 0 ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700">
-                                        <XCircle size={11} />
-                                        <span>Void ({row.voidCount})</span>
-                                      </span>
+                                      <div className="flex flex-col gap-0.5">
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 w-fit">
+                                          <XCircle size={11} />
+                                          <span>Void ({row.voidCount})</span>
+                                        </span>
+                                        {row.voidTypes && <span className="text-[10px] text-rose-600 font-medium">{row.voidTypes}</span>}
+                                      </div>
                                     ) : (
                                       <span className="text-slate-300">-</span>
                                     )}
