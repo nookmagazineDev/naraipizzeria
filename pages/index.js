@@ -2011,6 +2011,7 @@ export default function App() {
                     disabled={!loaded || (
                       activeTab === 'sales' ? filteredSales.length === 0 :
                       activeTab === 'dailySale' ? filteredDailyReport.length === 0 :
+                      activeTab === 'itemSearch' ? filteredItemSummary.length === 0 :
                       filteredDetails.length === 0
                     )}
                     onClick={() => {
@@ -2018,6 +2019,8 @@ export default function App() {
                         exportXLSX(filteredSales, SALES_COLUMNS.map(c => ({ key: c.key, label: c.label })), 'sales_report');
                       } else if (activeTab === 'dailySale') {
                         exportXLSX(filteredDailyReport, DAILY_COLUMNS.map(c => ({ key: c.key, label: c.label })), 'daily_sales_report');
+                      } else if (activeTab === 'itemSearch') {
+                        exportXLSX(filteredItemSummary, ITEM_COLUMNS.map(c => ({ key: c.key, label: c.label })), 'item_report');
                       } else {
                         exportXLSX(filteredDetails, DETAIL_COLUMNS.map(c => ({ key: c.key, label: c.label })), 'detail_report');
                       }
