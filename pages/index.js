@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
+import EmployeeList from '../components/EmployeeList';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -516,6 +517,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'sales', 'dailySale', 'details', 'itemSearch'
   const [accOpen, setAccOpen] = useState(true);
   const [stockOpen, setStockOpen] = useState(true);
+  const [hrOpen, setHrOpen] = useState(true);
   const [branchChartMode, setBranchChartMode] = useState('sales'); // 'sales' or 'covers'
 
   // Date filters
@@ -1849,18 +1851,30 @@ export default function App() {
               )}
             </div>
 
-            {/* HR Main Menu (Placeholder) */}
+            {/* HR Main Menu */}
             <div className="pt-2">
-              <button 
-                className="flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors hover:bg-slate-800 text-slate-400 hover:text-slate-200 cursor-not-allowed opacity-60"
-                onClick={() => alert('เมนู HR ยังไม่เปิดใช้งานในขณะนี้')}
+              <button
+                onClick={() => setHrOpen(!hrOpen)}
+                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${hrOpen ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
               >
                 <div className="flex items-center gap-3">
-                  <Users size={18} className="text-slate-400" />
+                  <Users size={18} className="text-amber-500" />
                   <span>HR</span>
                 </div>
-                <span className="text-[9px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-500 uppercase tracking-wider font-bold">Soon</span>
+                {hrOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
               </button>
+
+              {hrOpen && (
+                <div className="pl-4 space-y-1.5 mt-1 border-l border-slate-800 ml-6">
+                  <button
+                    onClick={() => { setActiveTab('employeeList'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'employeeList' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <Users size={16} />
+                    <span>รายชื่อพนักงาน</span>
+                  </button>
+                </div>
+              )}
             </div>
           </nav>
 
@@ -1887,12 +1901,14 @@ export default function App() {
                 {activeTab === 'details' && <Layers size={20} className="text-amber-600" />}
                 {activeTab === 'itemSearch' && <Search size={20} className="text-amber-600" />}
                 {(activeTab === 'stockList' || activeTab === 'stockTotal') && <PackageSearch size={20} className="text-amber-600" />}
+                {activeTab === 'employeeList' && <Users size={20} className="text-amber-600" />}
                 {activeTab === 'dashboard' ? 'แดชบอร์ดหลัก'
                   : activeTab === 'sales' ? 'รายงานยอดการขาย'
                   : activeTab === 'dailySale' ? 'รายงานยอดรายวันทุกสาขา'
                   : activeTab === 'itemSearch' ? 'ค้นหารายไอเทม'
                   : activeTab === 'stockList' ? 'นับสต๊อกและขอเบิก'
                   : activeTab === 'stockTotal' ? 'ดูยอดรวมทุกสาขา'
+                  : activeTab === 'employeeList' ? 'รายชื่อพนักงาน'
                   : 'รายละเอียดรายการ'}
               </h1>
             </div>
@@ -1925,8 +1941,11 @@ export default function App() {
             {activeTab === 'stockList' && <StockList />}
             {activeTab === 'stockTotal' && <StockTotalList />}
 
+            {/* HR VIEWS (รายชื่อพนักงาน — ดึงจาก Google Sheet ผ่าน GAS) */}
+            {activeTab === 'employeeList' && <EmployeeList />}
+
             {/* FILTER PANEL */}
-            {!(activeTab === 'stockList' || activeTab === 'stockTotal') && (
+            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList') && (
             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">กำหนดช่วงวันที่และสาขา</h2>
               <div className="flex flex-col lg:flex-row gap-4 items-end">
