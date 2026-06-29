@@ -14,7 +14,7 @@ Dashboard เรียกผ่าน proxy ฝั่ง Next.js:
 ```bash
 npm init -y
 npm install express mssql cors compression
-node narai-api.js
+node server.js
 ```
 
 ### ⚠️ ตั้งรหัสผ่าน SQL ผ่าน env (ห้ามฝังในไฟล์ — repo เป็น public)
