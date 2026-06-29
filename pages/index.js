@@ -1610,6 +1610,55 @@ export default function App() {
     XLSX.writeFile(workbook, `${filename}_${startDate}_to_${endDate}.xlsx`);
   }
 
+  // Export หน้าค้นหารายไอเทม: ตัดคอลัมน์ชื่อ (Eng) ออก และใต้แต่ละรายการแสดง "สาขาที่ขายได้"
+  // (จำนวน/มูลค่า/ต้นทุน/กำไร/สัดส่วน%) แบบเดียวกับ modal แยกตามสาขา
+  function exportItemXLSX() {
+    const items = filteredItemSummary;
+    if (!items.length) return;
+    const r2 = v => Math.round((parseFloat(v) || 0) * 100) / 100;
+
+    // ข้อมูลแยกตามสาขาของทุกไอเทม (สอดคล้องกับ itemSummaryData: กรองตามสาขาที่เลือกถ้ามี)
+    const details = selectedOutlet
+      ? detailRaw.filter(r => String(r.outletID) === String(selectedOutlet))
+      : detailRaw;
+    const branchMap = {}; // itemCode -> { outletID -> { name, totalQty, totalGross, totalCost } }
+    details.forEach(r => {
+      if (r.void) return;
+      const code = String(r.itemCode || '-');
+      const oid = r.outletID;
+      const qty = parseFloat(r.quantity) || 0;
+      const gross = parseFloat(r.grossPrice) || 0;
+      const cost = (costMap[r.itemCode] ?? 0) * qty;
+      if (!branchMap[code]) branchMap[code] = {};
+      if (!branchMap[code][oid]) branchMap[code][oid] = { name: outletLabel(oid), totalQty: 0, totalGross: 0, totalCost: 0 };
+      const b = branchMap[code][oid];
+      b.totalQty += qty; b.totalGross += gross; b.totalCost += cost;
+    });
+
+    const header = ['รหัสไอเทม', 'ชื่อรายการ (ไทย)', 'สาขา', 'จำนวน (ชิ้น)', 'มูลค่ารวม (฿)', 'ต้นทุนรวม (฿)', 'กำไร (฿)', 'สัดส่วน (%)'];
+    const aoa = [header];
+
+    items.forEach(item => {
+      const code = String(item.itemCode);
+      // แถวสรุปรวมของไอเทม
+      aoa.push([code, item.nameThai, 'รวมทั้งหมด', r2(item.totalQty), r2(item.totalGross), r2(item.totalCost), r2(item.profit), 100]);
+      // แถวย่อยแยกตามสาขา (เรียงจำนวนมาก→น้อย)
+      const branches = Object.values(branchMap[code] || {})
+        .map(b => ({ ...b, profit: b.totalGross - b.totalCost }))
+        .sort((a, b) => b.totalQty - a.totalQty);
+      const sumQty = branches.reduce((s, b) => s + b.totalQty, 0) || item.totalQty || 1;
+      branches.forEach(b => {
+        aoa.push(['', '', b.name, r2(b.totalQty), r2(b.totalGross), r2(b.totalCost), r2(b.profit), Math.round((b.totalQty / sumQty) * 1000) / 10]);
+      });
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 12 }, { wch: 34 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 11 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'รายไอเทมแยกสาขา');
+    XLSX.writeFile(wb, `item_report_${startDate}_to_${endDate}.xlsx`);
+  }
+
   function exportChartData(chartType) {
     let headers = [];
     let rows = [];
@@ -2020,7 +2069,7 @@ export default function App() {
                       } else if (activeTab === 'dailySale') {
                         exportXLSX(filteredDailyReport, DAILY_COLUMNS.map(c => ({ key: c.key, label: c.label })), 'daily_sales_report');
                       } else if (activeTab === 'itemSearch') {
-                        exportXLSX(filteredItemSummary, ITEM_COLUMNS.map(c => ({ key: c.key, label: c.label })), 'item_report');
+                        exportItemXLSX();
                       } else {
                         exportXLSX(filteredDetails, DETAIL_COLUMNS.map(c => ({ key: c.key, label: c.label })), 'detail_report');
                       }
