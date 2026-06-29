@@ -154,6 +154,31 @@ function billCountedToTotal(r) {
   return s;
 }
 
+// แยกยอดตาม "ประเภทการชำระเงิน" ของบิลเดียว (จากแถว sales) → คืนเฉพาะช่องที่มียอด > 0
+function billPaymentBreakdown(r) {
+  if (!r) return [];
+  const f = k => parseFloat(r[k] || 0);
+  const list = [
+    { label: 'เงินสด (Cash)', amount: f('cash') },
+    { label: 'บัตรเครดิต (Credit)', amount: f('credit') },
+    { label: 'QR Credit', amount: f('qrCredit') },
+    { label: 'QR / โอน', amount: f('qr') },
+    { label: 'Alipay', amount: f('alipay') },
+    { label: 'WeChat', amount: f('weChat') + f('wechat') },
+    { label: 'Voucher', amount: f('voucher') },
+    { label: 'OC', amount: f('oc') },
+  ];
+  if (f('other1') > 0) list.push({ label: r.otherType1 || 'อื่นๆ 1', amount: f('other1') });
+  if (f('other2') > 0) list.push({ label: r.otherType2 || 'อื่นๆ 2', amount: f('other2') });
+  let out = list.filter(x => x.amount > 0);
+  // ถ้าไม่มียอดในช่องตัวเลขเลย แต่บิลมียอดรวม → ใช้ paidType + billTotal เป็น fallback
+  if (out.length === 0) {
+    const bt = parseFloat(r.billTotal || r.amount || 0);
+    if (bt > 0) out = [{ label: r.paidType || 'ไม่ระบุประเภท', amount: bt }];
+  }
+  return out;
+}
+
 function isExcludedTable(tid) {
   return EXCLUDE_TABLES.indexOf(parseInt(tid)) >= 0;
 }
@@ -1681,6 +1706,52 @@ export default function App() {
     XLSX.utils.book_append_sheet(wb, ws2, 'จำนวนแยกสาขา');
 
     XLSX.writeFile(wb, `item_report_${startDate}_to_${endDate}.xlsx`);
+  }
+
+  // Export รายละเอียดรายการในบิล (modal) → Excel: รวมคอลัมน์ Void/VoidTime/VoidType + ยอดประเภทการชำระ
+  function exportBillXLSX() {
+    const rows = modal.rows;
+    if (!rows || !rows.length) return;
+    const r2 = v => Math.round((parseFloat(v) || 0) * 100) / 100;
+
+    const header = ['รหัสรายการ', 'ชื่อรายการอาหาร', 'จำนวน', 'ราคาต่อหน่วย', 'ราคาก่อน Vat', 'ภาษี (Vat)', 'ราคารวม', 'ต้นทุนรวม', 'ต้นทุนต่อหน่วย', 'โต๊ะ', 'เวลาที่สั่ง', 'Void', 'VoidTime', 'VoidType', 'เลขออเดอร์'];
+    const aoa = [['รายละเอียดรายการในบิล — Check ID:', modal.checkID], [], header];
+
+    rows.forEach(r => {
+      const qty = parseFloat(r.quantity) || 0;
+      const unitCost = costMap[r.itemCode] ?? 0;
+      const lineVat = parseFloat(r.tax || 0);
+      const lineGross = parseFloat(r.grossPrice || 0);
+      aoa.push([
+        r.itemCode || '', r.nameThai || '', qty, r2(r.unitPrice), r2(lineGross), r2(lineVat),
+        r2(lineGross + lineVat), r2(unitCost * qty), r2(unitCost), r.tableID || '', r.prtOrdTime || '',
+        r.void ? 'V' : '', r.voidTime || '', r.voidType || '', r.orderID || ''
+      ]);
+    });
+
+    const totalQty = rows.reduce((s, r) => s + (parseFloat(r.quantity) || 0), 0);
+    const totalGross = rows.reduce((s, r) => s + (parseFloat(r.grossPrice) || 0), 0);
+    const totalVat = rows.reduce((s, r) => s + (parseFloat(r.tax) || 0), 0);
+    const totalCost = rows.reduce((s, r) => r.void ? s : s + ((costMap[r.itemCode] ?? 0) * (parseFloat(r.quantity) || 0)), 0);
+    aoa.push([]);
+    aoa.push(['ยอดรวมทั้งหมด', '', r2(totalQty), '', r2(totalGross), r2(totalVat), r2(totalGross + totalVat), r2(totalCost)]);
+    aoa.push(['กำไร / ขาดทุนสุทธิ (ของบิลนี้)', '', '', '', '', '', '', '', '', '', '', '', '', '', r2(totalGross - totalCost)]);
+
+    // ยอดตามประเภทการชำระเงิน
+    const billSale = salesRaw.find(s => String(s.checkID) === String(modal.checkID));
+    const payments = billPaymentBreakdown(billSale);
+    if (payments.length) {
+      aoa.push([]);
+      aoa.push(['ยอดตามประเภทการชำระเงิน']);
+      payments.forEach(p => aoa.push([p.label, '', '', '', '', '', r2(p.amount)]));
+      aoa.push(['รวมยอดชำระ', '', '', '', '', '', r2(payments.reduce((s, p) => s + p.amount, 0))]);
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 14 }, { wch: 26 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 7 }, { wch: 18 }, { wch: 7 }, { wch: 18 }, { wch: 12 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'รายการในบิล');
+    XLSX.writeFile(wb, `bill_${modal.checkID}.xlsx`);
   }
 
   function exportChartData(chartType) {
@@ -3624,7 +3695,9 @@ export default function App() {
                         <th className="px-4 py-3 text-slate-600 text-right text-rose-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ต้นทุนต่อหน่วย</th>
                         <th className="px-4 py-3 text-slate-600 text-center sticky top-0 bg-slate-50 z-20 border-b border-slate-200">โต๊ะ</th>
                         <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">เวลาที่สั่ง</th>
-                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">สถานะ</th>
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">Void</th>
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200 whitespace-nowrap">VoidTime</th>
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">VoidType</th>
                         <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">เลขออเดอร์</th>
                       </tr>
                     </thead>
@@ -3663,6 +3736,8 @@ export default function App() {
                                 </span>
                               )}
                             </td>
+                            <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap font-mono">{r.voidTime || '-'}</td>
+                            <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap">{r.voidType || '-'}</td>
                             <td className="px-4 py-2.5 font-mono text-slate-400">{r.orderID || '-'}</td>
                           </tr>
                         );
@@ -3694,7 +3769,7 @@ export default function App() {
                               <td className="px-4 py-3 text-right font-mono text-amber-700">{fmtMoney(totalCombined)}</td>
                               <td className="px-4 py-3 text-right font-mono text-rose-700">{fmtMoney(totalCost)}</td>
                               <td />
-                              <td colSpan={4} />
+                              <td colSpan={6} />
                             </tr>
                             {/* Profit row */}
                             <tr className="bg-emerald-50 border-t border-emerald-200 font-bold text-slate-800">
@@ -3709,7 +3784,7 @@ export default function App() {
                                   {profit >= 0 ? '+' : ''}{fmtMoney(profit)}
                                 </span>
                               </td>
-                              <td colSpan={3} />
+                              <td colSpan={5} />
                             </tr>
                           </>
                         );
@@ -3718,6 +3793,38 @@ export default function App() {
                   </table>
                 </div>
               )}
+
+              {/* ยอดตามประเภทการชำระเงิน (ของบิลนี้) */}
+              {!modal.loading && !modal.error && modal.rows.length > 0 && (() => {
+                const billSale = salesRaw.find(s => String(s.checkID) === String(modal.checkID));
+                const payments = billPaymentBreakdown(billSale);
+                if (!payments.length) return null;
+                const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
+                return (
+                  <div className="mt-5 border border-slate-200 rounded-xl overflow-hidden">
+                    <div className="px-4 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center gap-2">
+                      <CreditCard size={15} className="text-slate-500" />
+                      <span className="text-xs font-bold text-slate-700">ยอดตามประเภทการชำระเงิน</span>
+                    </div>
+                    <table className="w-full text-xs">
+                      <tbody className="divide-y divide-slate-100">
+                        {payments.map((p, i) => (
+                          <tr key={i} className="text-slate-700">
+                            <td className="px-4 py-2 font-medium">{p.label}</td>
+                            <td className="px-4 py-2 text-right font-mono font-semibold text-slate-800">{fmtMoney(p.amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-amber-50/60 border-t-2 border-amber-400 font-bold text-slate-800">
+                          <td className="px-4 py-2.5">รวมยอดชำระ</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-amber-700">{fmtMoney(totalPaid)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Modal Footer */}
@@ -3754,12 +3861,22 @@ export default function App() {
                   </div>
                 )}
               </div>
-              <button 
-                onClick={() => setModal(m => ({ ...m, open: false }))}
-                className="bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-5 py-2 rounded-xl transition-all self-end md:self-auto"
-              >
-                ปิดหน้าต่าง
-              </button>
+              <div className="flex items-center gap-2 self-end md:self-auto">
+                <button
+                  onClick={exportBillXLSX}
+                  disabled={modal.loading || !!modal.error || modal.rows.length === 0}
+                  className="border border-emerald-200 hover:bg-emerald-50 disabled:bg-slate-50 disabled:border-slate-100 disabled:text-slate-400 text-emerald-700 font-semibold text-xs px-4 py-2 rounded-xl transition-all flex items-center gap-2"
+                >
+                  <Download size={14} />
+                  <span>Export Excel</span>
+                </button>
+                <button
+                  onClick={() => setModal(m => ({ ...m, open: false }))}
+                  className="bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-5 py-2 rounded-xl transition-all"
+                >
+                  ปิดหน้าต่าง
+                </button>
+              </div>
             </div>
           </div>
         </div>

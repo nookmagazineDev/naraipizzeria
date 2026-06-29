@@ -109,7 +109,8 @@ app.get('/ctranbetweendate', async (req, res) => {
           [ChkCheckID]  AS chkCheckID,
           [PrtOrdTime]  AS prtOrdTime,
           [Void]        AS [void],
-          [VoidTime]    AS voidTime
+          [VoidTime]    AS voidTime,
+          [VoidType]    AS voidType
         FROM dbo.Ctrans
         WHERE [PostTime] >= @start AND [PostTime] <= @end${outletFilter}
       `);
