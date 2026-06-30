@@ -2,7 +2,7 @@
 // ตั้ง URL ที่ deploy แล้วผ่าน env EXPENSE_GAS_URL บน Vercel หรือใส่ตรง ๆ ตรง fallback ด้านล่าง
 const SCRIPT_URL =
   process.env.EXPENSE_GAS_URL ||
-  ''; // ← วาง URL /exec ที่ deploy จาก Apps Script ของชีท 1YXOaA ที่นี่ (หรือใช้ env)
+  'https://script.google.com/macros/s/AKfycbwcRP65mAO0jWusYr1OfcgxpW8GU7yv0t85VcnQ3ShTjEROaXCF2d3MNo_VffNho6Y/exec';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
