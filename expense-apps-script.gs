@@ -10,12 +10,13 @@
  *   4) เอา URL ไปใส่ env EXPENSE_GAS_URL บน Vercel (Project > Settings > Environment Variables) แล้ว Redeploy
  *      หรือใส่ตรง fallback ใน pages/api/expense-gas.js
  *
- * โครงสร้างชีท:
- *   "ข้อมูลค่าใช้อื่น"  : A=ประเภท  B=สาขา  C=รหัส        (ข้อมูลอ้างอิง/รหัส)
- *   "ค่าใช้จ่ายอื่น"    : A=เดือน B=ประเภท C=สาขา D=รหัส E=เลขเริ่มต้น F=เลขสิ้นสุด G=จำนวน(E-F) H=ราคา/หน่วย I=ผลรวม(G*H)
+ * โครงสร้าง (อ่าน/เขียนคนละสเปรดชีต — script owner ต้องมีสิทธิ์เข้าทั้งสองไฟล์):
+ *   อ่านรหัส : สเปรดชีต REF_SHEET_ID ชีท "ข้อมูลค่าใช้อื่น"  A=ประเภท B=สาขา C=รหัส
+ *   บันทึก   : สเปรดชีต DATA_SHEET_ID ชีท "ค่าใช้จ่ายอื่น"  A=เดือน B=ประเภท C=สาขา D=รหัส E=เลขเริ่มต้น F=เลขสิ้นสุด G=จำนวน(E-F) H=ราคา/หน่วย I=ผลรวม(G*H)
  */
 
-var EXPENSE_SHEET_ID = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';
+var REF_SHEET_ID  = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';            // อ่านรหัส/สาขา
+var DATA_SHEET_ID = '1_fXuxtzV2T7Xgy8TXsAr0OWsuYxpxKF5bCVPwjDDhI-MjO2XwH8D9N6f'; // เก็บข้อมูลที่บันทึก
 var REF_SHEET  = 'ข้อมูลค่าใช้อื่น';
 var DATA_SHEET = 'ค่าใช้จ่ายอื่น';
 var DATA_HEADER = ['เดือน', 'ประเภท', 'สาขา', 'รหัส', 'เลขเริ่มต้น', 'เลขสิ้นสุด', 'จำนวน', 'ราคาต่อหน่วย', 'ผลรวม'];
@@ -29,11 +30,10 @@ function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
     var action = data.action;
-    var ss = SpreadsheetApp.openById(EXPENSE_SHEET_ID);
 
     if (action === 'getExpenseRefs') {
-      // อ่านรายการ (ประเภท, สาขา, รหัส) จากชีทข้อมูลอ้างอิง
-      var sh = ss.getSheetByName(REF_SHEET);
+      // อ่านรายการ (ประเภท, สาขา, รหัส) จากสเปรดชีตอ้างอิง
+      var sh = SpreadsheetApp.openById(REF_SHEET_ID).getSheetByName(REF_SHEET);
       var refs = [];
       if (sh) {
         var values = sh.getDataRange().getValues();
@@ -50,10 +50,11 @@ function doPost(e) {
       res.data = refs;
 
     } else if (action === 'saveOtherExpense') {
-      // เขียนข้อมูลลงชีท "ค่าใช้จ่ายอื่น" (แถวละ 1 ประเภท)
-      var sh = ss.getSheetByName(DATA_SHEET);
+      // เขียนข้อมูลลงสเปรดชีตเก็บข้อมูล ชีท "ค่าใช้จ่ายอื่น" (แถวละ 1 ประเภท)
+      var dataSS = SpreadsheetApp.openById(DATA_SHEET_ID);
+      var sh = dataSS.getSheetByName(DATA_SHEET);
       if (!sh) {
-        sh = ss.insertSheet(DATA_SHEET);
+        sh = dataSS.insertSheet(DATA_SHEET);
         sh.appendRow(DATA_HEADER);
         sh.getRange('A1:I1').setFontWeight('bold');
       }
