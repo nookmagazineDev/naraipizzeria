@@ -31,6 +31,7 @@ import {
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
 import EmployeeList from '../components/EmployeeList';
+import OtherExpense from '../components/OtherExpense';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -1971,12 +1972,19 @@ export default function App() {
                     <Layers size={16} />
                     <span>รายละเอียดรายการ</span>
                   </button>
-                  <button 
+                  <button
                     onClick={() => { setActiveTab('itemSearch'); if (window.innerWidth < 768) setSidebarOpen(false); }}
                     className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'itemSearch' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
                   >
                     <Search size={16} />
                     <span>ค้นหารายไอเทม</span>
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('otherExpense'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'otherExpense' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <DollarSign size={16} />
+                    <span>ค่าใช้จ่ายอื่นๆ</span>
                   </button>
                 </div>
               )}
@@ -2066,6 +2074,7 @@ export default function App() {
                 {activeTab === 'itemSearch' && <Search size={20} className="text-amber-600" />}
                 {(activeTab === 'stockList' || activeTab === 'stockTotal') && <PackageSearch size={20} className="text-amber-600" />}
                 {activeTab === 'employeeList' && <Users size={20} className="text-amber-600" />}
+                {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
                 {activeTab === 'dashboard' ? 'แดชบอร์ดหลัก'
                   : activeTab === 'sales' ? 'รายงานยอดการขาย'
                   : activeTab === 'dailySale' ? 'รายงานยอดรายวันทุกสาขา'
@@ -2073,6 +2082,7 @@ export default function App() {
                   : activeTab === 'stockList' ? 'นับสต๊อกและขอเบิก'
                   : activeTab === 'stockTotal' ? 'ดูยอดรวมทุกสาขา'
                   : activeTab === 'employeeList' ? 'รายชื่อพนักงาน'
+                  : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : 'รายละเอียดรายการ'}
               </h1>
             </div>
@@ -2108,8 +2118,11 @@ export default function App() {
             {/* HR VIEWS (รายชื่อพนักงาน — ดึงจาก Google Sheet ผ่าน GAS) */}
             {activeTab === 'employeeList' && <EmployeeList />}
 
+            {/* ACC: ค่าใช้จ่ายอื่นๆ (กรอก+บันทึกลง Google Sheet) */}
+            {activeTab === 'otherExpense' && <OtherExpense />}
+
             {/* FILTER PANEL */}
-            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList') && (
+            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'otherExpense') && (
             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">กำหนดช่วงวันที่และสาขา</h2>
               <div className="flex flex-col lg:flex-row gap-4 items-end">
