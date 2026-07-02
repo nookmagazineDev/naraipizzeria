@@ -548,6 +548,7 @@ export default function App() {
   const [hrOpen, setHrOpen] = useState(true);
   const [branchChartMode, setBranchChartMode] = useState('sales'); // 'sales' or 'covers'
   const [dashValueMode, setDashValueMode] = useState('money'); // 'money' | 'percent' (การ์ดแดชบอร์ด: ตัวเงิน หรือ %ของยอดขาย)
+  const [pendingSearch, setPendingSearch] = useState(false); // ตั้งวันที่จากปุ่มด่วนแล้วให้ค้นหาอัตโนมัติ
 
   // Date filters
   const [startDate, setStartDate] = useState('');
@@ -776,7 +777,27 @@ export default function App() {
     }
   }
 
-
+  // ── ปุ่มเลือกช่วงด่วน: ตั้งวันที่แล้วค้นหาอัตโนมัติ ──
+  const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const applyThisMonth = () => {
+    const n = new Date();
+    setStartDate(ymd(new Date(n.getFullYear(), n.getMonth(), 1)));
+    setEndDate(ymd(n));
+    setPendingSearch(true);
+  };
+  const applyLastMonth = () => {
+    const n = new Date();
+    setStartDate(ymd(new Date(n.getFullYear(), n.getMonth() - 1, 1)));
+    setEndDate(ymd(new Date(n.getFullYear(), n.getMonth(), 0))); // วันสุดท้ายของเดือนก่อน
+    setPendingSearch(true);
+  };
+  // เมื่อปุ่มด่วนตั้งวันที่เสร็จ (state อัปเดตแล้ว) → ค้นหาให้อัตโนมัติ
+  useEffect(() => {
+    if (!pendingSearch) return;
+    setPendingSearch(false);
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSearch]);
 
   function applyFilters(arr, cols, searchVal, colFilters, selectedBranch) {
     let d = [...arr];
@@ -2133,7 +2154,20 @@ export default function App() {
             {/* FILTER PANEL */}
             {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'otherExpense') && (
             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
-              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">กำหนดช่วงวันที่และสาขา</h2>
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">กำหนดช่วงวันที่และสาขา</h2>
+              <div className="flex flex-wrap items-center gap-2 mb-4">
+                <span className="text-[11px] font-semibold text-slate-400">เลือกด่วน:</span>
+                <button
+                  onClick={applyThisMonth}
+                  disabled={loading}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:border-amber-400 hover:text-amber-600 disabled:opacity-50 transition-colors"
+                >เดือนนี้</button>
+                <button
+                  onClick={applyLastMonth}
+                  disabled={loading}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:border-amber-400 hover:text-amber-600 disabled:opacity-50 transition-colors"
+                >เดือนที่แล้ว</button>
+              </div>
               <div className="flex flex-col lg:flex-row gap-4 items-end">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-1 w-full">
                   <div className="flex flex-col gap-1.5">
