@@ -547,6 +547,7 @@ export default function App() {
   const [stockOpen, setStockOpen] = useState(true);
   const [hrOpen, setHrOpen] = useState(true);
   const [branchChartMode, setBranchChartMode] = useState('sales'); // 'sales' or 'covers'
+  const [dashValueMode, setDashValueMode] = useState('money'); // 'money' | 'percent' (การ์ดแดชบอร์ด: ตัวเงิน หรือ %ของยอดขาย)
 
   // Date filters
   const [startDate, setStartDate] = useState('');
@@ -1296,6 +1297,14 @@ export default function App() {
 
     return { count, sumAmount, sumBill, sumVat, sumBeforeVat, sumCover, avgBill, sumCost, sumPrepCost, sumProfit };
   }, [salesRaw, detailRaw, selectedOutlet, costMap]);
+
+  // การ์ดแดชบอร์ด: แสดงเป็นตัวเงิน หรือ % ของยอดขาย(ก่อน VAT) ตามโหมดที่เลือก
+  const dashMoney = (v) => {
+    if (dashValueMode !== 'percent') return fmtMoney(v);
+    const base = stats.sumBeforeVat || 0;
+    if (!(base > 0)) return '—';
+    return `${((parseFloat(v) || 0) / base * 100).toFixed(1)}%`;
+  };
 
   // Breakdown ต้นทุนต่อไอเทม (ใช้ในการ์ดต้นทุนแดชบอร์ดที่กดได้)
   const costBreakdown = useMemo(() => {
@@ -2252,14 +2261,28 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="space-y-6">
+                    {/* Toggle: ตัวเงิน / เปอร์เซ็นต์ (สัดส่วนต่อยอดขาย) */}
+                    <div className="flex items-center justify-end gap-2">
+                      <span className="text-[11px] text-slate-400 font-semibold">มุมมองการ์ด:</span>
+                      <div className="inline-flex items-center gap-1 bg-slate-100 rounded-xl p-1 text-xs font-semibold">
+                        <button
+                          onClick={() => setDashValueMode('money')}
+                          className={`px-3 py-1.5 rounded-lg transition-all ${dashValueMode === 'money' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                        >฿ ตัวเงิน</button>
+                        <button
+                          onClick={() => setDashValueMode('percent')}
+                          className={`px-3 py-1.5 rounded-lg transition-all ${dashValueMode === 'percent' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                        >% เปอร์เซ็นต์</button>
+                      </div>
+                    </div>
                     {/* KPI CARDS */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
                       {/* Card 1: Total Sales */}
                       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">ยอดขายรวมทั้งหมด</span>
-                          <h3 className="text-lg font-bold text-emerald-600 truncate">{fmtMoney(stats.sumBeforeVat)}</h3>
-                          <p className="text-[10px] text-slate-400">ก่อน VAT (Bill − VAT)</p>
+                          <h3 className="text-lg font-bold text-emerald-600 truncate">{dashMoney(stats.sumBeforeVat)}</h3>
+                          <p className="text-[10px] text-slate-400">{dashValueMode === 'percent' ? 'ฐาน 100% ของยอดขาย' : 'ก่อน VAT (Bill − VAT)'}</p>
                         </div>
                         <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-500 flex-shrink-0">
                           <DollarSign size={20} />
@@ -2270,8 +2293,8 @@ export default function App() {
                       <button type="button" onClick={() => setCostModalOpen(true)} className="w-full text-left bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:border-rose-300 hover:shadow-md transition-all">
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">ต้นทุนรวมทั้งหมด</span>
-                          <h3 className="text-lg font-bold text-rose-600 truncate">{fmtMoney(stats.sumCost)}</h3>
-                          <p className="text-[10px] text-rose-500 font-semibold">คลิกดูรายละเอียด →</p>
+                          <h3 className="text-lg font-bold text-rose-600 truncate">{dashMoney(stats.sumCost)}</h3>
+                          <p className="text-[10px] text-rose-500 font-semibold">{dashValueMode === 'percent' ? '% ของยอดขาย • คลิกดู →' : 'คลิกดูรายละเอียด →'}</p>
                         </div>
                         <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center text-rose-500 flex-shrink-0">
                           <Layers size={20} />
@@ -2282,7 +2305,7 @@ export default function App() {
                       <button type="button" onClick={() => setPrepModalOpen(true)} className="w-full text-left bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:border-orange-300 hover:shadow-md transition-all">
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">ต้นทุนโต๊ะเตรียม(กก)</span>
-                          <h3 className="text-lg font-bold text-orange-500 truncate">{fmtMoney(stats.sumPrepCost)}</h3>
+                          <h3 className="text-lg font-bold text-orange-500 truncate">{dashMoney(stats.sumPrepCost)}</h3>
                           <p className="text-[10px] text-orange-500 font-semibold">{fmtNum(prepStats.totalQty)} กก. • คลิกดู →</p>
                         </div>
                         <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center text-orange-500 flex-shrink-0">
@@ -2295,9 +2318,9 @@ export default function App() {
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">กำไร / ขาดทุนสุทธิ</span>
                           <h3 className={`text-lg font-bold truncate ${stats.sumProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                            {fmtMoney(stats.sumProfit)}
+                            {dashMoney(stats.sumProfit)}
                           </h3>
-                          <p className="text-[10px] text-slate-400">ผลกำไรสุทธิ</p>
+                          <p className="text-[10px] text-slate-400">{dashValueMode === 'percent' ? 'อัตรากำไร (% ของยอดขาย)' : 'ผลกำไรสุทธิ'}</p>
                         </div>
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${stats.sumProfit >= 0 ? 'bg-emerald-50 text-emerald-500' : 'bg-rose-50 text-rose-500'}`}>
                           <TrendingUp size={20} />
@@ -2344,7 +2367,7 @@ export default function App() {
                       <button type="button" onClick={() => setExcludedModalOpen(true)} className="w-full text-left bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:border-slate-300 hover:shadow-md transition-all">
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">รายการไม่นับคำนวณ</span>
-                          <h3 className="text-lg font-bold text-slate-500 truncate">{fmtMoney(excludedStats.totalCost)}</h3>
+                          <h3 className="text-lg font-bold text-slate-500 truncate">{dashMoney(excludedStats.totalCost)}</h3>
                           <p className="text-[10px] text-slate-500 font-semibold">{fmtNum(excludedStats.totalQty)} ชิ้น • คลิกดู →</p>
                         </div>
                         <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 flex-shrink-0">
