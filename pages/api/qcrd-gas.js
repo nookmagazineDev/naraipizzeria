@@ -1,7 +1,9 @@
 // Proxy ไป Google Apps Script ของชีท QC/RD (1v8WRT… — menu/BOM/item)
 // deploy สคริปต์จาก qcrd-apps-script.gs แล้วตั้ง URL ผ่าน env QCRD_GAS_URL บน Vercel
 // หรือใส่ตรง ๆ ตรง fallback ด้านล่าง
-const SCRIPT_URL = process.env.QCRD_GAS_URL || '';
+const SCRIPT_URL =
+  process.env.QCRD_GAS_URL ||
+  'https://script.google.com/macros/s/AKfycbynZAbOhqipZxDQ4bq1wxPTlhm0lXneNn9WpwYhRpEVDcCNsoBaIam69rxr9wC_oSOf/exec';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
