@@ -26,12 +26,16 @@ import {
   HelpCircle,
   Filter,
   PackageSearch,
-  AlertTriangle
+  AlertTriangle,
+  ClipboardList,
+  FileText
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
 import EmployeeList from '../components/EmployeeList';
 import OtherExpense from '../components/OtherExpense';
+import QcRdMenu from '../components/QcRdMenu';
+import QcRdItems from '../components/QcRdItems';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -546,6 +550,7 @@ export default function App() {
   const [accOpen, setAccOpen] = useState(true);
   const [stockOpen, setStockOpen] = useState(true);
   const [hrOpen, setHrOpen] = useState(true);
+  const [qcrdOpen, setQcrdOpen] = useState(true);
   const [branchChartMode, setBranchChartMode] = useState('sales'); // 'sales' or 'covers'
   const [dashValueMode, setDashValueMode] = useState('money'); // 'money' | 'percent' (การ์ดแดชบอร์ด: ตัวเงิน หรือ %ของยอดขาย)
   const [pendingSearch, setPendingSearch] = useState(false); // ตั้งวันที่จากปุ่มด่วนแล้วให้ค้นหาอัตโนมัติ
@@ -2078,6 +2083,39 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {/* QC/RD Main Menu — เมนู+สูตร (BOM) และวัตถุดิบ จากชีทต้นทุนเมนู 1v8WRT… */}
+            <div className="pt-2">
+              <button
+                onClick={() => setQcrdOpen(!qcrdOpen)}
+                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${qcrdOpen ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+              >
+                <div className="flex items-center gap-3">
+                  <ClipboardList size={18} className="text-amber-500" />
+                  <span>QC/RD</span>
+                </div>
+                {qcrdOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              </button>
+
+              {qcrdOpen && (
+                <div className="pl-4 space-y-1.5 mt-1 border-l border-slate-800 ml-6">
+                  <button
+                    onClick={() => { setActiveTab('qcrdMenu'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'qcrdMenu' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <FileText size={16} />
+                    <span>เมนู</span>
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('qcrdItems'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'qcrdItems' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <PackageSearch size={16} />
+                    <span>วัตถุดิบ</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </nav>
 
           {/* Sidebar Footer */}
@@ -2105,6 +2143,8 @@ export default function App() {
                 {(activeTab === 'stockList' || activeTab === 'stockTotal') && <PackageSearch size={20} className="text-amber-600" />}
                 {activeTab === 'employeeList' && <Users size={20} className="text-amber-600" />}
                 {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
+                {activeTab === 'qcrdMenu' && <FileText size={20} className="text-amber-600" />}
+                {activeTab === 'qcrdItems' && <ClipboardList size={20} className="text-amber-600" />}
                 {activeTab === 'dashboard' ? 'แดชบอร์ดหลัก'
                   : activeTab === 'sales' ? 'รายงานยอดการขาย'
                   : activeTab === 'dailySale' ? 'รายงานยอดรายวันทุกสาขา'
@@ -2113,6 +2153,8 @@ export default function App() {
                   : activeTab === 'stockTotal' ? 'ดูยอดรวมทุกสาขา'
                   : activeTab === 'employeeList' ? 'รายชื่อพนักงาน'
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
+                  : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
+                  : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
                   : 'รายละเอียดรายการ'}
               </h1>
             </div>
@@ -2151,8 +2193,12 @@ export default function App() {
             {/* ACC: ค่าใช้จ่ายอื่นๆ (กรอก+บันทึกลง Google Sheet) */}
             {activeTab === 'otherExpense' && <OtherExpense />}
 
+            {/* QC/RD: เมนู+สูตร (BOM) และวัตถุดิบ จากชีทต้นทุนเมนู */}
+            {activeTab === 'qcrdMenu' && <QcRdMenu />}
+            {activeTab === 'qcrdItems' && <QcRdItems />}
+
             {/* FILTER PANEL */}
-            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'otherExpense') && (
+            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'otherExpense' || activeTab === 'qcrdMenu' || activeTab === 'qcrdItems') && (
             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">กำหนดช่วงวันที่และสาขา</h2>
               <div className="flex flex-wrap items-center gap-2 mb-4">
