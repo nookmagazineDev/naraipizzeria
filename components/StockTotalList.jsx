@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
-import { PackageSearch, Search, Loader2, AlertCircle } from 'lucide-react';
+import { PackageSearch, Search, Loader2, AlertCircle, Download } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import * as XLSX from 'xlsx';
 import { apiCall } from '../lib/stockApi';
 
 export default function StockTotalList() {
@@ -16,6 +17,7 @@ export default function StockTotalList() {
   const [isFetchingApi, setIsFetchingApi] = useState(false);
   const [branches, setBranches] = useState([]);
   const [selectedBranchDetails, setSelectedBranchDetails] = useState(null);
+  const [exportBranch, setExportBranch] = useState('all'); // 'all' = ทุกสาขา หรือชื่อสาขาเดียว
 
   useEffect(() => {
     // Set default dates to today
@@ -209,6 +211,62 @@ export default function StockTotalList() {
     }
   };
 
+  // ── Export Excel ──
+  // ทุกสาขา: ตารางแนวตั้ง แถว=ไอเทม หัวคอลัมน์=ชื่อสาขา (สาขาละ 2 คอลัมน์: จำนวน + วันที่ลงข้อมูล)
+  // เฉพาะสาขา: ตารางแบบรายงานคลัง — วันที่ | เข้าคลัง | รหัสสินค้า | ชื่อสินค้า | Actual QTY
+  const exportExcel = () => {
+    const rows = sortedAndFilteredItems;
+    if (rows.length === 0) { toast.error('ไม่มีรายการให้ export'); return; }
+    const todayStr = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+    const wb = XLSX.utils.book_new();
+
+    if (exportBranch === 'all') {
+      const bNames = branches.map(b => String(b.name));
+      const h1 = ['รหัส', 'ชื่อสินค้า', 'หน่วย'];
+      const h2 = ['', '', ''];
+      bNames.forEach(bn => { h1.push(bn.toUpperCase(), ''); h2.push('จำนวน', 'วันที่ลงข้อมูล'); });
+      const aoa = [h1, h2];
+      rows.forEach(it => {
+        const bdMap = {};
+        (it.branchDetails || []).forEach(bd => { bdMap[String(bd.branch).toLowerCase()] = bd; });
+        const r = [it.productId, it.name, it.unit || ''];
+        bNames.forEach(bn => {
+          const bd = bdMap[bn.toLowerCase()];
+          r.push(
+            bd !== undefined ? (parseFloat(bd.remaining) || 0) : '',
+            bd?.date ? String(bd.date).split(' ')[0] : ''
+          );
+        });
+        aoa.push(r);
+      });
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      // ผสานหัวคอลัมน์ชื่อสาขาให้คร่อม 2 คอลัมน์ย่อย (จำนวน/วันที่)
+      ws['!merges'] = bNames.map((_, i) => ({ s: { r: 0, c: 3 + i * 2 }, e: { r: 0, c: 4 + i * 2 } }));
+      ws['!cols'] = [{ wch: 12 }, { wch: 45 }, { wch: 8 }, ...bNames.flatMap(() => [{ wch: 9 }, { wch: 12 }])];
+      XLSX.utils.book_append_sheet(wb, ws, 'ยอดรวมทุกสาขา');
+      XLSX.writeFile(wb, `stock_total_all_${todayStr}.xlsx`);
+    } else {
+      const aoa = [['วันที่', 'เข้าคลัง', 'รหัสสินค้า', 'ชื่อสินค้า', 'Actual QTY']];
+      rows.forEach(it => {
+        const bd = (it.branchDetails || []).find(b => String(b.branch).toLowerCase() === exportBranch.toLowerCase());
+        if (!bd) return;
+        aoa.push([
+          bd.date ? String(bd.date).split(' ')[0] : '',
+          exportBranch.toUpperCase(),
+          it.productId,
+          it.name,
+          parseFloat(bd.remaining) || 0,
+        ]);
+      });
+      if (aoa.length === 1) { toast.error(`สาขา ${exportBranch.toUpperCase()} ไม่มีข้อมูลยอดนับ`); return; }
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 12 }, { wch: 45 }, { wch: 11 }];
+      XLSX.utils.book_append_sheet(wb, ws, exportBranch.toUpperCase());
+      XLSX.writeFile(wb, `stock_${exportBranch.toUpperCase()}_${todayStr}.xlsx`);
+    }
+    toast.success('Export สำเร็จ');
+  };
+
   const sortedAndFilteredItems = useMemo(() => {
     let result = items.filter(item => {
       if (!searchTerm) return true;
@@ -284,6 +342,25 @@ export default function StockTotalList() {
             disabled={isFetchingApi || loading || !apiStartDate || !apiEndDate}
             className="px-4 py-1.5 bg-fuchsia-600 text-white text-sm rounded-lg hover:bg-fuchsia-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
             {isFetchingApi ? <Loader2 className="w-4 h-4 animate-spin" /> : 'คำนวณยอดรวม'}
+          </button>
+        </div>
+
+        {/* Export Excel: ทุกสาขา (pivot สาขาละ จำนวน+วันที่) หรือเฉพาะสาขา (วันที่|เข้าคลัง|รหัส|ชื่อ|Actual QTY) */}
+        <div className="flex items-center gap-2 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 p-2 rounded-xl">
+          <select
+            value={exportBranch}
+            onChange={(e) => setExportBranch(e.target.value)}
+            className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500 text-gray-700">
+            <option value="all">ทุกสาขา</option>
+            {branches.map(b => (
+              <option key={b.name} value={b.name}>{String(b.name).toUpperCase()}</option>
+            ))}
+          </select>
+          <button
+            onClick={exportExcel}
+            disabled={loading || sortedAndFilteredItems.length === 0}
+            className="px-4 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
+            <Download className="w-4 h-4" /> Export Excel
           </button>
         </div>
       </div>
