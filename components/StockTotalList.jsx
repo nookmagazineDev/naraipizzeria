@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { PackageSearch, Search, Loader2, AlertCircle, Download } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
 import { apiCall } from '../lib/stockApi';
 
 export default function StockTotalList() {
@@ -246,21 +246,49 @@ export default function StockTotalList() {
       XLSX.utils.book_append_sheet(wb, ws, 'ยอดรวมทุกสาขา');
       XLSX.writeFile(wb, `stock_total_all_${todayStr}.xlsx`);
     } else {
-      const aoa = [['วันที่', 'เข้าคลัง', 'รหัสสินค้า', 'ชื่อสินค้า', 'Actual QTY']];
+      // จัดรูปแบบตามไฟล์ต้นแบบคลัง: หัวตารางพื้นฟ้าตัวขาว, เว้น 1 แถว, ข้อมูลเริ่มแถว 3,
+      // Actual QTY ทศนิยม 2 ตำแหน่ง ชิดขวา, เส้นตารางสีส้ม, ฟอนต์ Tahoma
+      const aoa = [['วันที่', 'เข้าคลัง', 'รหัสสินค้า', 'ชื่อสินค้า', 'Actual QTY'], []];
       rows.forEach(it => {
         const bd = (it.branchDetails || []).find(b => String(b.branch).toLowerCase() === exportBranch.toLowerCase());
         if (!bd) return;
         aoa.push([
           bd.date ? String(bd.date).split(' ')[0] : '',
           exportBranch.toUpperCase(),
-          it.productId,
+          String(it.productId),
           it.name,
           parseFloat(bd.remaining) || 0,
         ]);
       });
-      if (aoa.length === 1) { toast.error(`สาขา ${exportBranch.toUpperCase()} ไม่มีข้อมูลยอดนับ`); return; }
+      if (aoa.length === 2) { toast.error(`สาขา ${exportBranch.toUpperCase()} ไม่มีข้อมูลยอดนับ`); return; }
       const ws = XLSX.utils.aoa_to_sheet(aoa);
-      ws['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 12 }, { wch: 45 }, { wch: 11 }];
+      ws['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 12 }, { wch: 48 }, { wch: 11 }];
+      ws['!rows'] = [{ hpt: 22 }];
+
+      const headerStyle = {
+        font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
+        fill: { patternType: 'solid', fgColor: { rgb: '2E74B5' } },
+        alignment: { vertical: 'center' },
+      };
+      const thin = { style: 'thin', color: { rgb: 'ED7D31' } };
+      const dataBorder = { top: thin, bottom: thin, left: thin, right: thin };
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      for (let c = 0; c <= 4; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+        if (cell) cell.s = { ...headerStyle, alignment: { vertical: 'center', horizontal: c === 4 ? 'right' : 'left' } };
+      }
+      for (let r = 2; r <= range.e.r; r++) {
+        for (let c = 0; c <= 4; c++) {
+          const cell = ws[XLSX.utils.encode_cell({ r, c })];
+          if (!cell) continue;
+          cell.s = {
+            font: { name: 'Tahoma', sz: 11 },
+            border: dataBorder,
+            alignment: { horizontal: c === 4 ? 'right' : 'left' },
+          };
+          if (c === 4) cell.z = '0.00';
+        }
+      }
       XLSX.utils.book_append_sheet(wb, ws, exportBranch.toUpperCase());
       XLSX.writeFile(wb, `stock_${exportBranch.toUpperCase()}_${todayStr}.xlsx`);
     }
