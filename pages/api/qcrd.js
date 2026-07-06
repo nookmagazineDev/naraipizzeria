@@ -118,6 +118,8 @@ export default async function handler(req, res) {
           group: (r[2] || '').trim(),
           price: num(r[3]),
           cost: num(r[4]),
+          // F = สถานะเมนู (ว่าง = ใช้งาน)
+          status: (r[5] || '').trim() || 'ใช้งาน',
         }));
       return res.status(200).json({ status: 'success', data });
     }

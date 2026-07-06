@@ -7,7 +7,7 @@
  *   4) ใส่ env QCRD_GAS_URL บน Vercel แล้ว Redeploy (หรือใส่ fallback ใน pages/api/qcrd-gas.js)
  *
  * แท็บที่ใช้:
- *   menu : A=Code B=NameThai C=MenuCode D=UnitPrice E=cost Menu
+ *   menu : A=Code B=NameThai C=MenuCode D=UnitPrice E=cost Menu F=สถานะ(ใช้งาน/ปิดการใช้งาน)
  *   BOM  : A=เลขPOS B=ชื่อเมนู C=ลำดับ D=รหัสวัตถุดิบ E=ชื่อวัตถุดิบ F=ยอดใช้ G=1 H=ตัวแปลงหน่วย
  *          I=รหัสวัตถุดิบ(ตัด 0 นำหน้า) J=ราคาวัตถุดิบ K=ต้นทุน/หน่วยเล็ก L=(ว่าง) M=ต้นทุน/หน่วยเล็ก N=ต้นทุนรวมของแถว
  *   item : A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ(ใช้งาน/ปิดการใช้งาน) F,G,H=รหัสไอเทมทดแทน 1-3
@@ -32,6 +32,8 @@ function doPost(e) {
       res = updateItemUnits_(ss, data);
     } else if (action === 'saveItem') {
       res = saveItem_(ss, data);
+    } else if (action === 'saveMenuStatus') {
+      res = saveMenuStatus_(ss, data);
     } else {
       res.message = 'unknown action: ' + action;
     }
@@ -103,6 +105,23 @@ function saveMenu_(ss, data) {
   }
 
   return { status: 'success', data: { code: code, bomRows: bomRows.length, totalCost: costCell } };
+}
+
+// เปิด/ปิดใช้งานเมนู: เขียนสถานะลงชีท menu คอลัมน์ F ตามรหัส
+// payload: { code, status }  (status = 'ใช้งาน' | 'ปิดการใช้งาน')
+function saveMenuStatus_(ss, data) {
+  var code = String(data.code || '').trim();
+  if (!code) return { status: 'error', message: 'ต้องระบุรหัสเมนู' };
+  var sh = ss.getSheetByName('menu');
+  if (!sh) return { status: 'error', message: 'ไม่พบชีท menu' };
+  var values = sh.getRange(1, 1, sh.getLastRow(), 1).getValues();
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === code) {
+      sh.getRange(i + 1, 6).setValue(String(data.status || 'ใช้งาน').trim());
+      return { status: 'success', data: { code: code, status: data.status } };
+    }
+  }
+  return { status: 'error', message: 'ไม่พบรหัส ' + code + ' ในชีท menu' };
 }
 
 // แก้ไขข้อมูลวัตถุดิบ: ชื่อ(B) สถานะ(E) และไอเทมทดแทนสูงสุด 3 ตัว (F,G,H)

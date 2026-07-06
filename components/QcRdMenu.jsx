@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info } from 'lucide-react';
+import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft } from 'lucide-react';
 import { apiCall } from '../lib/qcrdApi';
 
 /*
@@ -20,7 +20,9 @@ export default function QcRdMenu() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [page, setPage] = useState(1);
+  const [togglingCode, setTogglingCode] = useState(null);
   const [viewCode, setViewCode] = useState(null);   // เมนูที่กำลังดูสูตร
   const [editMenu, setEditMenu] = useState(null);   // { code, name, price, items[], isNew }
   const [saving, setSaving] = useState(false);
@@ -40,15 +42,27 @@ export default function QcRdMenu() {
   };
   useEffect(loadAll, []);
 
+  // ข้อมูลวัตถุดิบตามรหัส (สถานะ/ตัวทดแทน) ใช้ฟ้องในสูตรเมื่อวัตถุดิบถูกปิดใช้งาน
+  const itemMap = useMemo(() => {
+    const m = {};
+    items.forEach(i => { m[i.code] = i; });
+    return m;
+  }, [items]);
+
+  const disabledIngredients = (code) =>
+    (bom[code]?.items || []).filter(r => itemMap[r.itemCode]?.status === 'ปิดการใช้งาน');
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = q
-      ? menus.filter(m => m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
-      : menus;
+    const list = menus.filter(m => {
+      if (statusFilter && (m.status || 'ใช้งาน') !== statusFilter) return false;
+      if (!q) return true;
+      return m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
+    });
     // เมนูที่มีสูตร (BOM) ขึ้นก่อน แล้วค่อยเรียงตามรหัส
     return [...list].sort((a, b) =>
       ((bom[b.code] ? 1 : 0) - (bom[a.code] ? 1 : 0)) || a.code.localeCompare(b.code));
-  }, [menus, bom, search]);
+  }, [menus, bom, search, statusFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
@@ -100,6 +114,22 @@ export default function QcRdMenu() {
     }
   };
 
+  // สลับสถานะเปิด/ปิดใช้งานเมนู (เขียนชีท menu คอลัมน์ F ผ่าน GAS)
+  const toggleStatus = async (m) => {
+    const next = (m.status || 'ใช้งาน') === 'ใช้งาน' ? 'ปิดการใช้งาน' : 'ใช้งาน';
+    setTogglingCode(m.code);
+    setToast(null);
+    try {
+      await apiCall('saveMenuStatus', { code: m.code, status: next });
+      setMenus(prev => prev.map(x => x.code === m.code ? { ...x, status: next } : x));
+      setToast({ ok: true, msg: `${next === 'ใช้งาน' ? 'เปิด' : 'ปิด'}ใช้งาน "${m.name}" แล้ว` });
+    } catch (err) {
+      setToast({ ok: false, msg: err.message || 'เปลี่ยนสถานะไม่สำเร็จ' });
+    } finally {
+      setTogglingCode(null);
+    }
+  };
+
   const viewMenu = viewCode ? menus.find(m => m.code === viewCode) : null;
   const viewBom = viewCode ? (bom[viewCode]?.items || []) : [];
 
@@ -129,12 +159,18 @@ export default function QcRdMenu() {
           </div>
         </div>
 
-        <div className="p-4 border-b border-slate-100">
-          <div className="relative max-w-md">
+        <div className="p-4 border-b border-slate-100 flex flex-wrap gap-3">
+          <div className="relative flex-1 min-w-[220px] max-w-md">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหารหัส / ชื่อเมนู…"
               className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="">ทุกสถานะ</option>
+            <option value="ใช้งาน">ใช้งาน</option>
+            <option value="ปิดการใช้งาน">ปิดการใช้งาน</option>
+          </select>
         </div>
 
         {error && (
@@ -152,29 +188,50 @@ export default function QcRdMenu() {
                 <th className="px-4 py-3 text-right">ราคาขาย</th>
                 <th className="px-4 py-3 text-right">ต้นทุน</th>
                 <th className="px-4 py-3 text-center">วัตถุดิบ</th>
+                <th className="px-4 py-3 text-center">สถานะ</th>
                 <th className="px-4 py-3 text-center">จัดการ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : pageRows.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-slate-400">ไม่พบเมนู</td></tr>
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">ไม่พบเมนู</td></tr>
               ) : pageRows.map(m => {
                 const nIng = bom[m.code]?.items?.length || 0;
+                const off = (m.status || 'ใช้งาน') === 'ปิดการใช้งาน';
+                const nDisabled = disabledIngredients(m.code).length;
                 return (
-                  <tr key={m.code} className={`hover:bg-indigo-50/40 ${nIng ? 'cursor-pointer' : ''}`}
+                  <tr key={m.code} className={`hover:bg-indigo-50/40 ${nIng ? 'cursor-pointer' : ''} ${off ? 'bg-rose-50/40' : ''}`}
                     onClick={() => nIng && setViewCode(m.code)}>
-                    <td className="px-4 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{m.code}</td>
-                    <td className="px-4 py-2 text-slate-800 font-medium">{m.name}</td>
-                    <td className="px-4 py-2 text-right font-mono">{fmt(m.price, 0)}</td>
-                    <td className="px-4 py-2 text-right font-mono text-slate-600">{fmt(m.cost)}</td>
-                    <td className="px-4 py-2 text-center">
+                    <td className={`px-4 py-2 font-mono text-xs whitespace-nowrap ${off ? 'text-slate-300' : 'text-slate-500'}`}>{m.code}</td>
+                    <td className={`px-4 py-2 font-medium ${off ? 'text-slate-400' : 'text-slate-800'}`}>{m.name}</td>
+                    <td className={`px-4 py-2 text-right font-mono ${off ? 'text-slate-300' : ''}`}>{fmt(m.price, 0)}</td>
+                    <td className={`px-4 py-2 text-right font-mono ${off ? 'text-slate-300' : 'text-slate-600'}`}>{fmt(m.cost)}</td>
+                    <td className="px-4 py-2 text-center whitespace-nowrap">
                       {nIng ? (
-                        <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full text-xs font-semibold">{nIng} รายการ</span>
+                        <span className="inline-flex items-center gap-1">
+                          <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full text-xs font-semibold">{nIng} รายการ</span>
+                          {nDisabled > 0 && (
+                            <span title={`มีวัตถุดิบถูกปิดใช้งาน ${nDisabled} รายการ`}
+                              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-rose-50 text-rose-600 border border-rose-200 rounded-full text-[10px] font-bold">
+                              <AlertTriangle size={9} />{nDisabled}
+                            </span>
+                          )}
+                        </span>
                       ) : <span className="text-slate-300 text-xs">ไม่มีสูตร</span>}
+                    </td>
+                    <td className="px-4 py-2 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                      <button onClick={() => toggleStatus(m)} disabled={togglingCode === m.code}
+                        title={off ? 'กดเพื่อเปิดใช้งาน' : 'กดเพื่อปิดใช้งาน'}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all ${off
+                          ? 'bg-rose-100 text-rose-600 border-rose-200 hover:bg-rose-200'
+                          : 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'}`}>
+                        {togglingCode === m.code ? <Loader2 size={11} className="animate-spin" /> : <Power size={11} />}
+                        {off ? 'ปิดการใช้งาน' : 'ใช้งาน'}
+                      </button>
                     </td>
                     <td className="px-4 py-2 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <button onClick={() => openEdit(m)}
@@ -234,17 +291,35 @@ export default function QcRdMenu() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {viewBom.map((r, i) => (
-                    <tr key={i} className={/ยกเลิก/.test(r.itemName) ? 'text-slate-300 line-through' : ''}>
-                      <td className="px-3 py-1.5 text-slate-400">{r.seq || i + 1}</td>
-                      <td className="px-3 py-1.5 font-mono text-xs text-slate-500">{r.itemCode}</td>
-                      <td className="px-3 py-1.5">{r.itemName}</td>
-                      <td className="px-3 py-1.5 text-right font-mono">{fmt(r.qty, 2)}</td>
-                      <td className="px-3 py-1.5 text-right font-mono text-slate-400">{fmt(r.converter, 0)}</td>
-                      <td className="px-3 py-1.5 text-right font-mono">{fmt(r.itemPrice)}</td>
-                      <td className="px-3 py-1.5 text-right font-mono font-semibold">{fmt(r.lineCost)}</td>
-                    </tr>
-                  ))}
+                  {viewBom.map((r, i) => {
+                    const info = itemMap[r.itemCode];
+                    const offItem = info?.status === 'ปิดการใช้งาน';
+                    const subs = offItem ? (info?.subs || []) : [];
+                    return (
+                      <tr key={i} className={/ยกเลิก/.test(r.itemName) ? 'text-slate-300 line-through' : offItem ? 'bg-rose-50/50' : ''}>
+                        <td className="px-3 py-1.5 text-slate-400">{r.seq || i + 1}</td>
+                        <td className="px-3 py-1.5 font-mono text-xs text-slate-500">{r.itemCode}</td>
+                        <td className="px-3 py-1.5">
+                          {r.itemName}
+                          {offItem && (
+                            <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded-full text-[10px] font-bold align-middle">
+                              <AlertTriangle size={9} /> ปิดใช้งาน
+                            </span>
+                          )}
+                          {subs.length > 0 && (
+                            <div className="mt-0.5 text-[11px] text-sky-600 flex items-center gap-1 flex-wrap">
+                              <ArrowRightLeft size={10} className="flex-shrink-0" />
+                              ทดแทน: {subs.map(c => itemMap[c]?.name || c).join(' / ')}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-1.5 text-right font-mono">{fmt(r.qty, 2)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono text-slate-400">{fmt(r.converter, 0)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono">{fmt(r.itemPrice)}</td>
+                        <td className="px-3 py-1.5 text-right font-mono font-semibold">{fmt(r.lineCost)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-indigo-200 font-bold">
@@ -350,7 +425,12 @@ function IngredientRow({ row, items, onChange, onRemove }) {
       <div className="relative flex-1 min-w-[240px]">
         {row.itemCode ? (
           <div className="flex items-center justify-between gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm">
-            <span className="truncate"><span className="font-mono text-xs text-slate-400 mr-1.5">{row.itemCode}</span>{row.itemName}</span>
+            <span className="truncate">
+              <span className="font-mono text-xs text-slate-400 mr-1.5">{row.itemCode}</span>{row.itemName}
+              {items.find(i => i.code === row.itemCode)?.status === 'ปิดการใช้งาน' && (
+                <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded-full text-[10px] font-bold align-middle">ปิดใช้งาน</span>
+              )}
+            </span>
             <button onClick={() => { onChange({ ...row, itemCode: '', itemName: '' }); setQuery(''); }}
               className="text-slate-300 hover:text-rose-500 flex-shrink-0"><X size={14} /></button>
           </div>
