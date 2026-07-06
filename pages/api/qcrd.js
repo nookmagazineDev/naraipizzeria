@@ -156,6 +156,9 @@ export default async function handler(req, res) {
             price: num(r[2]),
             unit: sheetUnit || inferUnit(name),
             unitSource: sheetUnit ? 'sheet' : 'auto',
+            // E=สถานะ (ว่าง = ใช้งาน), F–H = รหัสไอเทมทดแทน (สูงสุด 3)
+            status: (r[4] || '').trim() || 'ใช้งาน',
+            subs: [r[5], r[6], r[7]].map(s => (s || '').trim()).filter(Boolean),
           };
         });
       return res.status(200).json({ status: 'success', data });

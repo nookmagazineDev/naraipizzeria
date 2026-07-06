@@ -42,9 +42,13 @@ export default function QcRdMenu() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return menus;
-    return menus.filter(m => m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
-  }, [menus, search]);
+    const list = q
+      ? menus.filter(m => m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+      : menus;
+    // เมนูที่มีสูตร (BOM) ขึ้นก่อน แล้วค่อยเรียงตามรหัส
+    return [...list].sort((a, b) =>
+      ((bom[b.code] ? 1 : 0) - (bom[a.code] ? 1 : 0)) || a.code.localeCompare(b.code));
+  }, [menus, bom, search]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
@@ -292,6 +296,12 @@ export default function QcRdMenu() {
                     className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800">
                     <Plus size={13} /> เพิ่มวัตถุดิบ
                   </button>
+                </div>
+                <div className="hidden sm:flex items-center gap-2 px-2 text-[11px] font-bold text-slate-400 uppercase tracking-wide">
+                  <span className="flex-1 min-w-[240px]">วัตถุดิบ</span>
+                  <span className="w-24 text-right">ยอดใช้</span>
+                  <span className="w-24 text-right">ตัวแปลงหน่วย</span>
+                  <span className="w-8" />
                 </div>
                 <div className="space-y-2">
                   {editMenu.items.map((r, idx) => (
