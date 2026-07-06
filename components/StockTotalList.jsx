@@ -436,38 +436,56 @@ export default function StockTotalList() {
       {/* Branch Details Modal */}
       {selectedBranchDetails && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedBranchDetails(null)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between p-4 border-b border-indigo-100 bg-indigo-50/50">
               <h3 className="font-bold text-indigo-800">ยอดคงเหลือรายสาขา</h3>
               <button onClick={() => setSelectedBranchDetails(null)} className="text-indigo-400 hover:text-indigo-700 font-bold text-xl leading-none">&times;</button>
             </div>
-            <div className="p-4 max-h-[60vh] overflow-y-auto">
+            <div className="p-4 max-h-[65vh] overflow-y-auto">
               <p className="text-sm text-gray-700 mb-4 font-semibold border-b pb-3">{selectedBranchDetails.name}</p>
-              
-              {selectedBranchDetails.details.length > 0 ? (
-                <div className="space-y-2">
-                  {[...selectedBranchDetails.details].sort((a,b) => String(a.branch).localeCompare(String(b.branch))).map((entry, idx) => (
-                    <div key={idx} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl border border-gray-100">
-                      <div>
-                        <div className="font-medium text-gray-800 text-sm uppercase">{entry.branch}</div>
-                        {entry.date && <div className="text-[11px] text-gray-500 mt-0.5">📅 ลงยอด ณ วันที่: <span className="font-semibold text-indigo-500">{String(entry.date).split(' ')[0]}</span>{entry.type && <span className="ml-1 text-gray-400">({entry.type})</span>}</div>}
-                      </div>
-                      <div className="text-right">
-                        <div className={`font-bold text-lg ${parseFloat(entry.remaining) < 0 ? 'text-red-500' : 'text-indigo-600'}`}>
-                          {entry.remaining}
-                        </div>
-                        <div className="text-[10px] text-gray-400 mt-0.5">ยอดคงเหลือ</div>
-                      </div>
-                    </div>
-                  ))}
-                  <div className="flex justify-between items-center p-3 bg-indigo-50 rounded-xl border-2 border-indigo-200 font-bold">
-                    <span className="text-indigo-800 text-sm">รวมทุกสาขา</span>
-                    <span className="text-indigo-700 text-lg">
-                      {Number(selectedBranchDetails.details.reduce((s, b) => s + (parseFloat(b.remaining) || 0), 0).toFixed(2))}
-                    </span>
+
+              {selectedBranchDetails.details.length > 0 ? (() => {
+                // ตารางแนวนอน: หัวคอลัมน์ = ชื่อสาขา, แถวข้อมูล = จำนวน + วันที่กรอกข้อมูล
+                const entries = [...selectedBranchDetails.details].sort((a, b) => String(a.branch).localeCompare(String(b.branch)));
+                const total = Number(entries.reduce((s, b) => s + (parseFloat(b.remaining) || 0), 0).toFixed(2));
+                return (
+                  <div className="overflow-x-auto border border-indigo-100 rounded-xl">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="bg-indigo-50/70">
+                          <th className="px-3 py-2 text-left text-xs font-bold text-indigo-800 uppercase sticky left-0 bg-indigo-50 whitespace-nowrap border-r border-indigo-100"></th>
+                          {entries.map((e, i) => (
+                            <th key={i} className="px-3 py-2 text-center text-xs font-bold text-indigo-800 uppercase whitespace-nowrap">
+                              {e.branch}{e.type && <div className="text-[9px] font-normal text-gray-400 normal-case">({e.type})</div>}
+                            </th>
+                          ))}
+                          <th className="px-3 py-2 text-center text-xs font-bold text-white bg-indigo-500 uppercase whitespace-nowrap">รวม</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        <tr>
+                          <td className="px-3 py-2.5 text-xs font-semibold text-gray-500 sticky left-0 bg-white whitespace-nowrap border-r border-indigo-100">จำนวน</td>
+                          {entries.map((e, i) => (
+                            <td key={i} className={`px-3 py-2.5 text-center font-bold ${parseFloat(e.remaining) < 0 ? 'text-red-500' : 'text-indigo-600'}`}>
+                              {e.remaining}
+                            </td>
+                          ))}
+                          <td className="px-3 py-2.5 text-center font-bold text-indigo-700 bg-indigo-50">{total}</td>
+                        </tr>
+                        <tr className="bg-gray-50/60">
+                          <td className="px-3 py-2 text-xs font-semibold text-gray-500 sticky left-0 bg-gray-50 whitespace-nowrap border-r border-indigo-100">วันที่กรอกข้อมูล</td>
+                          {entries.map((e, i) => (
+                            <td key={i} className="px-3 py-2 text-center text-[11px] text-gray-500 whitespace-nowrap">
+                              {e.date ? String(e.date).split(' ')[0] : '—'}
+                            </td>
+                          ))}
+                          <td className="px-3 py-2 bg-indigo-50/40"></td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
-                </div>
-              ) : (
+                );
+              })() : (
                 <div className="text-center py-8 text-gray-400 text-sm">ไม่มีข้อมูลสาขา</div>
               )}
             </div>
