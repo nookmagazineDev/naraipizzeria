@@ -96,8 +96,13 @@ export function inferUnit(name) {
   return '';
 }
 
+// อ่านผ่าน export?format=csv (ค่าดิบตรงตามชีท) — ห้ามใช้ gviz เพราะ gviz เดาชนิดคอลัมน์
+// แล้วทิ้งค่าที่ไม่ตรงชนิด เช่น รหัสเมนูที่เป็นข้อความในคอลัมน์ที่ส่วนใหญ่เป็นตัวเลข จะกลายเป็นช่องว่าง
+const SHEET_GIDS = { menu: '0', BOM: '419926693', item: '302875824' };
+
 async function fetchSheet(name) {
-  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`;
+  const gid = SHEET_GIDS[name];
+  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`;
   const r = await fetch(url, { cache: 'no-store', redirect: 'follow' });
   if (!r.ok) throw new Error(`Google Sheets HTTP ${r.status} (${name})`);
   return parseCSV(await r.text());
