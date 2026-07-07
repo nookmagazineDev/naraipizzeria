@@ -34,6 +34,8 @@ function doPost(e) {
       res = saveItem_(ss, data);
     } else if (action === 'saveMenuStatus') {
       res = saveMenuStatus_(ss, data);
+    } else if (action === 'sortBom') {
+      res = sortBom_(ss);
     } else {
       res.message = 'unknown action: ' + action;
     }
@@ -102,9 +104,25 @@ function saveMenu_(ss, data) {
   }
   if (bomRows.length) {
     bomSh.getRange(bomSh.getLastRow() + 1, 1, bomRows.length, bomRows[0].length).setValues(bomRows);
+    sortBom_(ss); // จัดเรียงชีท BOM ใหม่ทุกครั้ง สูตรของเมนูเดียวกันจะอยู่ติดกันเสมอ
   }
 
   return { status: 'success', data: { code: code, bomRows: bomRows.length, totalCost: costCell } };
+}
+
+// เรียงชีท BOM ตามรหัสเมนู (คอลัมน์ A) แล้วตามลำดับวัตถุดิบ (คอลัมน์ C)
+// รหัสตัวเลขเรียงตามค่าตัวเลข รหัสข้อความไปอยู่ท้ายชีท
+function sortBom_(ss) {
+  var sh = ss.getSheetByName('BOM');
+  if (!sh) return { status: 'error', message: 'ไม่พบชีท BOM' };
+  var last = sh.getLastRow();
+  if (last > 2) {
+    sh.getRange(2, 1, last - 1, sh.getLastColumn()).sort([
+      { column: 1, ascending: true },
+      { column: 3, ascending: true },
+    ]);
+  }
+  return { status: 'success', data: { sortedRows: Math.max(0, last - 1) } };
 }
 
 // เปิด/ปิดใช้งานเมนู: เขียนสถานะลงชีท menu คอลัมน์ F ตามรหัส
