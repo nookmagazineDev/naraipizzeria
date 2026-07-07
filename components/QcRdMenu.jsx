@@ -59,11 +59,11 @@ export default function QcRdMenu() {
       if (!q) return true;
       return m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
     });
-    // เมนูที่มีสูตร (BOM) ขึ้นก่อน แล้วเรียงรหัสแบบตัวเลข (102001 < 104007 < 11000035)
-    // ไม่ใช่เทียบทีละตัวอักษรซึ่งทำให้รหัสยาวสลับกลางรหัสสั้น
+    // เมนูที่มีสูตร (BOM) ขึ้นก่อน แล้วคงลำดับเดิมตามชีท menu (ไม่เรียงตามเลขรหัส)
+    const idx = new Map(menus.map((m, i) => [m.code, i]));
     return [...list].sort((a, b) =>
       ((bom[b.code] ? 1 : 0) - (bom[a.code] ? 1 : 0)) ||
-      a.code.localeCompare(b.code, undefined, { numeric: true }));
+      ((idx.get(a.code) ?? 0) - (idx.get(b.code) ?? 0)));
   }, [menus, bom, search, statusFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));

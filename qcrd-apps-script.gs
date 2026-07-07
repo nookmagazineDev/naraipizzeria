@@ -110,19 +110,40 @@ function saveMenu_(ss, data) {
   return { status: 'success', data: { code: code, bomRows: bomRows.length, totalCost: costCell } };
 }
 
-// เรียงชีท BOM ตามรหัสเมนู (คอลัมน์ A) แล้วตามลำดับวัตถุดิบ (คอลัมน์ C)
-// รหัสตัวเลขเรียงตามค่าตัวเลข รหัสข้อความไปอยู่ท้ายชีท
+// เรียงชีท BOM ให้ลำดับเมนู "ตรงกับหน้าเว็บ" — คือเรียงตามลำดับแถวในชีท menu
+// (ไม่เรียงตามเลขรหัส) แล้วภายในเมนูเดียวกันเรียงตามลำดับวัตถุดิบ (คอลัมน์ C)
+// เมนูที่ไม่มีในชีท menu จะไปอยู่ท้ายชีท
 function sortBom_(ss) {
   var sh = ss.getSheetByName('BOM');
   if (!sh) return { status: 'error', message: 'ไม่พบชีท BOM' };
   var last = sh.getLastRow();
-  if (last > 2) {
-    sh.getRange(2, 1, last - 1, sh.getLastColumn()).sort([
-      { column: 1, ascending: true },
-      { column: 3, ascending: true },
-    ]);
+  var lastCol = sh.getLastColumn();
+  if (last <= 2) return { status: 'success', data: { sortedRows: 0 } };
+
+  // สร้างแผนที่ลำดับเมนูจากชีท menu: รหัสเมนู -> ตำแหน่งแถว (ใช้เป็นคีย์เรียง)
+  var order = {};
+  var menuSh = ss.getSheetByName('menu');
+  if (menuSh) {
+    var mv = menuSh.getRange(1, 1, menuSh.getLastRow(), 1).getValues();
+    for (var i = 1; i < mv.length; i++) {
+      var c = String(mv[i][0] || '').trim();
+      if (c && order[c] === undefined) order[c] = i;
+    }
   }
-  return { status: 'success', data: { sortedRows: Math.max(0, last - 1) } };
+  var BIG = 1e9;
+
+  var range = sh.getRange(2, 1, last - 1, lastCol);
+  var rows = range.getValues();
+  rows.sort(function (a, b) {
+    var oa = order[String(a[0] || '').trim()];
+    var ob = order[String(b[0] || '').trim()];
+    if (oa === undefined) oa = BIG;
+    if (ob === undefined) ob = BIG;
+    if (oa !== ob) return oa - ob;
+    return (Number(a[2]) || 0) - (Number(b[2]) || 0); // ลำดับวัตถุดิบในเมนูเดียวกัน
+  });
+  range.setValues(rows);
+  return { status: 'success', data: { sortedRows: rows.length } };
 }
 
 // เปิด/ปิดใช้งานเมนู: เขียนสถานะลงชีท menu คอลัมน์ F ตามรหัส
