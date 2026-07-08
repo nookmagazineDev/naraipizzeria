@@ -11,6 +11,7 @@
  *   BOM  : A=เลขPOS B=ชื่อเมนู C=ลำดับ D=รหัสวัตถุดิบ E=ชื่อวัตถุดิบ F=ยอดใช้ G=1 H=ตัวแปลงหน่วย
  *          I=รหัสวัตถุดิบ(ตัด 0 นำหน้า) J=ราคาวัตถุดิบ K=ต้นทุน/หน่วยเล็ก L=(ว่าง) M=ต้นทุน/หน่วยเล็ก N=ต้นทุนรวมของแถว
  *   item : A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ(ใช้งาน/ปิดการใช้งาน) F,G,H=รหัสไอเทมทดแทน 1-3
+ *          I=ตัวแปลงหน่วย(หน่วยเล็กต่อ 1 หน่วยซื้อ) J=สาขาที่ใช้(คั่นด้วย ,)
  */
 
 var SHEET_ID = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
@@ -163,8 +164,8 @@ function saveMenuStatus_(ss, data) {
   return { status: 'error', message: 'ไม่พบรหัส ' + code + ' ในชีท menu' };
 }
 
-// แก้ไขข้อมูลวัตถุดิบ: ชื่อ(B) สถานะ(E) และไอเทมทดแทนสูงสุด 3 ตัว (F,G,H)
-// payload: { code, name, status, subs: ['รหัส1','รหัส2','รหัส3'] }
+// แก้ไขข้อมูลวัตถุดิบ: ชื่อ(B) ราคา(C) สถานะ(E) ไอเทมทดแทน(F-H) ตัวแปลงหน่วย(I) สาขาที่ใช้(J)
+// payload: { code, name, price, status, subs: ['รหัส1','รหัส2','รหัส3'], converter, branches: ['SJP','CRM'] }
 function saveItem_(ss, data) {
   var code = String(data.code || '').trim();
   if (!code) return { status: 'error', message: 'ต้องระบุรหัสวัตถุดิบ' };
@@ -175,10 +176,19 @@ function saveItem_(ss, data) {
     if (String(values[i][0] || '').trim() === code) {
       var row = i + 1;
       if (data.name !== undefined && String(data.name).trim()) sh.getRange(row, 2).setValue(String(data.name).trim());
+      if (data.price !== undefined && data.price !== '' && !isNaN(Number(data.price))) {
+        sh.getRange(row, 3).setValue(Number(data.price));
+      }
       if (data.status !== undefined) sh.getRange(row, 5).setValue(String(data.status || 'ใช้งาน').trim());
       if (data.subs !== undefined) {
         var subs = (data.subs || []).slice(0, 3);
         sh.getRange(row, 6, 1, 3).setValues([[subs[0] || '', subs[1] || '', subs[2] || '']]);
+      }
+      if (data.converter !== undefined) {
+        sh.getRange(row, 9).setValue(data.converter === '' ? '' : Number(data.converter) || '');
+      }
+      if (data.branches !== undefined) {
+        sh.getRange(row, 10).setValue((data.branches || []).join(','));
       }
       return { status: 'success', data: { code: code, row: row } };
     }

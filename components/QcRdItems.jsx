@@ -12,6 +12,12 @@ import { apiCall } from '../lib/qcrdApi';
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
   : Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// รายชื่อสาขาสำหรับเลือก "สาขาที่ใช้ไอเทม" (ชุดเดียวกับหน้าค่าใช้จ่าย)
+const BRANCHES = [
+  'SJP', 'CRM', 'XCM', 'SLR', 'SUM', 'XUM', 'SCS', 'SMP', 'XSB', 'XHH',
+  'HRS', 'CLK', 'P90', 'HPS', 'ZBW', 'ZPT', 'NPT', 'WRM', 'WMT', 'IPR', 'ZK3',
+];
+
 export default function QcRdItems() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -72,7 +78,14 @@ export default function QcRdItems() {
     }
   };
 
-  const openEdit = (i) => setEditItem({ code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])] });
+  const openEdit = (i) => setEditItem({
+    code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])],
+    price: i.price ?? '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
+  });
+
+  const toggleBranch = (b) => setEditItem(m => ({
+    ...m, branches: m.branches.includes(b) ? m.branches.filter(x => x !== b) : [...m.branches, b],
+  }));
 
   const saveItem = async () => {
     if (!editItem.name.trim()) { setToast({ ok: false, msg: 'กรุณากรอกชื่อวัตถุดิบ' }); return; }
@@ -82,6 +95,8 @@ export default function QcRdItems() {
       await apiCall('saveItem', {
         code: editItem.code, name: editItem.name.trim(),
         status: editItem.status, subs: editItem.subs.slice(0, 3),
+        price: editItem.price, converter: editItem.converter,
+        branches: editItem.branches,
       });
       setToast({ ok: true, msg: `บันทึก ${editItem.code} สำเร็จ` });
       setEditItem(null);
@@ -158,6 +173,8 @@ export default function QcRdItems() {
                 <th className="px-4 py-3 text-left">ชื่อ</th>
                 <th className="px-4 py-3 text-center">หน่วย</th>
                 <th className="px-4 py-3 text-right">ราคาต้นทุน</th>
+                <th className="px-3 py-3 text-right">ตัวแปลง</th>
+                <th className="px-3 py-3 text-left">สาขาที่ใช้</th>
                 <th className="px-4 py-3 text-center">สถานะ</th>
                 <th className="px-4 py-3 text-left">ไอเทมทดแทน</th>
                 <th className="px-4 py-3 text-center">จัดการ</th>
@@ -165,11 +182,11 @@ export default function QcRdItems() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
+                <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
               ) : filtered.map(i => (
                 <tr key={i.code} className={`hover:bg-slate-50/60 ${i.status === 'ปิดการใช้งาน' ? 'bg-rose-50/40 text-slate-400' : ''}`}>
                   <td className="px-4 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{i.code}</td>
@@ -182,6 +199,21 @@ export default function QcRdItems() {
                     ) : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-4 py-2 text-right font-mono">{fmt(i.price)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-500">
+                    {i.converter != null && !isNaN(i.converter) ? Number(i.converter).toLocaleString() : <span className="text-slate-300">—</span>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {(i.usedBranches || []).length === 0 ? <span className="text-slate-300 text-xs">—</span> : (
+                      <div className="flex flex-wrap gap-1 max-w-[180px]" title={i.usedBranches.join(', ')}>
+                        {i.usedBranches.slice(0, 4).map(b => (
+                          <span key={b} className="inline-block px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-semibold">{b}</span>
+                        ))}
+                        {i.usedBranches.length > 4 && (
+                          <span className="inline-block px-1.5 py-0.5 bg-slate-200 text-slate-500 rounded text-[10px] font-bold">+{i.usedBranches.length - 4}</span>
+                        )}
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-2 text-center whitespace-nowrap">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${i.status === 'ปิดการใช้งาน' ? 'bg-rose-100 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
                       {i.status}
@@ -233,6 +265,46 @@ export default function QcRdItems() {
                 <label className="text-xs font-bold text-slate-500">ชื่อวัตถุดิบ</label>
                 <input value={editItem.name} onChange={e => setEditItem(m => ({ ...m, name: e.target.value }))}
                   className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-500">ราคาต้นทุน (บาท/หน่วยซื้อ)</label>
+                  <input type="number" inputMode="decimal" value={editItem.price}
+                    onChange={e => setEditItem(m => ({ ...m, price: e.target.value }))} placeholder="0.00"
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500">ตัวแปลงหน่วย <span className="font-normal">(หน่วยเล็กต่อ 1 หน่วยซื้อ เช่น 1000)</span></label>
+                  <input type="number" inputMode="decimal" value={editItem.converter}
+                    onChange={e => setEditItem(m => ({ ...m, converter: e.target.value }))} placeholder="เช่น 1000"
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-500">สาขาที่ใช้ไอเทมนี้</label>
+                  <span className="text-[11px] text-slate-400">
+                    เลือกแล้ว {editItem.branches.length} สาขา
+                    {editItem.branches.length > 0 && (
+                      <button onClick={() => setEditItem(m => ({ ...m, branches: [] }))} className="ml-2 text-rose-400 hover:text-rose-600 underline">ล้าง</button>
+                    )}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {BRANCHES.map(b => {
+                    const on = editItem.branches.includes(b);
+                    return (
+                      <button key={b} onClick={() => toggleBranch(b)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${on
+                          ? 'bg-emerald-500 border-emerald-500 text-white'
+                          : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                        {b}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div>

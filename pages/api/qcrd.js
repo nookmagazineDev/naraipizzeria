@@ -166,6 +166,9 @@ export default async function handler(req, res) {
             // E=สถานะ (ว่าง = ใช้งาน), F–H = รหัสไอเทมทดแทน (สูงสุด 3)
             status: (r[4] || '').trim() || 'ใช้งาน',
             subs: [r[5], r[6], r[7]].map(s => (s || '').trim()).filter(Boolean),
+            // I=ตัวแปลงหน่วย (หน่วยเล็กต่อ 1 หน่วยซื้อ), J=สาขาที่ใช้ (คั่นด้วย ,)
+            converter: num(r[8]),
+            usedBranches: (r[9] || '').split(',').map(s => s.trim()).filter(Boolean),
           };
         });
       return res.status(200).json({ status: 'success', data });
