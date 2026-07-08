@@ -293,6 +293,13 @@ export default function QcRdItems() {
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
+                  {/* ปุ่มเลือก/ยกเลิกทุกสาขาในคลิกเดียว */}
+                  <button onClick={() => setEditItem(m => ({ ...m, branches: m.branches.length === BRANCHES.length ? [] : [...BRANCHES] }))}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${editItem.branches.length === BRANCHES.length
+                      ? 'bg-emerald-600 border-emerald-600 text-white'
+                      : 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'}`}>
+                    ✓ ทุกสาขา
+                  </button>
                   {BRANCHES.map(b => {
                     const on = editItem.branches.includes(b);
                     return (
