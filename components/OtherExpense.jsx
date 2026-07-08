@@ -1,5 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { DollarSign, Save, Building2, Calendar, Info, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { DollarSign, Save, Building2, Calendar, Info, Loader2, CheckCircle, AlertCircle, Download, Upload, FileSpreadsheet } from 'lucide-react';
+import * as XLSX from 'xlsx-js-style';
 import { apiCall } from '../lib/expenseApi';
 
 /*
@@ -118,6 +119,118 @@ export default function OtherExpense() {
     }
   };
 
+  // ── เทมเพลท Excel: แถวครบทุกสาขา × ประเภท × มิเตอร์ (จากชีทอ้างอิง) กรอกแค่ตัวเลข ──
+  const fileRef = useRef(null);
+  const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const HEAD_STYLE = {
+    font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
+    fill: { patternType: 'solid', fgColor: { rgb: 'D97706' } },
+  };
+
+  const downloadTemplate = () => {
+    const aoa = [['เดือน (YYYY-MM)', 'สาขา', 'ประเภท', 'รหัสมิเตอร์', 'เลขเริ่มต้น', 'เลขสิ้นสุด', 'ราคาต่อหน่วย', 'ผลรวม (กรอกเมื่อไม่มีเลขมิเตอร์)']];
+    refs.branches.forEach(b => {
+      EXPENSE_TYPES.forEach(type => {
+        const codes = refs.codesMap[refKey(type, b)] || [''];
+        codes.forEach(code => aoa.push([month, b, type, code, '', '', '', '']));
+      });
+    });
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 14 }, { wch: 8 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 26 }];
+    for (let c = 0; c < 8; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+      if (cell) cell.s = HEAD_STYLE;
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'กรอกข้อมูล');
+    XLSX.writeFile(wb, `expense_template_${month}.xlsx`);
+    setToast({ ok: true, msg: `ดาวน์โหลดเทมเพลทแล้ว (${aoa.length - 1} แถว ${refs.branches.length} สาขา) — แถวที่ไม่กรอกตัวเลขจะถูกข้ามตอน import` });
+  };
+
+  // ── Import: อ่านไฟล์เทมเพลทที่กรอกแล้ว → แปลงเป็นแถว → ยืนยัน → bulkImport ──
+  const handleImport = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // ให้เลือกไฟล์เดิมซ้ำได้
+    if (!file) return;
+    setImporting(true);
+    setToast(null);
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+      const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '', raw: true });
+      const hIdx = aoa.findIndex(r => r.some(c => String(c).includes('เดือน')) && r.some(c => String(c).includes('สาขา')));
+      if (hIdx < 0) throw new Error('ไม่พบหัวตาราง — ต้องมีคอลัมน์ เดือน/สาขา/ประเภท (ใช้ไฟล์จากปุ่มดาวน์โหลดเทมเพลท)');
+      const header = aoa[hIdx].map(c => String(c));
+      const col = name => header.findIndex(h => h.includes(name));
+      const ci = {
+        month: col('เดือน'), branch: col('สาขา'), type: col('ประเภท'), code: col('รหัส'),
+        start: col('เริ่มต้น'), end: col('สิ้นสุด'), price: col('ราคา'), total: col('ผลรวม'),
+      };
+      const fmtMonth = v => {
+        if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}`;
+        if (typeof v === 'number') { const d = XLSX.SSF.parse_date_code(v); if (d) return `${d.y}-${String(d.m).padStart(2, '0')}`; }
+        return String(v || '').trim();
+      };
+      const num = v => (v === '' || v == null || isNaN(parseFloat(v))) ? '' : parseFloat(v);
+      const rows = [];
+      for (let i = hIdx + 1; i < aoa.length; i++) {
+        const r = aoa[i];
+        const m = fmtMonth(r[ci.month]);
+        const b = String(r[ci.branch] || '').trim().toUpperCase();
+        const t = String(r[ci.type] || '').trim();
+        const start = num(r[ci.start]), end = num(r[ci.end]), price = num(r[ci.price]);
+        const total = ci.total >= 0 ? num(r[ci.total]) : '';
+        if (!m || !b || !t) continue;
+        if (start === '' && end === '' && price === '' && total === '') continue; // ไม่ได้กรอก = ข้าม
+        rows.push({ month: m, branch: b, type: t, code: String(r[ci.code] || '').trim(), start, end, price, total });
+      }
+      if (!rows.length) throw new Error('ไม่พบแถวที่กรอกตัวเลขในไฟล์');
+      const months = [...new Set(rows.map(r => r.month))].sort();
+      const brs = [...new Set(rows.map(r => r.branch))].sort();
+      const ok = window.confirm(
+        `พบข้อมูลที่กรอก ${rows.length} แถว\nเดือน: ${months.join(', ')}\nสาขา (${brs.length}): ${brs.join(' ')}\n\nยืนยันบันทึกลงชีท? (การ import ซ้ำจะได้แถวซ้ำ)`
+      );
+      if (!ok) return;
+      const res = await apiCall('bulkImport', { rows });
+      setToast({ ok: true, msg: `นำเข้าสำเร็จ ${res.data?.appended ?? rows.length} แถว (${brs.length} สาขา)` });
+    } catch (err) {
+      setToast({ ok: false, msg: err.message || 'นำเข้าไม่สำเร็จ' });
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // ── Export ข้อมูลที่บันทึกไว้ทั้งหมดจากชีท → Excel ──
+  const exportData = async () => {
+    setExporting(true);
+    setToast(null);
+    try {
+      const res = await apiCall('getExpenses', {});
+      const list = res.data || [];
+      if (!list.length) { setToast({ ok: false, msg: 'ยังไม่มีข้อมูลในชีท' }); return; }
+      const aoa = [['เดือน', 'ประเภท', 'สาขา', 'รหัส', 'เลขเริ่มต้น', 'เลขสิ้นสุด', 'จำนวน', 'ราคาต่อหน่วย', 'ผลรวม']];
+      list.forEach(r => aoa.push([r.month, r.type, r.branch, r.code, r.start, r.end, r.qty, r.price, r.total]));
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 8 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 12 }];
+      for (let c = 0; c < 9; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+        if (cell) cell.s = HEAD_STYLE;
+      }
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'ค่าใช้จ่ายอื่น');
+      XLSX.writeFile(wb, `expense_data_${new Date().toISOString().split('T')[0]}.xlsx`);
+      setToast({ ok: true, msg: `Export สำเร็จ ${list.length} แถว` });
+    } catch (err) {
+      const msg = /unknown action/.test(err.message || '')
+        ? 'ต้องอัปเดต Apps Script ก่อน (วางโค้ดใหม่ + Deploy new version) จึงจะ Export ได้'
+        : (err.message || 'Export ไม่สำเร็จ');
+      setToast({ ok: false, msg });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="max-w-5xl mx-auto space-y-5">
       {/* Header */}
@@ -145,6 +258,25 @@ export default function OtherExpense() {
               {refs.branches.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
           </div>
+        </div>
+
+        {/* เครื่องมือ Excel: เทมเพลทกรอกหลายสาขา / Import / Export */}
+        <div className="px-6 pb-5 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4">
+          <span className="text-xs font-bold text-slate-400 uppercase tracking-wide mr-1">Excel:</span>
+          <button onClick={downloadTemplate} disabled={!refs.loaded}
+            title="เทมเพลทมีแถวครบทุกสาขา×ประเภท×มิเตอร์ กรอกเฉพาะตัวเลขแล้วนำมา Import"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 disabled:opacity-50 transition-all">
+            <FileSpreadsheet size={14} /> ดาวน์โหลดเทมเพลท (ทุกสาขา)
+          </button>
+          <button onClick={() => fileRef.current?.click()} disabled={importing}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-emerald-500 border border-emerald-500 rounded-xl hover:bg-emerald-600 disabled:opacity-50 transition-all">
+            {importing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} Import Excel
+          </button>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImport} />
+          <button onClick={exportData} disabled={exporting}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-50 transition-all">
+            {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Export ข้อมูลที่บันทึก
+          </button>
         </div>
       </div>
 

@@ -15,7 +15,8 @@
  *   บันทึก   : แท็บ "ค่าใช้จ่ายอื่น"    A=เดือน B=ประเภท C=สาขา D=รหัส E=เลขเริ่มต้น F=เลขสิ้นสุด G=จำนวน(E-F) H=ราคา/หน่วย I=ผลรวม
  *
  * actions: getExpenseRefs (อ่านรหัส) · saveOtherExpense (บันทึกจากฟอร์ม) ·
- *          bulkImport (นำเข้าหลายแถวรวดเดียว) · deleteExpenseByMonth (ลบตามเดือน)
+ *          bulkImport (นำเข้าหลายแถวรวดเดียว) · deleteExpenseByMonth (ลบตามเดือน) ·
+ *          getExpenses (อ่านข้อมูลที่บันทึกทั้งหมด — ใช้กับปุ่ม Export)
  */
 
 var REF_SHEET_ID  = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';            // อ่านรหัส/สาขา
@@ -79,6 +80,22 @@ function doPost(e) {
       res.status = 'success';
       res.data = { appended: out2.length };
 
+    } else if (action === 'getExpenses') {
+      // อ่านข้อมูลที่บันทึกทั้งหมดจากแท็บ "ค่าใช้จ่ายอื่น" (ใช้กับปุ่ม Export)
+      var shR = getDataSheet_();
+      var vr = shR.getDataRange().getValues();
+      var list = [];
+      for (var y = 1; y < vr.length; y++) {
+        var rr = vr[y];
+        if (rr[0] === '' && rr[1] === '' && rr[2] === '') continue;
+        list.push({
+          month: fmtMonth_(rr[0]), type: String(rr[1] || ''), branch: String(rr[2] || ''),
+          code: String(rr[3] || ''), start: rr[4], end: rr[5], qty: rr[6], price: rr[7], total: rr[8],
+        });
+      }
+      res.status = 'success';
+      res.data = list;
+
     } else if (action === 'deleteExpenseByMonth') {
       // ลบแถวตามค่าในคอลัมน์เดือน (A) — ใช้ตอนต้องล้าง/แก้ข้อมูลที่นำเข้าผิด
       var sh3 = getDataSheet_();
@@ -98,6 +115,12 @@ function doPost(e) {
     res.message = err.message;
   }
   return ContentService.createTextOutput(JSON.stringify(res)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// เดือนในชีทอาจถูก Google แปลงเป็น Date — แปลงกลับเป็นข้อความ YYYY-MM
+function fmtMonth_(v) {
+  if (v && v.getTime) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM');
+  return String(v || '');
 }
 
 // หา/สร้างชีทเก็บข้อมูล พร้อมหัวคอลัมน์
