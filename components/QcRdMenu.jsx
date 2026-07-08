@@ -419,7 +419,12 @@ function IngredientRow({ row, items, onChange, onRemove }) {
   const suggestions = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
-    return items.filter(i => i.code.toLowerCase().includes(q) || i.name.toLowerCase().includes(q)).slice(0, 12);
+    // เทียบรหัสมองข้าม 0 นำหน้า (ระบบคลังใช้ 01000078 / ชีท item เก็บ 1000078)
+    const strip = s => s.replace(/^0+/, '');
+    return items.filter(i =>
+      i.code.toLowerCase().includes(q) || strip(i.code.toLowerCase()).includes(strip(q)) ||
+      i.name.toLowerCase().includes(q)
+    ).slice(0, 12);
   }, [items, query]);
 
   return (

@@ -12,6 +12,12 @@ import { apiCall } from '../lib/qcrdApi';
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
   : Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// เทียบรหัสแบบมองข้ามเลข 0 นำหน้า — ระบบคลังใช้ 01000078 แต่ชีท item เก็บ 1000078
+const codeMatch = (code, q) => {
+  const c = String(code).toLowerCase(), s = q.toLowerCase();
+  return c.includes(s) || c.replace(/^0+/, '').includes(s.replace(/^0+/, ''));
+};
+
 // รายชื่อสาขาสำหรับเลือก "สาขาที่ใช้ไอเทม" (ชุดเดียวกับหน้าค่าใช้จ่าย)
 const BRANCHES = [
   'SJP', 'CRM', 'XCM', 'SLR', 'SUM', 'XUM', 'SCS', 'SMP', 'XSB', 'XHH',
@@ -59,7 +65,7 @@ export default function QcRdItems() {
       if (unitFilter && i.unit !== unitFilter) return false;
       if (statusFilter && i.status !== statusFilter) return false;
       if (!q) return true;
-      return i.code.toLowerCase().includes(q) || i.name.toLowerCase().includes(q);
+      return codeMatch(i.code, q) || i.name.toLowerCase().includes(q);
     });
   }, [items, search, unitFilter, statusFilter]);
 
@@ -377,7 +383,7 @@ function SubPicker({ items, exclude, onPick }) {
     if (!q) return [];
     return items
       .filter(i => !exclude.includes(i.code) && i.status !== 'ปิดการใช้งาน')
-      .filter(i => i.code.toLowerCase().includes(q) || i.name.toLowerCase().includes(q))
+      .filter(i => codeMatch(i.code, q) || i.name.toLowerCase().includes(q))
       .slice(0, 12);
   }, [items, exclude, query]);
 
