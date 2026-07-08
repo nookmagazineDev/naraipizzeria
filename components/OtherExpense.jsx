@@ -66,9 +66,6 @@ export default function OtherExpense() {
     return () => { alive = false; };
   }, []);
 
-  // เปลี่ยนสาขา = ล้างค่าที่กรอกไว้ (รหัสของแต่ละสาขาต่างกัน)
-  useEffect(() => { setRows({}); }, [branch]);
-
   const rowKeyOf = (type, code) => `${type}||${code}`;
   const setCell = (rowKey, field, value) =>
     setRows(prev => ({ ...prev, [rowKey]: { ...(prev[rowKey] || EMPTY), [field]: value } }));
@@ -90,13 +87,17 @@ export default function OtherExpense() {
   // จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) ; ผลรวม = จำนวน × ราคา/หน่วย
   const computed = useMemo(() => formRows.map(fr => {
     const r = rows[fr.rowKey] || EMPTY;
+    const saved = savedMap[fr.rowKey] || null;
     const start = parseFloat(r.start) || 0;
     const end = parseFloat(r.end) || 0;
     const price = parseFloat(r.price) || 0;
     const qty = end - start;
-    const total = qty * price;
-    return { ...fr, raw: r, qty, total, hasInput: r.start !== '' || r.end !== '' || r.price !== '' };
-  }), [formRows, rows]);
+    const hasInput = r.start !== '' || r.end !== '' || r.price !== '';
+    let total = qty * price;
+    // แถวที่บันทึกแบบยอดเงินอย่างเดียว (import ย้อนหลัง ไม่มีเลขมิเตอร์) — โชว์ยอดที่บันทึกไว้
+    if (!hasInput && saved && saved.total !== '' && saved.total != null) total = parseFloat(saved.total) || 0;
+    return { ...fr, raw: r, saved, qty, total, hasInput };
+  }), [formRows, rows, savedMap]);
 
   const grandTotal = computed.reduce((s, r) => s + (r.total || 0), 0);
   const canSave = branch && month && computed.some(r => r.hasInput) && !saving;
@@ -110,9 +111,9 @@ export default function OtherExpense() {
         start: r.raw.start, end: r.raw.end, price: r.raw.price,
       }));
       const res = await apiCall('saveOtherExpense', { month, branch, items });
-      setToast({ ok: true, msg: `บันทึกสำเร็จ ${res.data?.appended ?? items.length} รายการ` });
-      setRows({}); // ล้างค่าหลังบันทึก
-      loadHistory();
+      const nNew = res.data?.appended ?? 0, nUpd = res.data?.updated ?? 0;
+      setToast({ ok: true, msg: nUpd > 0 ? `บันทึกสำเร็จ — เพิ่มใหม่ ${nNew} · อัพเดตทับ ${nUpd} รายการ` : `บันทึกสำเร็จ ${nNew || items.length} รายการ` });
+      loadHistory(); // โหลดใหม่ → ฟอร์มจะแสดงค่าที่บันทึกพร้อมป้าย "บันทึกแล้ว"
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
@@ -148,6 +149,30 @@ export default function OtherExpense() {
   const expandedRows = useMemo(() =>
     expandedMonth ? history.rows.filter(r => r.month === expandedMonth) : [],
   [history.rows, expandedMonth]);
+
+  // ข้อมูลที่บันทึกแล้วของ (เดือน, สาขา) ที่เลือก — คีย์ตาม (ประเภท, รหัส)
+  const savedMap = useMemo(() => {
+    const m = {};
+    if (branch) history.rows.forEach(r => {
+      if (r.month === month && r.branch === branch) m[rowKeyOf(r.type, String(r.code || '').trim())] = r;
+    });
+    return m;
+  }, [history.rows, month, branch]);
+
+  // เลือกเดือน/สาขา → เติมตัวเลขที่เคยบันทึกลงฟอร์มให้แก้ไขต่อได้ (ไม่มีข้อมูล = ฟอร์มว่าง)
+  useEffect(() => {
+    if (!branch) { setRows({}); return; }
+    const next = {};
+    Object.entries(savedMap).forEach(([key, r]) => {
+      next[key] = {
+        start: r.start !== '' && r.start != null ? String(r.start) : '',
+        end: r.end !== '' && r.end != null ? String(r.end) : '',
+        price: r.price !== '' && r.price != null ? String(r.price) : '',
+      };
+    });
+    setRows(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branch, month, history.rows]);
 
   // ── เทมเพลท Excel: แถวครบทุกสาขา × ประเภท × มิเตอร์ (จากชีทอ้างอิง) กรอกแค่ตัวเลข ──
   const fileRef = useRef(null);
@@ -335,6 +360,11 @@ export default function OtherExpense() {
                     <td className="px-4 py-2.5 font-semibold text-slate-800 whitespace-nowrap">
                       {firstOfType ? r.type : ''}
                       {r.codeCount > 1 && <span className="ml-1 text-[10px] font-normal text-slate-400">#{r.codeIndex + 1}</span>}
+                      {r.saved && (
+                        <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full text-[9px] font-bold align-middle">
+                          <CheckCircle size={8} /> บันทึกแล้ว
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-xs text-slate-500 whitespace-nowrap">{r.code || '—'}</td>
                     <td className="px-2 py-2">
@@ -366,7 +396,12 @@ export default function OtherExpense() {
 
         <div className="p-5 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3 text-xs">
-            <span className="text-slate-400">{branch ? `สาขา ${branch} · เดือน ${month}` : 'ยังไม่ได้เลือกสาขา'}</span>
+            <span className="text-slate-400">
+              {branch ? `สาขา ${branch} · เดือน ${month}` : 'ยังไม่ได้เลือกสาขา'}
+              {Object.keys(savedMap).length > 0 && (
+                <span className="ml-1.5 text-emerald-600 font-semibold">· เดือนนี้มีข้อมูลแล้ว {Object.keys(savedMap).length} รายการ — กดบันทึกจะอัพเดตทับรายการเดิม</span>
+              )}
+            </span>
             {toast && (
               <span className={`inline-flex items-center gap-1 font-semibold ${toast.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
                 {toast.ok ? <CheckCircle size={13} /> : <AlertCircle size={13} />}{toast.msg}

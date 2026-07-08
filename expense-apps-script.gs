@@ -54,18 +54,33 @@ function doPost(e) {
       res.data = refs;
 
     } else if (action === 'saveOtherExpense') {
-      // เขียนข้อมูลลงชีท "ค่าใช้จ่ายอื่น" (แถวละ 1 ประเภท/มิเตอร์)
+      // บันทึกจากฟอร์มแบบ upsert: มีแถวเดิมของ (เดือน+ประเภท+สาขา+รหัส) อยู่แล้ว → เขียนทับ
+      // ไม่มี → เพิ่มแถวใหม่ (แก้ไขข้อมูลเดือนเดิมได้โดยไม่เกิดแถวซ้ำ)
       var sh = getDataSheet_();
       var month = data.month || '';
       var branch = data.branch || '';
       var items = data.items || [];
-      var out = [];
-      for (var j = 0; j < items.length; j++) {
-        out.push(buildRow_(month, branch, items[j]));
+      var vals = sh.getDataRange().getValues();
+      var rowIdx = {};
+      for (var v = 1; v < vals.length; v++) {
+        var k = [fmtMonth_(vals[v][0]), String(vals[v][1] || '').trim(), String(vals[v][2] || '').trim(), String(vals[v][3] || '').trim()].join('|');
+        if (rowIdx[k] === undefined) rowIdx[k] = v + 1; // แถวแรกที่เจอ
       }
-      if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, 9).setValues(out);
+      var appended = 0, updated = 0;
+      for (var j = 0; j < items.length; j++) {
+        var it = items[j];
+        var rowArr = buildRow_(month, branch, it);
+        var key = [month, String(it.type || '').trim(), String(branch).trim(), String(it.code || '').trim()].join('|');
+        if (rowIdx[key]) {
+          sh.getRange(rowIdx[key], 1, 1, 9).setValues([rowArr]);
+          updated++;
+        } else {
+          sh.appendRow(rowArr);
+          appended++;
+        }
+      }
       res.status = 'success';
-      res.data = { appended: out.length };
+      res.data = { appended: appended, updated: updated };
 
     } else if (action === 'bulkImport') {
       // นำเข้าหลายแถวรวดเดียว — rows: [{month,type,branch,code,start,end,price,total}]
