@@ -6,7 +6,7 @@ import { apiCall } from '../lib/expenseApi';
 /*
  * NARAI OFFICE — ค่าใช้จ่ายอื่นๆ
  * เลือกสาขา + เดือน แล้วกรอกค่าใช้จ่ายแต่ละประเภท (เลขเริ่มต้น/สิ้นสุด + ราคา/หน่วย)
- * จำนวน = เริ่มต้น − สิ้นสุด (E−F) · ผลรวม = จำนวน × ราคา/หน่วย
+ * จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) · ผลรวม = จำนวน × ราคา/หน่วย
  *
  * ข้อมูลผ่าน Google Apps Script (ผูกกับชีท 1YXOaA…) → proxy /api/expense-gas:
  *  - getExpenseRefs  : อ่านชีท "ข้อมูลค่าใช้อื่น" (A=ประเภท, B=สาขา, C=รหัส)
@@ -87,13 +87,13 @@ export default function OtherExpense() {
     return out;
   }, [branch, refs.codesMap]);
 
-  // จำนวน = เริ่มต้น − สิ้นสุด (E−F) ; ผลรวม = จำนวน × ราคา/หน่วย
+  // จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) ; ผลรวม = จำนวน × ราคา/หน่วย
   const computed = useMemo(() => formRows.map(fr => {
     const r = rows[fr.rowKey] || EMPTY;
     const start = parseFloat(r.start) || 0;
     const end = parseFloat(r.end) || 0;
     const price = parseFloat(r.price) || 0;
-    const qty = start - end;
+    const qty = end - start;
     const total = qty * price;
     return { ...fr, raw: r, qty, total, hasInput: r.start !== '' || r.end !== '' || r.price !== '' };
   }), [formRows, rows]);
@@ -112,12 +112,42 @@ export default function OtherExpense() {
       const res = await apiCall('saveOtherExpense', { month, branch, items });
       setToast({ ok: true, msg: `บันทึกสำเร็จ ${res.data?.appended ?? items.length} รายการ` });
       setRows({}); // ล้างค่าหลังบันทึก
+      loadHistory();
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
       setSaving(false);
     }
   };
+
+  // ── ประวัติที่บันทึกไว้ในชีท: สรุปรายเดือน + กดดูรายละเอียด ──
+  const [history, setHistory] = useState({ loading: false, loaded: false, rows: [] });
+  const [expandedMonth, setExpandedMonth] = useState(null);
+
+  const loadHistory = () => {
+    setHistory(h => ({ ...h, loading: true }));
+    apiCall('getExpenses', {})
+      .then(res => setHistory({ loading: false, loaded: true, rows: res.data || [] }))
+      .catch(() => setHistory({ loading: false, loaded: true, rows: [] }));
+  };
+  useEffect(loadHistory, []);
+
+  const monthSummary = useMemo(() => {
+    const g = {};
+    history.rows.forEach(r => {
+      const m = r.month || '?';
+      if (!g[m]) g[m] = { month: m, count: 0, total: 0, byType: {} };
+      const t = parseFloat(r.total) || 0;
+      g[m].count++;
+      g[m].total += t;
+      g[m].byType[r.type] = (g[m].byType[r.type] || 0) + t;
+    });
+    return Object.values(g).sort((a, b) => b.month.localeCompare(a.month));
+  }, [history.rows]);
+
+  const expandedRows = useMemo(() =>
+    expandedMonth ? history.rows.filter(r => r.month === expandedMonth) : [],
+  [history.rows, expandedMonth]);
 
   // ── เทมเพลท Excel: แถวครบทุกสาขา × ประเภท × มิเตอร์ (จากชีทอ้างอิง) กรอกแค่ตัวเลข ──
   const fileRef = useRef(null);
@@ -194,6 +224,7 @@ export default function OtherExpense() {
       if (!ok) return;
       const res = await apiCall('bulkImport', { rows });
       setToast({ ok: true, msg: `นำเข้าสำเร็จ ${res.data?.appended ?? rows.length} แถว (${brs.length} สาขา)` });
+      loadHistory();
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'นำเข้าไม่สำเร็จ' });
     } finally {
@@ -290,7 +321,7 @@ export default function OtherExpense() {
                 <th className="px-3 py-3 text-left">รหัส</th>
                 <th className="px-4 py-3 text-right">เลขเริ่มต้น</th>
                 <th className="px-4 py-3 text-right">เลขสิ้นสุด</th>
-                <th className="px-4 py-3 text-right">จำนวน <span className="font-normal normal-case">(เริ่มต้น−สิ้นสุด)</span></th>
+                <th className="px-4 py-3 text-right">จำนวน <span className="font-normal normal-case">(สิ้นสุด−เริ่มต้น)</span></th>
                 <th className="px-4 py-3 text-right">ราคา/หน่วย</th>
                 <th className="px-4 py-3 text-right">ผลรวม</th>
               </tr>
@@ -348,6 +379,89 @@ export default function OtherExpense() {
             <span>{saving ? 'กำลังบันทึก…' : 'บันทึก'}</span>
           </button>
         </div>
+      </div>
+
+      {/* ประวัติที่บันทึกไว้: สรุปรายเดือน (กดแถวเพื่อดูรายละเอียด) */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="font-bold text-slate-800 text-sm">ข้อมูลที่บันทึกแล้ว (รายเดือน)</h3>
+          <button onClick={loadHistory} disabled={history.loading}
+            className="text-xs font-semibold text-amber-600 hover:text-amber-800 inline-flex items-center gap-1">
+            {history.loading ? <Loader2 size={12} className="animate-spin" /> : '↻'} รีเฟรช
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr className="text-xs font-bold uppercase tracking-wide">
+                <th className="px-4 py-2.5 text-left">เดือน</th>
+                <th className="px-3 py-2.5 text-right">รายการ</th>
+                {EXPENSE_TYPES.map(t => <th key={t} className="px-3 py-2.5 text-right">{t}</th>)}
+                <th className="px-4 py-2.5 text-right">รวม</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {history.loading && !history.loaded ? (
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin inline mr-2" />กำลังโหลด…
+                </td></tr>
+              ) : monthSummary.length === 0 ? (
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400 text-xs">ยังไม่มีข้อมูลที่บันทึก</td></tr>
+              ) : monthSummary.map(s => (
+                <tr key={s.month} onClick={() => setExpandedMonth(expandedMonth === s.month ? null : s.month)}
+                  className={`cursor-pointer hover:bg-amber-50/40 ${expandedMonth === s.month ? 'bg-amber-50/60' : ''}`}>
+                  <td className="px-4 py-2 font-semibold text-slate-800 whitespace-nowrap">
+                    {expandedMonth === s.month ? '▾' : '▸'} {s.month}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-500">{s.count}</td>
+                  {EXPENSE_TYPES.map(t => (
+                    <td key={t} className={`px-3 py-2 text-right font-mono ${(s.byType[t] || 0) < 0 ? 'text-rose-600 font-bold' : 'text-slate-600'}`}>
+                      {s.byType[t] ? fmt(s.byType[t]) : '—'}
+                    </td>
+                  ))}
+                  <td className={`px-4 py-2 text-right font-mono font-bold ${s.total < 0 ? 'text-rose-600' : 'text-amber-700'}`}>{fmt(s.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* รายละเอียดของเดือนที่เลือก */}
+        {expandedMonth && (
+          <div className="border-t-2 border-amber-200 bg-amber-50/20">
+            <div className="px-4 py-2 text-xs font-bold text-amber-700">รายละเอียดเดือน {expandedMonth} ({expandedRows.length} แถว)</div>
+            <div className="overflow-x-auto max-h-96 overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 text-slate-500 sticky top-0">
+                  <tr className="font-bold">
+                    <th className="px-3 py-2 text-left">สาขา</th>
+                    <th className="px-3 py-2 text-left">ประเภท</th>
+                    <th className="px-3 py-2 text-left">รหัส</th>
+                    <th className="px-3 py-2 text-right">เลขเริ่มต้น</th>
+                    <th className="px-3 py-2 text-right">เลขสิ้นสุด</th>
+                    <th className="px-3 py-2 text-right">จำนวน</th>
+                    <th className="px-3 py-2 text-right">ราคา/หน่วย</th>
+                    <th className="px-3 py-2 text-right">ผลรวม</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {[...expandedRows].sort((a, b) => a.branch.localeCompare(b.branch) || a.type.localeCompare(b.type)).map((r, i) => (
+                    <tr key={i} className={parseFloat(r.total) < 0 ? 'bg-rose-50/60' : ''}>
+                      <td className="px-3 py-1.5 font-semibold">{r.branch}</td>
+                      <td className="px-3 py-1.5">{r.type}</td>
+                      <td className="px-3 py-1.5 font-mono text-slate-500">{r.code || '—'}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{r.start !== '' && r.start != null ? Number(r.start).toLocaleString() : '—'}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{r.end !== '' && r.end != null ? Number(r.end).toLocaleString() : '—'}</td>
+                      <td className={`px-3 py-1.5 text-right font-mono ${parseFloat(r.qty) < 0 ? 'text-rose-600 font-bold' : ''}`}>{r.qty !== '' && r.qty != null ? Number(r.qty).toLocaleString() : '—'}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{r.price !== '' && r.price != null ? fmt(r.price) : '—'}</td>
+                      <td className={`px-3 py-1.5 text-right font-mono font-bold ${parseFloat(r.total) < 0 ? 'text-rose-600' : 'text-slate-700'}`}>{fmt(r.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* สถานะการเชื่อมต่อชีท */}

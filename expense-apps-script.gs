@@ -12,7 +12,7 @@
  *
  * โครงสร้าง (อ่าน/เขียนสเปรดชีตเดียวกัน 1YXOaA… คนละแท็บ):
  *   อ่านรหัส : แท็บ "ข้อมูลค่าใช้อื่น"  A=ประเภท B=สาขา C=รหัส
- *   บันทึก   : แท็บ "ค่าใช้จ่ายอื่น"    A=เดือน B=ประเภท C=สาขา D=รหัส E=เลขเริ่มต้น F=เลขสิ้นสุด G=จำนวน(E-F) H=ราคา/หน่วย I=ผลรวม
+ *   บันทึก   : แท็บ "ค่าใช้จ่ายอื่น"    A=เดือน B=ประเภท C=สาขา D=รหัส E=เลขเริ่มต้น F=เลขสิ้นสุด G=จำนวน(F-E) H=ราคา/หน่วย I=ผลรวม
  *
  * actions: getExpenseRefs (อ่านรหัส) · saveOtherExpense (บันทึกจากฟอร์ม) ·
  *          bulkImport (นำเข้าหลายแถวรวดเดียว) · deleteExpenseByMonth (ลบตามเดือน) ·
@@ -136,7 +136,7 @@ function getDataSheet_() {
 }
 
 // สร้าง 1 แถวข้อมูล: คงช่องว่างไว้ถ้าไม่มีค่า (ไม่บังคับเป็น 0)
-// จำนวน = เริ่มต้น − สิ้นสุด (ถ้ามีทั้งคู่) ; ผลรวม = ค่า total ที่ส่งมา หรือ จำนวน×ราคา
+// จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) ; ผลรวม = ค่า total ที่ส่งมา หรือ จำนวน×ราคา
 function buildRow_(month, branch, it) {
   var hasS = it.start !== '' && it.start != null;
   var hasE = it.end !== '' && it.end != null;
@@ -144,7 +144,7 @@ function buildRow_(month, branch, it) {
   var start = hasS ? Number(it.start) : '';
   var end = hasE ? Number(it.end) : '';
   var price = hasP ? Number(it.price) : '';
-  var qty = (hasS && hasE) ? (Number(it.start) - Number(it.end)) : '';
+  var qty = (hasS && hasE) ? (Number(it.end) - Number(it.start)) : '';
   var total;
   if (it.total !== '' && it.total != null) {
     total = Number(it.total);                       // นำเข้ายอดเงินรวมโดยตรง
