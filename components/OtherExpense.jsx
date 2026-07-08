@@ -32,15 +32,16 @@ function thisMonth() {
 
 const refKey = (type, branch) => `${String(type).trim()}||${String(branch).trim()}`;
 
+const EMPTY = { start: '', end: '', price: '' };
+
 export default function OtherExpense() {
   const [month, setMonth] = useState(thisMonth());
   const [branch, setBranch] = useState('');
-  const [rows, setRows] = useState(() =>
-    EXPENSE_TYPES.reduce((acc, t) => ({ ...acc, [t]: { start: '', end: '', price: '' } }), {})
-  );
+  // rows คีย์ด้วย rowKey (type||code) เพราะประเภทเดียวอาจมีหลายรหัส (หลายมิเตอร์)
+  const [rows, setRows] = useState({});
 
-  // refs จากชีท: branches + codeMap (type||branch -> รหัส)
-  const [refs, setRefs] = useState({ branches: FALLBACK_BRANCHES, codeMap: {}, loaded: false, error: '' });
+  // refs จากชีท: branches + codesMap (type||branch -> [รหัส...] เก็บครบทุกมิเตอร์ ไม่ทับกัน)
+  const [refs, setRefs] = useState({ branches: FALLBACK_BRANCHES, codesMap: {}, loaded: false, error: '' });
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null); // { ok, msg }
 
@@ -51,29 +52,50 @@ export default function OtherExpense() {
         if (!alive) return;
         const list = res.data || [];
         const branches = [...new Set(list.map(r => String(r.branch || '').trim()).filter(Boolean))];
-        const codeMap = {};
-        list.forEach(r => { codeMap[refKey(r.type, r.branch)] = String(r.code || '').trim(); });
-        setRefs({ branches: branches.length ? branches : FALLBACK_BRANCHES, codeMap, loaded: true, error: '' });
+        const codesMap = {};
+        list.forEach(r => {
+          const k = refKey(r.type, r.branch);
+          const code = String(r.code || '').trim();
+          if (!codesMap[k]) codesMap[k] = [];
+          if (code && !codesMap[k].includes(code)) codesMap[k].push(code); // เก็บครบ ไม่ซ้ำ
+        });
+        setRefs({ branches: branches.length ? branches : FALLBACK_BRANCHES, codesMap, loaded: true, error: '' });
       })
       .catch(err => { if (alive) setRefs(r => ({ ...r, loaded: true, error: err.message || 'โหลดข้อมูลอ้างอิงไม่สำเร็จ' })); });
     return () => { alive = false; };
   }, []);
 
-  const setCell = (type, field, value) =>
-    setRows(prev => ({ ...prev, [type]: { ...prev[type], [field]: value } }));
+  // เปลี่ยนสาขา = ล้างค่าที่กรอกไว้ (รหัสของแต่ละสาขาต่างกัน)
+  useEffect(() => { setRows({}); }, [branch]);
 
-  const codeFor = type => (branch ? (refs.codeMap[refKey(type, branch)] || '') : '');
+  const rowKeyOf = (type, code) => `${type}||${code}`;
+  const setCell = (rowKey, field, value) =>
+    setRows(prev => ({ ...prev, [rowKey]: { ...(prev[rowKey] || EMPTY), [field]: value } }));
+
+  // แตกแถวฟอร์มตามรหัส: ประเภทที่มีหลายรหัสจะได้หลายแถว (มิเตอร์ละแถว), ประเภทที่ไม่มีรหัสได้ 1 แถวว่าง
+  const formRows = useMemo(() => {
+    const out = [];
+    EXPENSE_TYPES.forEach(type => {
+      const codes = branch ? (refs.codesMap[refKey(type, branch)] || []) : [];
+      if (codes.length === 0) {
+        out.push({ type, code: '', rowKey: rowKeyOf(type, ''), codeCount: 0, codeIndex: 0 });
+      } else {
+        codes.forEach((code, i) => out.push({ type, code, rowKey: rowKeyOf(type, code), codeCount: codes.length, codeIndex: i }));
+      }
+    });
+    return out;
+  }, [branch, refs.codesMap]);
 
   // จำนวน = เริ่มต้น − สิ้นสุด (E−F) ; ผลรวม = จำนวน × ราคา/หน่วย
-  const computed = useMemo(() => EXPENSE_TYPES.map(type => {
-    const r = rows[type];
+  const computed = useMemo(() => formRows.map(fr => {
+    const r = rows[fr.rowKey] || EMPTY;
     const start = parseFloat(r.start) || 0;
     const end = parseFloat(r.end) || 0;
     const price = parseFloat(r.price) || 0;
     const qty = start - end;
     const total = qty * price;
-    return { type, start, end, price, qty, total, hasInput: r.start !== '' || r.end !== '' || r.price !== '' };
-  }), [rows]);
+    return { ...fr, raw: r, qty, total, hasInput: r.start !== '' || r.end !== '' || r.price !== '' };
+  }), [formRows, rows]);
 
   const grandTotal = computed.reduce((s, r) => s + (r.total || 0), 0);
   const canSave = branch && month && computed.some(r => r.hasInput) && !saving;
@@ -83,13 +105,12 @@ export default function OtherExpense() {
     setToast(null);
     try {
       const items = computed.filter(r => r.hasInput).map(r => ({
-        type: r.type, code: codeFor(r.type),
-        start: r.start, end: r.end, price: r.price,
+        type: r.type, code: r.code,
+        start: r.raw.start, end: r.raw.end, price: r.raw.price,
       }));
       const res = await apiCall('saveOtherExpense', { month, branch, items });
       setToast({ ok: true, msg: `บันทึกสำเร็จ ${res.data?.appended ?? items.length} รายการ` });
-      // ล้างค่าหลังบันทึก
-      setRows(EXPENSE_TYPES.reduce((acc, t) => ({ ...acc, [t]: { start: '', end: '', price: '' } }), {}));
+      setRows({}); // ล้างค่าหลังบันทึก
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
@@ -143,26 +164,33 @@ export default function OtherExpense() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {computed.map(r => (
-                <tr key={r.type} className="hover:bg-slate-50/60">
-                  <td className="px-4 py-2.5 font-semibold text-slate-800 whitespace-nowrap">{r.type}</td>
-                  <td className="px-3 py-2.5 font-mono text-xs text-slate-500 whitespace-nowrap">{codeFor(r.type) || '—'}</td>
-                  <td className="px-2 py-2">
-                    <input type="number" inputMode="decimal" value={rows[r.type].start} onChange={e => setCell(r.type, 'start', e.target.value)} placeholder="0"
-                      className="w-28 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
-                  </td>
-                  <td className="px-2 py-2">
-                    <input type="number" inputMode="decimal" value={rows[r.type].end} onChange={e => setCell(r.type, 'end', e.target.value)} placeholder="0"
-                      className="w-28 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
-                  </td>
-                  <td className="px-4 py-2.5 text-right font-mono text-slate-700">{fmt(r.qty)}</td>
-                  <td className="px-2 py-2">
-                    <input type="number" inputMode="decimal" value={rows[r.type].price} onChange={e => setCell(r.type, 'price', e.target.value)} placeholder="0"
-                      className="w-24 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
-                  </td>
-                  <td className="px-4 py-2.5 text-right font-mono font-bold text-amber-700">฿{fmt(r.total)}</td>
-                </tr>
-              ))}
+              {computed.map((r, i) => {
+                // แถวแรกของแต่ละประเภทแสดงชื่อประเภท (แถวมิเตอร์ถัด ๆ ไปเว้นว่างให้ดูเป็นกลุ่ม)
+                const firstOfType = r.codeIndex === 0;
+                return (
+                  <tr key={r.rowKey} className={`hover:bg-slate-50/60 ${firstOfType && i !== 0 ? 'border-t-2 border-slate-100' : ''}`}>
+                    <td className="px-4 py-2.5 font-semibold text-slate-800 whitespace-nowrap">
+                      {firstOfType ? r.type : ''}
+                      {r.codeCount > 1 && <span className="ml-1 text-[10px] font-normal text-slate-400">#{r.codeIndex + 1}</span>}
+                    </td>
+                    <td className="px-3 py-2.5 font-mono text-xs text-slate-500 whitespace-nowrap">{r.code || '—'}</td>
+                    <td className="px-2 py-2">
+                      <input type="number" inputMode="decimal" value={r.raw.start} onChange={e => setCell(r.rowKey, 'start', e.target.value)} placeholder="0"
+                        className="w-28 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                    </td>
+                    <td className="px-2 py-2">
+                      <input type="number" inputMode="decimal" value={r.raw.end} onChange={e => setCell(r.rowKey, 'end', e.target.value)} placeholder="0"
+                        className="w-28 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-slate-700">{fmt(r.qty)}</td>
+                    <td className="px-2 py-2">
+                      <input type="number" inputMode="decimal" value={r.raw.price} onChange={e => setCell(r.rowKey, 'price', e.target.value)} placeholder="0"
+                        className="w-24 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono font-bold text-amber-700">฿{fmt(r.total)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="bg-amber-50/60 border-t-2 border-amber-400 font-bold text-slate-800">
