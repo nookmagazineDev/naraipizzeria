@@ -753,6 +753,17 @@ export default function App() {
 
       const costJson = await costPromise;
 
+      // หัก voucher1 (ส่วนลด/วอเชอร์ที่บวกอยู่ใน billTotal แต่ไม่ใช่รายได้จริง) ออกจาก billTotal
+      // → billTotal สุทธิ = ยอดที่จ่ายจริง (= amount = ผลรวมรายการหลังหักส่วนลด)
+      // ปกติ voucher1 = 0 จึงแตะเฉพาะบิลที่มีส่วนลดวอเชอร์ ทำให้ Gross ตรงกับ Total Sales
+      allSales.forEach(r => {
+        const v1 = parseFloat(r.voucher1 ?? r.Voucher1 ?? 0) || 0;
+        if (v1) {
+          const bt = parseFloat(r.billTotal ?? r.BillTotal ?? r.amount ?? 0) || 0;
+          r.billTotal = bt - v1;
+        }
+      });
+
       // กรองโต๊ะ/ไอเทมที่ไม่นำมาคำนวณ (เช่น โต๊ะ 500/600, ไอเทมเตรียมของ)
       // บิลที่มีไอเทมยอดเหมา (290016 ข้าวกล่อง) → ตัดทั้งบิลออกจากยอดขาย
       // เก็บคีย์ทั้งจาก orderID และ checkID+outlet เพื่อจับให้ครบแม้ orderID ว่าง
