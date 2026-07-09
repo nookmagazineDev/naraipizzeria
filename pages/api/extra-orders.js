@@ -1,14 +1,21 @@
-// ดึงออเดอร์เพิ่มเติมจาก Google Sheet (ระบบสั่งอาหารภายนอกของสาขา XUM)
-// แล้วแปลงให้อยู่ในรูปแบบเดียวกับ API บิล (sales) และรายการ (details)
-// เพื่อนำไปรวมในรายงานของสาขา XUM (outletID 59) โดยตั้งเป็นโต๊ะ 800
+// ดึงออเดอร์เพิ่มเติมจาก Google Sheet (ระบบสั่งอาหารภายนอก) แล้วแปลงให้อยู่ในรูปแบบ
+// เดียวกับ API บิล (sales) และรายการ (details) เพื่อนำไปรวมในรายงาน โดยตั้งเป็นโต๊ะ 800
+// แยกสาขาตามคอลัมน์ L (RecordedBy) เช่น xum → 59, xcm → 19 (เดิม hardcode เป็น XUM หมด)
 // คอลัมน์ใดที่ชีตไม่มี จะใส่เป็นค่าว่าง/0 เพื่อไม่ให้กระทบการคำนวณเมนูอื่น
 
 const SHEET_ID = '1gijgBrK56bsjR7-R5NVWiTGTcxM57wjuYR3FUpl3EDQ';
 const GID = '255916825';                 // แท็บรายการออเดอร์
 const PAY_SHEET = 'PaymentSummary';      // แท็บสรุปช่องทางจ่ายต่อออเดอร์
-const OUTLET_ID = 59;   // XUM
+const DEFAULT_OUTLET = 59;   // ค่า fallback ถ้าคอลัมน์ L ไม่ตรงสาขาใด (เช่น admin) → XUM
 const TABLE_ID = 800;
-const CHECKID_BASE = 800000; // ฐานเลขบิลสังเคราะห์ กันชนกับ checkID จริงของ XUM
+const CHECKID_BASE = 800000; // ฐานเลขบิลสังเคราะห์ กันชนกับ checkID จริง
+
+// รหัสสาขาในคอลัมน์ L (RecordedBy) → outletID (ชุดเดียวกับ branchMap ทั้งระบบ)
+const BRANCH_OUTLET = {
+  sjp: 7, crm: 12, xcm: 19, slr: 37, sum: 51, xum: 59, scs: 61, smp: 63,
+  xsb: 67, xhh: 72, hrs: 78, clk: 79, p90: 80, hps: 109, zbw: 400, zpt: 401,
+  npt: 500, wrm: 501, wmt: 503, ipr: 904, zk3: 906,
+};
 
 // แปลงช่องทางจ่ายจากชีต -> ช่องทางในระบบ (เติมยอดลงคอลัมน์ที่ตรง เพื่อให้ Total Sales นับถูก)
 // ถ้าไม่มีข้อมูลช่องทางจ่าย (ไม่อยู่ใน PaymentSummary) ให้ตั้งเป็น "เงินโอน (QR)" ไปก่อน
@@ -125,12 +132,17 @@ export default async function handler(req, res) {
       return codeByName.get(key);
     };
 
-    // จัดกลุ่มตาม OrderNumber + วันที่เปิด (กันเลขออเดอร์ซ้ำข้ามวัน)
+    // สาขาจากคอลัมน์ L (RecordedBy) → outletID
+    const branchOf = r => String(r[col.recordedBy] || '').trim().toLowerCase();
+    const outletOf = r => BRANCH_OUTLET[branchOf(r)] || DEFAULT_OUTLET;
+
+    // จัดกลุ่มตาม สาขา + OrderNumber + วันที่เปิด
+    // (ต้องมีสาขาในคีย์ ไม่งั้นเลขออเดอร์ซ้ำวันเดียวกันคนละสาขาจะรวมเป็นบิลเดียวผิด)
     const groups = new Map();
     for (const r of rows) {
       const orderNo = (r[col.orderNo] || '').trim();
       const day = toDateTime(r[col.start]).slice(0, 10);
-      const key = `${orderNo}|${day}`;
+      const key = `${outletOf(r)}|${orderNo}|${day}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(r);
     }
@@ -147,9 +159,11 @@ export default async function handler(req, res) {
     orderKeys.forEach((key, gi) => {
       const lines = groups.get(key);
       const first = lines[0];
+      const outletID = outletOf(first);
       const checkID = CHECKID_BASE + gi + 1;
       const orderNoRaw = (first[col.orderNo] || '').replace(/[^0-9]/g, '');
-      const orderID = 'XUM800-' + (orderNoRaw || String(gi + 1));
+      // ใส่ outletID ในคีย์ออเดอร์ กันชนกันข้ามสาขาที่เลขออเดอร์ซ้ำ
+      const orderID = 'X800-' + outletID + '-' + (orderNoRaw || String(gi + 1));
       const startTime = toDateTime(first[col.start]);
       const closeTime = toDateTime(first[col.complete] || first[col.start]);
       const total = parseFloat(first[col.total] || 0) || 0;
@@ -161,7 +175,7 @@ export default async function handler(req, res) {
 
       // ── บิล (sales) 1 แถวต่อ 1 ออเดอร์ ──
       sales.push({
-        outletID: OUTLET_ID,
+        outletID,
         checkID,
         amount: total,
         billTotal: total,
@@ -197,7 +211,7 @@ export default async function handler(req, res) {
         const name = qm ? rawName.replace(/\(\s*[xX]\s*\d+\s*\)\s*$/, '').trim() : rawName;
         const unitPrice = quantity > 0 ? price / quantity : price;
         details.push({
-          outletID: OUTLET_ID,
+          outletID,
           chkCheckID: checkID,
           orderID,
           orderNo: 0,

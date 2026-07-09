@@ -695,13 +695,11 @@ export default function App() {
       // ถ้าระบุสาขา → ดึงเฉพาะสาขานั้น (เร็วขึ้นมาก) ; ไม่ระบุ → ดึงทุกสาขาเหมือนเดิม
       const outletParam = selectedOutlet ? `&outlet=${encodeURIComponent(selectedOutlet)}` : '';
 
-      // ออเดอร์เพิ่มเติมจาก Google Sheet (สาขา XUM โต๊ะ 800) — ดึงเฉพาะตอนดูทุกสาขา หรือเลือกสาขา XUM (59)
-      const wantExtra = !selectedOutlet || String(selectedOutlet) === '59';
-      const extraPromise = wantExtra
-        ? fetch(`/api/extra-orders`)
-            .then(r => r.ok ? r.json() : { sales: [], details: [] })
-            .catch(() => ({ sales: [], details: [] }))
-        : Promise.resolve({ sales: [], details: [] });
+      // ออเดอร์เพิ่มเติมจาก Google Sheet (โต๊ะ 800) — แยกสาขาตามคอลัมน์ L แล้ว
+      // ดึงทุกครั้ง (คำขอเดียว) แล้วค่อยกรองตามสาขาที่เลือกด้านล่าง เพื่อรองรับสาขาใหม่อัตโนมัติ
+      const extraPromise = fetch(`/api/extra-orders`)
+        .then(r => r.ok ? r.json() : { sales: [], details: [] })
+        .catch(() => ({ sales: [], details: [] }));
 
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -726,10 +724,17 @@ export default function App() {
         allDetails = allDetails.concat(normalizeArray(detailJson));
       }
 
-      // รวมออเดอร์เพิ่มเติมจาก Google Sheet (XUM โต๊ะ 800) ก่อนกรองช่วงวัน
+      // รวมออเดอร์เพิ่มเติมจาก Google Sheet (โต๊ะ 800) ก่อนกรองช่วงวัน
+      // ถ้าเลือกสาขาเดียว กรองออเดอร์เพิ่มเติมให้เหลือเฉพาะสาขานั้น (API คืนมาทุกสาขา)
       const extra = await extraPromise;
-      allSales = allSales.concat(extra.sales || []);
-      allDetails = allDetails.concat(extra.details || []);
+      const extraSales = selectedOutlet
+        ? (extra.sales || []).filter(r => String(r.outletID) === String(selectedOutlet))
+        : (extra.sales || []);
+      const extraDetails = selectedOutlet
+        ? (extra.details || []).filter(r => String(r.outletID) === String(selectedOutlet))
+        : (extra.details || []);
+      allSales = allSales.concat(extraSales);
+      allDetails = allDetails.concat(extraDetails);
 
       // คัดเฉพาะแถวที่ "วันเปิดบิล" (startTime) อยู่ในช่วงที่เลือกจริง ๆ
       // (ตัดบิลส่วนเกินที่ดึงเผื่อมาจาก buffer ท้ายช่วงออก)
