@@ -85,8 +85,15 @@ export default function QcRdItems() {
   };
 
   const openEdit = (i) => setEditItem({
+    isNew: false,
     code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])],
     price: i.price ?? '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
+  });
+
+  const openNew = () => setEditItem({
+    isNew: true,
+    code: '', name: '', status: 'ใช้งาน', subs: [],
+    price: '', converter: '', branches: [],
   });
 
   const toggleBranch = (b) => setEditItem(m => ({
@@ -94,17 +101,22 @@ export default function QcRdItems() {
   }));
 
   const saveItem = async () => {
+    const code = String(editItem.code || '').trim();
+    if (editItem.isNew && !code) { setToast({ ok: false, msg: 'กรุณากรอกรหัสวัตถุดิบ' }); return; }
+    if (editItem.isNew && items.some(i => String(i.code).trim() === code)) {
+      setToast({ ok: false, msg: `มีรหัส ${code} อยู่แล้วในรายการ` }); return;
+    }
     if (!editItem.name.trim()) { setToast({ ok: false, msg: 'กรุณากรอกชื่อวัตถุดิบ' }); return; }
     setSavingItem(true);
     setToast(null);
     try {
-      await apiCall('saveItem', {
-        code: editItem.code, name: editItem.name.trim(),
+      await apiCall(editItem.isNew ? 'addItem' : 'saveItem', {
+        code, name: editItem.name.trim(),
         status: editItem.status, subs: editItem.subs.slice(0, 3),
         price: editItem.price, converter: editItem.converter,
         branches: editItem.branches,
       });
-      setToast({ ok: true, msg: `บันทึก ${editItem.code} สำเร็จ` });
+      setToast({ ok: true, msg: editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ` });
       setEditItem(null);
       load();
     } catch (err) {
@@ -135,6 +147,11 @@ export default function QcRdItems() {
                 {toast.ok ? <CheckCircle size={13} /> : <AlertCircle size={13} />}{toast.msg}
               </span>
             )}
+            <button onClick={openNew}
+              title="เพิ่มวัตถุดิบใหม่ลงชีท item"
+              className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+              <Plus size={14} /> เพิ่มวัตถุดิบ
+            </button>
             {autoCount > 0 && (
               <button onClick={saveUnits} disabled={saving}
                 title="เขียนหน่วยที่วิเคราะห์ได้ลงคอลัมน์ D ของชีท (เฉพาะช่องที่ยังว่าง)"
@@ -262,11 +279,23 @@ export default function QcRdItems() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !savingItem && setEditItem(null)}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-slate-800">✏️ แก้ไขวัตถุดิบ <span className="font-mono text-sm text-slate-400">{editItem.code}</span></h3>
+              <h3 className="font-bold text-slate-800">
+                {editItem.isNew
+                  ? <>➕ เพิ่มวัตถุดิบใหม่</>
+                  : <>✏️ แก้ไขวัตถุดิบ <span className="font-mono text-sm text-slate-400">{editItem.code}</span></>}
+              </h3>
               <button onClick={() => setEditItem(null)} className="text-slate-400 hover:text-slate-700"><X size={20} /></button>
             </div>
 
             <div className="p-5 overflow-auto space-y-4">
+              {editItem.isNew && (
+                <div>
+                  <label className="text-xs font-bold text-slate-500">รหัสวัตถุดิบ</label>
+                  <input value={editItem.code} onChange={e => setEditItem(m => ({ ...m, code: e.target.value }))}
+                    placeholder="เช่น 1000078"
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+              )}
               <div>
                 <label className="text-xs font-bold text-slate-500">ชื่อวัตถุดิบ</label>
                 <input value={editItem.name} onChange={e => setEditItem(m => ({ ...m, name: e.target.value }))}
@@ -363,7 +392,7 @@ export default function QcRdItems() {
               <button onClick={saveItem} disabled={savingItem}
                 className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
                 {savingItem ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />}
-                {savingItem ? 'กำลังบันทึก…' : 'บันทึก'}
+                {savingItem ? 'กำลังบันทึก…' : (editItem.isNew ? 'เพิ่มวัตถุดิบ' : 'บันทึก')}
               </button>
             </div>
           </div>

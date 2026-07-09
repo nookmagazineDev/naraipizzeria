@@ -33,6 +33,8 @@ function doPost(e) {
       res = updateItemUnits_(ss, data);
     } else if (action === 'saveItem') {
       res = saveItem_(ss, data);
+    } else if (action === 'addItem') {
+      res = addItem_(ss, data);
     } else if (action === 'saveMenuStatus') {
       res = saveMenuStatus_(ss, data);
     } else if (action === 'sortBom') {
@@ -194,6 +196,33 @@ function saveItem_(ss, data) {
     }
   }
   return { status: 'error', message: 'ไม่พบรหัส ' + code + ' ในชีท item' };
+}
+
+// เพิ่มวัตถุดิบใหม่: ต่อแถวใหม่ท้ายชีท item (กันรหัสซ้ำ)
+// คอลัมน์: A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ F–H=ไอเทมทดแทน I=ตัวแปลง J=สาขาที่ใช้
+// payload: { code, name, price, status, subs[], converter, branches[] }
+function addItem_(ss, data) {
+  var code = String(data.code || '').trim();
+  if (!code) return { status: 'error', message: 'ต้องระบุรหัสวัตถุดิบ' };
+  var name = String(data.name || '').trim();
+  if (!name) return { status: 'error', message: 'ต้องระบุชื่อวัตถุดิบ' };
+  var sh = ss.getSheetByName('item');
+  if (!sh) return { status: 'error', message: 'ไม่พบชีท item' };
+  var values = sh.getRange(1, 1, sh.getLastRow(), 1).getValues();
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === code) {
+      return { status: 'error', message: 'มีรหัส ' + code + ' อยู่แล้วในชีท item' };
+    }
+  }
+  var subs = (data.subs || []).slice(0, 3);
+  var price = (data.price !== undefined && data.price !== '' && !isNaN(Number(data.price))) ? Number(data.price) : '';
+  var converter = (data.converter !== undefined && data.converter !== '' && !isNaN(Number(data.converter))) ? Number(data.converter) : '';
+  sh.appendRow([
+    code, name, price, '', String(data.status || 'ใช้งาน').trim(),
+    subs[0] || '', subs[1] || '', subs[2] || '',
+    converter, (data.branches || []).join(','),
+  ]);
+  return { status: 'success', data: { code: code, row: sh.getLastRow() } };
 }
 
 // เติมหน่วยลงคอลัมน์ D ของชีท item — เขียนเฉพาะช่องที่ยังว่าง (ไม่ทับของเดิม)
