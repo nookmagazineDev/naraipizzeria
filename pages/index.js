@@ -70,8 +70,10 @@ const OUTLET_LIST = Object.entries(OUTLETS).map(([id, name]) => ({
 
 /* ───────── EXCLUSIONS (ไม่นำมาคำนวณ) ───────── */
 const EXCLUDE_TABLES = [600];                       // โต๊ะที่ตัดออก (500 กลับไปนับต้นทุนจริงแล้ว)
-const EXCLUDE_ITEMS = [206001];                    // itemCode เดี่ยวที่ตัดออก
+const EXCLUDE_ITEMS = [206001, 290016];            // itemCode เดี่ยวที่ตัดออก (290016 = ข้าวกล่องยอดเหมา)
 const EXCLUDE_ITEM_RANGES = [[500002, 500026]];    // ช่วง itemCode ที่ตัดออก
+// ไอเทมยอดเหมา: บิลไหนมีไอเทมนี้ ให้ตัด "ทั้งบิล" ออกจากยอดขาย (กัน 1 บิลบวมยอด/จำนวนมหาศาล)
+const LUMP_SUM_BILL_ITEMS = [290016];              // ข้าวกล่อง (คีย์ยอดเหมาเป็นจำนวนชิ้น)
 const COVER_ITEMS = [101001, 101002, 101003, 101004, 101107, 101108]; // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน"
 // วัตถุดิบ (กก) โต๊ะเตรียม — แยกออกจากต้นทุนที่ใช้คิดกำไร/ขาดทุน
 const PREP_KG_ITEMS = [206041, 206038, 205003, 205002, 205007, 205006, 205021, 206035, 206040, 205014, 205004, 206034];
@@ -747,7 +749,23 @@ export default function App() {
       const costJson = await costPromise;
 
       // กรองโต๊ะ/ไอเทมที่ไม่นำมาคำนวณ (เช่น โต๊ะ 500/600, ไอเทมเตรียมของ)
-      const cleanSales = allSales.filter(r => !isExcludedTable(r.tableID ?? r.TableID));
+      // บิลที่มีไอเทมยอดเหมา (290016 ข้าวกล่อง) → ตัดทั้งบิลออกจากยอดขาย
+      // เก็บคีย์ทั้งจาก orderID และ checkID+outlet เพื่อจับให้ครบแม้ orderID ว่าง
+      const lumpSumKeys = new Set();
+      allDetails.forEach(r => {
+        if (LUMP_SUM_BILL_ITEMS.indexOf(parseInt(r.itemCode)) < 0) return;
+        const oid = String(r.orderID ?? r.OrderID ?? '').trim();
+        if (oid) lumpSumKeys.add('O:' + oid);
+        const chk = String(r.chkCheckID ?? r.checkID ?? '').trim();
+        if (chk) lumpSumKeys.add('C:' + chk + '_' + (r.outletID ?? ''));
+      });
+      const isLumpSumBill = r => {
+        const oid = String(r.orderID ?? r.OrderID ?? '').trim();
+        if (oid && lumpSumKeys.has('O:' + oid)) return true;
+        const chk = String(r.checkID ?? r.CheckID ?? '').trim();
+        return chk && lumpSumKeys.has('C:' + chk + '_' + (r.outletID ?? ''));
+      };
+      const cleanSales = allSales.filter(r => !isExcludedTable(r.tableID ?? r.TableID) && !isLumpSumBill(r));
       const cleanDetails = allDetails.filter(r =>
         !isExcludedTable(r.tableID ?? r.TableID) && !isExcludedItem(r.itemCode));
       // เก็บแถวที่ถูกตัดออก (โต๊ะ 600 + ไอเทม 206001/500002-500026) ไว้แสดงในการ์ด "ไม่นับ"
