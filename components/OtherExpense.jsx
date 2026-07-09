@@ -84,44 +84,8 @@ export default function OtherExpense() {
     return out;
   }, [branch, refs.codesMap]);
 
-  // จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) ; ผลรวม = จำนวน × ราคา/หน่วย
-  const computed = useMemo(() => formRows.map(fr => {
-    const r = rows[fr.rowKey] || EMPTY;
-    const saved = savedMap[fr.rowKey] || null;
-    const start = parseFloat(r.start) || 0;
-    const end = parseFloat(r.end) || 0;
-    const price = parseFloat(r.price) || 0;
-    const qty = end - start;
-    const hasInput = r.start !== '' || r.end !== '' || r.price !== '';
-    let total = qty * price;
-    // แถวที่บันทึกแบบยอดเงินอย่างเดียว (import ย้อนหลัง ไม่มีเลขมิเตอร์) — โชว์ยอดที่บันทึกไว้
-    if (!hasInput && saved && saved.total !== '' && saved.total != null) total = parseFloat(saved.total) || 0;
-    return { ...fr, raw: r, saved, qty, total, hasInput };
-  }), [formRows, rows, savedMap]);
-
-  const grandTotal = computed.reduce((s, r) => s + (r.total || 0), 0);
-  const canSave = branch && month && computed.some(r => r.hasInput) && !saving;
-
-  const handleSave = async () => {
-    setSaving(true);
-    setToast(null);
-    try {
-      const items = computed.filter(r => r.hasInput).map(r => ({
-        type: r.type, code: r.code,
-        start: r.raw.start, end: r.raw.end, price: r.raw.price,
-      }));
-      const res = await apiCall('saveOtherExpense', { month, branch, items });
-      const nNew = res.data?.appended ?? 0, nUpd = res.data?.updated ?? 0;
-      setToast({ ok: true, msg: nUpd > 0 ? `บันทึกสำเร็จ — เพิ่มใหม่ ${nNew} · อัพเดตทับ ${nUpd} รายการ` : `บันทึกสำเร็จ ${nNew || items.length} รายการ` });
-      loadHistory(); // โหลดใหม่ → ฟอร์มจะแสดงค่าที่บันทึกพร้อมป้าย "บันทึกแล้ว"
-    } catch (err) {
-      setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
-    } finally {
-      setSaving(false);
-    }
-  };
-
   // ── ประวัติที่บันทึกไว้ในชีท: สรุปรายเดือน + กดดูรายละเอียด ──
+  // (ต้องประกาศก่อน computed เพราะ computed ใช้ savedMap)
   const [history, setHistory] = useState({ loading: false, loaded: false, rows: [] });
   const [expandedMonth, setExpandedMonth] = useState(null);
 
@@ -173,6 +137,43 @@ export default function OtherExpense() {
     setRows(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branch, month, history.rows]);
+
+  // จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) ; ผลรวม = จำนวน × ราคา/หน่วย
+  const computed = useMemo(() => formRows.map(fr => {
+    const r = rows[fr.rowKey] || EMPTY;
+    const saved = savedMap[fr.rowKey] || null;
+    const start = parseFloat(r.start) || 0;
+    const end = parseFloat(r.end) || 0;
+    const price = parseFloat(r.price) || 0;
+    const qty = end - start;
+    const hasInput = r.start !== '' || r.end !== '' || r.price !== '';
+    let total = qty * price;
+    // แถวที่บันทึกแบบยอดเงินอย่างเดียว (import ย้อนหลัง ไม่มีเลขมิเตอร์) — โชว์ยอดที่บันทึกไว้
+    if (!hasInput && saved && saved.total !== '' && saved.total != null) total = parseFloat(saved.total) || 0;
+    return { ...fr, raw: r, saved, qty, total, hasInput };
+  }), [formRows, rows, savedMap]);
+
+  const grandTotal = computed.reduce((s, r) => s + (r.total || 0), 0);
+  const canSave = branch && month && computed.some(r => r.hasInput) && !saving;
+
+  const handleSave = async () => {
+    setSaving(true);
+    setToast(null);
+    try {
+      const items = computed.filter(r => r.hasInput).map(r => ({
+        type: r.type, code: r.code,
+        start: r.raw.start, end: r.raw.end, price: r.raw.price,
+      }));
+      const res = await apiCall('saveOtherExpense', { month, branch, items });
+      const nNew = res.data?.appended ?? 0, nUpd = res.data?.updated ?? 0;
+      setToast({ ok: true, msg: nUpd > 0 ? `บันทึกสำเร็จ — เพิ่มใหม่ ${nNew} · อัพเดตทับ ${nUpd} รายการ` : `บันทึกสำเร็จ ${nNew || items.length} รายการ` });
+      loadHistory(); // โหลดใหม่ → ฟอร์มจะแสดงค่าที่บันทึกพร้อมป้าย "บันทึกแล้ว"
+    } catch (err) {
+      setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // ── เทมเพลท Excel: แถวครบทุกสาขา × ประเภท × มิเตอร์ (จากชีทอ้างอิง) กรอกแค่ตัวเลข ──
   const fileRef = useRef(null);
