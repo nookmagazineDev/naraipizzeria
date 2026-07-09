@@ -1,6 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiCall } from '../lib/stockApi';
-import { Users, Loader2, Search, Gift, Image as ImageIcon, AlertCircle } from 'lucide-react';
+import { Users, Loader2, Search, Gift, Image as ImageIcon, AlertCircle, Pencil, X, CheckCircle } from 'lucide-react';
+
+// ฟิลด์ที่แก้ไขได้ (hrCode เป็นคีย์ ไม่ให้แก้)
+const EDIT_FIELDS = [
+  { key: 'fullName', label: 'ชื่อ - นามสกุล', type: 'text' },
+  { key: 'branch', label: 'สาขา', type: 'text' },
+  { key: 'status', label: 'สถานะ', type: 'select', options: ['ทำงาน', 'ลาออก'] },
+  { key: 'type', label: 'ประเภท', type: 'text' },
+  { key: 'position', label: 'ตำแหน่ง', type: 'text' },
+  { key: 'startDate', label: 'วันเริ่มทำงาน', type: 'text', hint: 'เช่น 31/03/2545 (พ.ศ.) หรือ 2002-03-31' },
+  { key: 'loga', label: 'เลขที่ LOGA', type: 'text' },
+  { key: 'newCode', label: 'รหัสใหม่', type: 'text' },
+  { key: 'photoUrl', label: 'ลิงก์รูป', type: 'text' },
+];
 
 /*
  * NARAI OFFICE — รายชื่อพนักงาน (โหมดดูอย่างเดียว)
@@ -59,8 +72,54 @@ export default function EmployeeList() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
+  const [editEmp, setEditEmp] = useState(null);   // { ...ค่าที่กำลังแก้, _orig }
+  const [savingEmp, setSavingEmp] = useState(false);
+  const [toast, setToast] = useState(null);       // { ok, msg }
 
   useEffect(() => { fetchEmployees(); }, []);
+
+  // แก้ไขวันเริ่มงานให้อ่านง่ายในช่องกรอก (คงค่าเดิมถ้าไม่ใช่วันที่มาตรฐาน)
+  const startDateForInput = (v) => {
+    const d = parseThaiDate(v);
+    if (!d) return v ?? '';
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    return `${dd}/${mm}/${d.getFullYear() + 543}`; // แสดงเป็น พ.ศ. d/m/yyyy
+  };
+
+  const openEdit = (emp) => {
+    const base = {};
+    EDIT_FIELDS.forEach(f => {
+      base[f.key] = f.key === 'startDate' ? startDateForInput(emp[f.key]) : (emp[f.key] ?? '');
+    });
+    setEditEmp({ hrCode: emp.hrCode, ...base, _orig: { ...base } });
+  };
+
+  const setField = (key, val) => setEditEmp(m => ({ ...m, [key]: val }));
+
+  const saveEmployee = async () => {
+    setSavingEmp(true);
+    setToast(null);
+    try {
+      // ส่งเฉพาะฟิลด์ที่เปลี่ยน (กันเขียนทับค่าเดิมโดยไม่ตั้งใจ)
+      const changed = {};
+      EDIT_FIELDS.forEach(f => {
+        if (String(editEmp[f.key] ?? '') !== String(editEmp._orig[f.key] ?? '')) changed[f.key] = editEmp[f.key];
+      });
+      if (Object.keys(changed).length === 0) { setToast({ ok: false, msg: 'ไม่มีการเปลี่ยนแปลง' }); setSavingEmp(false); return; }
+      const res = await apiCall('saveEmployee', { hrCode: editEmp.hrCode, ...changed });
+      setToast({ ok: true, msg: `บันทึก ${editEmp.hrCode} สำเร็จ (${Object.keys(changed).length} ช่อง)` });
+      setEditEmp(null);
+      fetchEmployees();
+    } catch (err) {
+      const msg = /unknown action/.test(err.message || '')
+        ? 'ยังไม่ได้เพิ่ม action saveEmployee ใน Apps Script (ดูวิธีในแชท)'
+        : (err.message || 'บันทึกไม่สำเร็จ');
+      setToast({ ok: false, msg });
+    } finally {
+      setSavingEmp(false);
+    }
+  };
 
   const fetchEmployees = async () => {
     try {
@@ -139,8 +198,15 @@ export default function EmployeeList() {
               <p className="text-sm text-slate-500 mt-1">ข้อมูลพนักงานทุกสาขา (ดึงจาก Google Sheet · ดูอย่างเดียว)</p>
             </div>
           </div>
-          <div className="bg-purple-50 text-purple-700 px-4 py-2 rounded-lg font-medium text-sm border border-purple-100 shadow-sm">
-            พนักงานทั้งหมด {filteredEmployees.length} คน
+          <div className="flex items-center gap-3">
+            {toast && (
+              <span className={`inline-flex items-center gap-1 text-xs font-semibold ${toast.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {toast.ok ? <CheckCircle size={13} /> : <AlertCircle size={13} />}{toast.msg}
+              </span>
+            )}
+            <div className="bg-purple-50 text-purple-700 px-4 py-2 rounded-lg font-medium text-sm border border-purple-100 shadow-sm">
+              พนักงานทั้งหมด {filteredEmployees.length} คน
+            </div>
           </div>
         </div>
 
@@ -246,12 +312,13 @@ export default function EmployeeList() {
                 <th className="px-2 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">ระยะเวลาทำงาน</th>
                 <th className="px-2 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">เลขที่ LOGA</th>
                 <th className="px-2 py-2 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">รูป</th>
+                <th className="px-2 py-2 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">แก้ไข</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-slate-200">
               {loading ? (
                 <tr>
-                  <td colSpan={11} className="px-6 py-12 text-center">
+                  <td colSpan={12} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-slate-500">
                       <Loader2 className="w-8 h-8 animate-spin text-purple-500 mb-2" />
                       <p>กำลังโหลดข้อมูล...</p>
@@ -260,7 +327,7 @@ export default function EmployeeList() {
                 </tr>
               ) : filteredEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-6 py-12 text-center">
+                  <td colSpan={12} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-slate-500">
                       <Users className="w-12 h-12 text-slate-300 mb-3" />
                       <p className="text-lg font-medium text-slate-900">ไม่พบข้อมูลพนักงาน</p>
@@ -299,6 +366,12 @@ export default function EmployeeList() {
                         <span className="text-slate-300">-</span>
                       )}
                     </td>
+                    <td className="px-2 py-2 whitespace-nowrap text-center">
+                      <button onClick={() => openEdit(emp)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200 transition-colors">
+                        <Pencil size={12} /> แก้ไข
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
@@ -306,6 +379,46 @@ export default function EmployeeList() {
           </table>
         </div>
       </div>
+
+      {/* Modal แก้ไขข้อมูลพนักงาน */}
+      {editEmp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !savingEmp && setEditEmp(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-slate-800">✏️ แก้ไขข้อมูลพนักงาน <span className="font-mono text-sm text-slate-400 ml-1">รหัส {editEmp.hrCode}</span></h3>
+              <button onClick={() => setEditEmp(null)} className="text-slate-400 hover:text-slate-700"><X size={20} /></button>
+            </div>
+
+            <div className="p-5 overflow-auto grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {EDIT_FIELDS.map(f => (
+                <div key={f.key} className={f.key === 'fullName' ? 'sm:col-span-2' : ''}>
+                  <label className="text-xs font-bold text-slate-500">{f.label}</label>
+                  {f.type === 'select' ? (
+                    <select value={editEmp[f.key]} onChange={e => setField(f.key, e.target.value)}
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                      {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : (
+                    <input value={editEmp[f.key]} onChange={e => setField(f.key, e.target.value)}
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                  )}
+                  {f.hint && <p className="text-[10px] text-slate-400 mt-0.5">{f.hint}</p>}
+                </div>
+              ))}
+            </div>
+
+            <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-2">
+              <button onClick={() => setEditEmp(null)} disabled={savingEmp}
+                className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
+              <button onClick={saveEmployee} disabled={savingEmp}
+                className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-purple-500 hover:bg-purple-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+                {savingEmp ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />}
+                {savingEmp ? 'กำลังบันทึก…' : 'บันทึก'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
