@@ -23,7 +23,8 @@ var REF_SHEET_ID  = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';            /
 var DATA_SHEET_ID = '1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw';            // เก็บข้อมูล (ใช้สเปรดชีตเดียวกัน คนละแท็บ)
 var REF_SHEET  = 'ข้อมูลค่าใช้อื่น';
 var DATA_SHEET = 'ค่าใช้จ่ายอื่น';
-var DATA_HEADER = ['เดือน', 'ประเภท', 'สาขา', 'รหัส', 'เลขเริ่มต้น', 'เลขสิ้นสุด', 'จำนวน', 'ราคาต่อหน่วย', 'ผลรวม'];
+var DATA_HEADER = ['เดือน', 'ประเภท', 'สาขา', 'รหัส', 'เลขเริ่มต้น', 'เลขสิ้นสุด', 'จำนวน', 'ราคาต่อหน่วย', 'ผลรวม', 'เวลาบันทึก/แก้ไข'];
+var NCOL = DATA_HEADER.length; // 10 คอลัมน์ (A–J) — J = เวลาที่บันทึก/แก้ไขล่าสุด
 
 function doGet(e) {
   return ContentService.createTextOutput('Narai Expense Backend is running.');
@@ -72,7 +73,7 @@ function doPost(e) {
         var rowArr = buildRow_(month, branch, it);
         var key = [month, String(it.type || '').trim(), String(branch).trim(), String(it.code || '').trim()].join('|');
         if (rowIdx[key]) {
-          sh.getRange(rowIdx[key], 1, 1, 9).setValues([rowArr]);
+          sh.getRange(rowIdx[key], 1, 1, NCOL).setValues([rowArr]);
           updated++;
         } else {
           sh.appendRow(rowArr);
@@ -91,7 +92,7 @@ function doPost(e) {
         var r = rows[k];
         out2.push(buildRow_(r.month || '', r.branch || '', r));
       }
-      if (out2.length) sh2.getRange(sh2.getLastRow() + 1, 1, out2.length, 9).setValues(out2);
+      if (out2.length) sh2.getRange(sh2.getLastRow() + 1, 1, out2.length, NCOL).setValues(out2);
       res.status = 'success';
       res.data = { appended: out2.length };
 
@@ -106,6 +107,7 @@ function doPost(e) {
         list.push({
           month: fmtMonth_(rr[0]), type: String(rr[1] || ''), branch: String(rr[2] || ''),
           code: String(rr[3] || ''), start: rr[4], end: rr[5], qty: rr[6], price: rr[7], total: rr[8],
+          savedAt: fmtDateTime_(rr[9]),
         });
       }
       res.status = 'success';
@@ -138,14 +140,26 @@ function fmtMonth_(v) {
   return String(v || '');
 }
 
-// หา/สร้างชีทเก็บข้อมูล พร้อมหัวคอลัมน์
+// เวลาที่บันทึก/แก้ไข — คืนเป็นข้อความ yyyy-MM-dd HH:mm
+function fmtDateTime_(v) {
+  if (v && v.getTime) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+  return String(v || '');
+}
+function now_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+}
+
+// หา/สร้างชีทเก็บข้อมูล พร้อมหัวคอลัมน์ (ครอบคลุมคอลัมน์เวลาแก้ไข J ที่เพิ่มภายหลัง)
 function getDataSheet_() {
   var ss = SpreadsheetApp.openById(DATA_SHEET_ID);
   var sh = ss.getSheetByName(DATA_SHEET);
   if (!sh) {
     sh = ss.insertSheet(DATA_SHEET);
     sh.appendRow(DATA_HEADER);
-    sh.getRange('A1:I1').setFontWeight('bold');
+    sh.getRange(1, 1, 1, NCOL).setFontWeight('bold');
+  } else if (!String(sh.getRange(1, NCOL).getValue() || '').trim()) {
+    // ชีทเดิมยังไม่มีหัวคอลัมน์ J → เติมให้
+    sh.getRange(1, NCOL).setValue(DATA_HEADER[NCOL - 1]).setFontWeight('bold');
   }
   return sh;
 }
@@ -168,5 +182,6 @@ function buildRow_(month, branch, it) {
   } else {
     total = '';
   }
-  return [month, it.type || '', branch, it.code || '', start, end, qty, price, total];
+  // คอลัมน์ J = เวลาที่บันทึก/แก้ไขล่าสุด (ประทับใหม่ทุกครั้งที่เขียนแถวนี้)
+  return [month, it.type || '', branch, it.code || '', start, end, qty, price, total, now_()];
 }

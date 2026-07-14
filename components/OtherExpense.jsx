@@ -123,6 +123,12 @@ export default function OtherExpense() {
     return m;
   }, [history.rows, month, branch]);
 
+  // เวลาที่แก้ไขล่าสุดของเดือน+สาขาที่เลือก
+  const lastSavedAt = useMemo(() => {
+    const times = Object.values(savedMap).map(r => r.savedAt).filter(Boolean).sort();
+    return times.length ? times[times.length - 1] : '';
+  }, [savedMap]);
+
   // เลือกเดือน/สาขา → เติมตัวเลขที่เคยบันทึกลงฟอร์มให้แก้ไขต่อได้ (ไม่มีข้อมูล = ฟอร์มว่าง)
   useEffect(() => {
     if (!branch) { setRows({}); return; }
@@ -362,7 +368,8 @@ export default function OtherExpense() {
                       {firstOfType ? r.type : ''}
                       {r.codeCount > 1 && <span className="ml-1 text-[10px] font-normal text-slate-400">#{r.codeIndex + 1}</span>}
                       {r.saved && (
-                        <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full text-[9px] font-bold align-middle">
+                        <span title={r.saved.savedAt ? `แก้ไขล่าสุด ${r.saved.savedAt}` : ''}
+                          className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full text-[9px] font-bold align-middle">
                           <CheckCircle size={8} /> บันทึกแล้ว
                         </span>
                       )}
@@ -400,7 +407,10 @@ export default function OtherExpense() {
             <span className="text-slate-400">
               {branch ? `สาขา ${branch} · เดือน ${month}` : 'ยังไม่ได้เลือกสาขา'}
               {Object.keys(savedMap).length > 0 && (
-                <span className="ml-1.5 text-emerald-600 font-semibold">· เดือนนี้มีข้อมูลแล้ว {Object.keys(savedMap).length} รายการ — กดบันทึกจะอัพเดตทับรายการเดิม</span>
+                <span className="ml-1.5 text-emerald-600 font-semibold">
+                  · เดือนนี้มีข้อมูลแล้ว {Object.keys(savedMap).length} รายการ — กดบันทึกจะอัพเดตทับรายการเดิม
+                  {lastSavedAt && <span className="text-slate-400 font-normal"> (แก้ไขล่าสุด {lastSavedAt})</span>}
+                </span>
               )}
             </span>
             {toast && (
@@ -478,6 +488,7 @@ export default function OtherExpense() {
                     <th className="px-3 py-2 text-right">จำนวน</th>
                     <th className="px-3 py-2 text-right">ราคา/หน่วย</th>
                     <th className="px-3 py-2 text-right">ผลรวม</th>
+                    <th className="px-3 py-2 text-left">เวลาบันทึก/แก้ไข</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -491,6 +502,7 @@ export default function OtherExpense() {
                       <td className={`px-3 py-1.5 text-right font-mono ${parseFloat(r.qty) < 0 ? 'text-rose-600 font-bold' : ''}`}>{r.qty !== '' && r.qty != null ? Number(r.qty).toLocaleString() : '—'}</td>
                       <td className="px-3 py-1.5 text-right font-mono">{r.price !== '' && r.price != null ? fmt(r.price) : '—'}</td>
                       <td className={`px-3 py-1.5 text-right font-mono font-bold ${parseFloat(r.total) < 0 ? 'text-rose-600' : 'text-slate-700'}`}>{fmt(r.total)}</td>
+                      <td className="px-3 py-1.5 text-slate-400 whitespace-nowrap">{r.savedAt || '—'}</td>
                     </tr>
                   ))}
                 </tbody>
