@@ -3,7 +3,7 @@
 // หรือใส่ตรง ๆ ตรง fallback ด้านล่าง
 const SCRIPT_URL =
   process.env.QCRD_GAS_URL ||
-  'https://script.google.com/macros/s/AKfycbynZAbOhqipZxDQ4bq1wxPTlhm0lXneNn9WpwYhRpEVDcCNsoBaIam69rxr9wC_oSOf/exec';
+  'https://script.google.com/macros/s/AKfycbySKsNhK73tCvSY1SywTGhQ7ntw8UwbFNLWAZYw8sT0PFMXiuovukD349h9-PYnKpoF/exec';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
