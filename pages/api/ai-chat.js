@@ -9,6 +9,9 @@
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
+// ลำดับ fallback เมื่อโมเดลหลักโควตาเต็ม (429) — เริ่มใหม่ทั้งบทสนทนากับโมเดลถัดไป
+// (thoughtSignature ผูกกับโมเดล ใช้ข้ามรุ่นไม่ได้ จึงต้อง restart ไม่ใช่สลับกลางคัน)
+const MODEL_CHAIN = [...new Set([GEMINI_MODEL, 'gemini-flash-latest', 'gemini-flash-lite-latest'])];
 
 const OUTLETS = {
   7: 'SJP', 12: 'CRM', 19: 'XCM', 37: 'SLR', 51: 'SUM',
@@ -232,70 +235,91 @@ export default async function handler(req, res) {
       `วันนี้คือ ${today} (ปี ค.ศ.) ข้อมูลทั้งหมดต้องมาจากเครื่องมือที่ให้ไว้เท่านั้น ห้ามเดาตัวเลขเอง ` +
       `ถ้าผู้ใช้ไม่ระบุช่วงวันที่ ให้ตีความอย่างสมเหตุผล (เช่น "เดือนนี้" = วันที่ 1 ของเดือนถึงวันนี้) และบอกช่วงที่ใช้ในคำตอบ ` +
       `สาขาที่มี: ${Object.values(OUTLETS).join(', ')} ` +
-      `เมื่อแสดงตัวเลขเงินให้ใส่ comma และหน่วยบาท ถ้าเหมาะสมให้จัดเป็นตาราง markdown`;
+      `เมื่อแสดงตัวเลขเงินให้ใส่ comma และหน่วยบาท ถ้าเหมาะสมให้จัดเป็นตาราง markdown\n\n` +
+      `การแสดงกราฟ: ถ้าคำตอบเหมาะกับกราฟ (เปรียบเทียบ/จัดอันดับ/แนวโน้มตามเวลา/สัดส่วน) ` +
+      `หรือผู้ใช้ขอ "กราฟ/ชาร์ต/รูป/ภาพ" ให้แทรกบล็อกนี้ (JSON ล้วน ห้ามมีคอมเมนต์):\n` +
+      '```chart\n{"type":"bar","title":"ชื่อกราฟ","xKey":"label","series":[{"key":"value","name":"ยอดขาย (บาท)"}],"data":[{"label":"XSB","value":1166937}]}\n```\n' +
+      `กติกากราฟ: type = "bar" (อันดับ/เปรียบเทียบ), "line" (แนวโน้มรายวัน — xKey เป็นวันที่), "pie" (สัดส่วน ≤8 ชิ้น) · ` +
+      `ตัวเลขใน data ต้องมาจากเครื่องมือเท่านั้น เป็น number ล้วน (ห้าม comma) สูงสุด 31 จุด · ` +
+      `เทียบหลายค่าได้ด้วยหลาย series เช่น [{"key":"xum","name":"XUM"},{"key":"sjp","name":"SJP"}] แล้ว data แต่ละจุดมี key ครบ · ` +
+      `เขียนสรุปข้อความสั้น ๆ ประกอบกราฟด้วยเสมอ`;
 
-    // แปลง history เป็นรูปแบบ Gemini
-    const contents = messages.map(m => ({
-      role: m.role === 'user' ? 'user' : 'model',
-      parts: [{ text: String(m.text || '') }],
-    }));
+    // รันบทสนทนากับโมเดลหนึ่งตัว — คืน { text, toolCalls } หรือ throw (e.rateLimited = โควตาเต็ม)
+    async function runChat(model) {
+      const contents = messages.map(m => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: String(m.text || '') }],
+      }));
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
+      const toolCalls = [];
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`;
-    const toolCalls = [];
-
-    // วนจนกว่า Gemini จะตอบข้อความ (จำกัด 6 รอบเครื่องมือ)
-    for (let round = 0; round < 6; round++) {
-      const body = {
-        systemInstruction: { parts: [{ text: systemText }] },
-        contents,
-        tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
-        // thinkingBudget 0 = ปิดโหมด "คิดก่อนตอบ" (เร็วขึ้น + กัน thought ภาษาอังกฤษหลุดมาในคำตอบ
-        // และกันความคิดกินโควตา token จนคำตอบจริงถูกตัด)
-        generationConfig: { temperature: 0.2, maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } },
-      };
-      const gr = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const gj = await gr.json();
-      if (!gr.ok) {
-        const msg = gj?.error?.message || `Gemini HTTP ${gr.status}`;
-        throw new Error(msg);
-      }
-
-      const parts = gj?.candidates?.[0]?.content?.parts || [];
-      const fnCalls = parts.filter(p => p.functionCall);
-
-      if (fnCalls.length === 0) {
-        // ตัดส่วน "ความคิด" (thought) ของโมเดลออก เอาเฉพาะคำตอบจริง
-        const text = parts.filter(p => !p.thought).map(p => p.text || '').join('').trim() || '(ไม่มีคำตอบ)';
-        return res.status(200).json({ text, toolCalls });
-      }
-
-      // มีการเรียกเครื่องมือ → รันแล้วส่งผลกลับ
-      // ต้องส่ง parts กลับตามที่โมเดลส่งมาทั้งก้อน (รวม thoughtSignature) ไม่งั้นโมเดลรุ่นใหม่จะ error
-      contents.push({ role: 'model', parts });
-      const responses = [];
-      for (const p of fnCalls) {
-        const { name, args } = p.functionCall;
-        toolCalls.push({ name, args });
-        let result;
-        try {
-          const fn = TOOL_HANDLERS[name];
-          result = fn ? await fn(args || {}) : { error: `ไม่รู้จักเครื่องมือ ${name}` };
-        } catch (e) {
-          result = { error: e.message };
+      // วนจนกว่า Gemini จะตอบข้อความ (จำกัด 6 รอบเครื่องมือ)
+      for (let round = 0; round < 6; round++) {
+        const body = {
+          systemInstruction: { parts: [{ text: systemText }] },
+          contents,
+          tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
+          // thinkingBudget 0 = ปิดโหมด "คิดก่อนตอบ" (เร็วขึ้น + กัน thought ภาษาอังกฤษหลุดมาในคำตอบ
+          // และกันความคิดกินโควตา token จนคำตอบจริงถูกตัด)
+          generationConfig: { temperature: 0.2, maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } },
+        };
+        const gr = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const gj = await gr.json();
+        if (!gr.ok) {
+          const err = new Error(gj?.error?.message || `Gemini HTTP ${gr.status}`);
+          err.rateLimited = gr.status === 429;
+          throw err;
         }
-        // แนบ id กลับถ้าโมเดลส่งมา (Gemini 3.x ผูกคำตอบเครื่องมือกับ id ของ functionCall)
-        const fr = { name, response: { result } };
-        if (p.functionCall.id) fr.id = p.functionCall.id;
-        responses.push({ functionResponse: fr });
+
+        const parts = gj?.candidates?.[0]?.content?.parts || [];
+        const fnCalls = parts.filter(p => p.functionCall);
+
+        if (fnCalls.length === 0) {
+          // ตัดส่วน "ความคิด" (thought) ของโมเดลออก เอาเฉพาะคำตอบจริง
+          const text = parts.filter(p => !p.thought).map(p => p.text || '').join('').trim() || '(ไม่มีคำตอบ)';
+          return { text, toolCalls };
+        }
+
+        // มีการเรียกเครื่องมือ → รันแล้วส่งผลกลับ
+        // ต้องส่ง parts กลับตามที่โมเดลส่งมาทั้งก้อน (รวม thoughtSignature) ไม่งั้นโมเดลรุ่นใหม่จะ error
+        contents.push({ role: 'model', parts });
+        const responses = [];
+        for (const p of fnCalls) {
+          const { name, args } = p.functionCall;
+          toolCalls.push({ name, args });
+          let result;
+          try {
+            const fn = TOOL_HANDLERS[name];
+            result = fn ? await fn(args || {}) : { error: `ไม่รู้จักเครื่องมือ ${name}` };
+          } catch (e) {
+            result = { error: e.message };
+          }
+          // แนบ id กลับถ้าโมเดลส่งมา (Gemini 3.x ผูกคำตอบเครื่องมือกับ id ของ functionCall)
+          const fr = { name, response: { result } };
+          if (p.functionCall.id) fr.id = p.functionCall.id;
+          responses.push({ functionResponse: fr });
+        }
+        contents.push({ role: 'user', parts: responses });
       }
-      contents.push({ role: 'user', parts: responses });
+      return { text: 'ขออภัย คำถามนี้ซับซ้อนเกินไป (เรียกข้อมูลหลายรอบเกินกำหนด) ลองแบ่งถามเป็นส่วนย่อยครับ', toolCalls };
     }
 
-    return res.status(200).json({ text: 'ขออภัย คำถามนี้ซับซ้อนเกินไป (เรียกข้อมูลหลายรอบเกินกำหนด) ลองแบ่งถามเป็นส่วนย่อยครับ', toolCalls });
+    // ลองตามลำดับโมเดล — โควตาเต็ม (429) ค่อยขยับไปตัวถัดไป
+    let lastErr = null;
+    for (const model of MODEL_CHAIN) {
+      try {
+        const out = await runChat(model);
+        return res.status(200).json({ ...out, model });
+      } catch (e) {
+        if (e.rateLimited) { lastErr = e; continue; }
+        throw e;
+      }
+    }
+    return res.status(502).json({ error: 'โควตา AI เต็มชั่วคราวทุกโมเดล — รอสัก 1 นาทีแล้วลองใหม่ครับ' + (lastErr ? '' : '') });
   } catch (err) {
     console.error('AI chat error:', err.message);
     return res.status(502).json({ error: err.message });

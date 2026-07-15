@@ -1,5 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Loader2, Send, AlertCircle, Trash2, Database } from 'lucide-react';
+import {
+  ResponsiveContainer, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
+  XAxis, YAxis, Tooltip, Legend, CartesianGrid,
+} from 'recharts';
 
 /*
  * AI NARAI — แชทถามข้อมูลยอดขาย/รายการขายด้วยภาษาคน
@@ -13,6 +17,80 @@ const SUGGESTIONS = [
   'เทียบยอดขาย SJP กับ CRM สัปดาห์นี้',
   'สัดส่วนช่องทางการชำระเงินเดือนนี้',
 ];
+
+// แยกข้อความออกเป็นส่วนข้อความ/กราฟ — AI แทรกกราฟมาเป็นบล็อก ```chart {json} ```
+function splitSegments(text) {
+  const segs = [];
+  const re = /```chart\s*([\s\S]*?)```/g;
+  let last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) segs.push({ kind: 'md', text: text.slice(last, m.index) });
+    try {
+      const spec = JSON.parse(m[1]);
+      segs.push({ kind: 'chart', spec });
+    } catch {
+      segs.push({ kind: 'md', text: m[1] }); // JSON พัง → โชว์เป็นข้อความดิบ
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) segs.push({ kind: 'md', text: text.slice(last) });
+  return segs;
+}
+
+const CHART_COLORS = ['#8b5cf6', '#f59e0b', '#10b981', '#ef4444', '#3b82f6', '#ec4899', '#14b8a6', '#f97316'];
+const nfmt = v => (typeof v === 'number' ? v.toLocaleString('th-TH') : v);
+
+// วาดกราฟจากสเปคที่ AI ส่งมา: bar (เปรียบเทียบ/อันดับ) / line (แนวโน้ม) / pie (สัดส่วน)
+function ChartBlock({ spec }) {
+  const { type = 'bar', title, xKey = 'label', series = [{ key: 'value', name: 'ค่า' }], data = [] } = spec || {};
+  if (!Array.isArray(data) || data.length === 0) return null;
+  const height = type === 'pie' ? 300 : Math.max(240, Math.min(340, data.length * 14));
+  return (
+    <div className="my-2 bg-white border border-slate-200 rounded-xl p-3">
+      {title && <div className="text-xs font-bold text-slate-600 mb-1.5">{title}</div>}
+      <div style={{ width: '100%', height }}>
+        <ResponsiveContainer>
+          {type === 'line' ? (
+            <LineChart data={data} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey={xKey} tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 10 }} tickFormatter={nfmt} width={70} />
+              <Tooltip formatter={v => nfmt(v)} />
+              {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
+              {series.map((s, i) => (
+                <Line key={s.key} type="monotone" dataKey={s.key} name={s.name || s.key}
+                  stroke={CHART_COLORS[i % CHART_COLORS.length]} strokeWidth={2} dot={data.length <= 31} />
+              ))}
+            </LineChart>
+          ) : type === 'pie' ? (
+            <PieChart>
+              <Pie data={data} dataKey={series[0]?.key || 'value'} nameKey={xKey}
+                cx="50%" cy="50%" outerRadius={100}
+                label={e => `${e[xKey]} (${nfmt(e[series[0]?.key || 'value'])})`}>
+                {data.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+              </Pie>
+              <Tooltip formatter={v => nfmt(v)} />
+            </PieChart>
+          ) : (
+            <BarChart data={data} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+              <XAxis dataKey={xKey} tick={{ fontSize: 10 }} interval={0}
+                angle={data.length > 8 ? -35 : 0} textAnchor={data.length > 8 ? 'end' : 'middle'}
+                height={data.length > 8 ? 60 : 30} />
+              <YAxis tick={{ fontSize: 10 }} tickFormatter={nfmt} width={70} />
+              <Tooltip formatter={v => nfmt(v)} />
+              {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} />}
+              {series.map((s, i) => (
+                <Bar key={s.key} dataKey={s.key} name={s.name || s.key}
+                  fill={CHART_COLORS[i % CHART_COLORS.length]} radius={[4, 4, 0, 0]} />
+              ))}
+            </BarChart>
+          )}
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
 
 // แปลง markdown แบบเบา ๆ: **หนา**, ตาราง | a | b |, บรรทัดใหม่ (ไม่มี dependency เพิ่ม)
 function renderLite(text) {
@@ -124,7 +202,11 @@ export default function AiNarai() {
                 : 'bg-slate-50 border border-slate-100 text-slate-800 rounded-bl-md'}`}>
                 {m.role === 'model' ? (
                   <div className="space-y-1">
-                    {renderLite(m.text).map((b, bi) => b.type === 'table' ? (
+                    {splitSegments(m.text).map((seg, si) => seg.kind === 'chart' ? (
+                      <ChartBlock key={`c${si}`} spec={seg.spec} />
+                    ) : (
+                      <React.Fragment key={`t${si}`}>
+                        {renderLite(seg.text).map((b, bi) => b.type === 'table' ? (
                       <div key={bi} className="overflow-x-auto my-2">
                         <table className="text-xs border-collapse">
                           <tbody>
@@ -136,8 +218,10 @@ export default function AiNarai() {
                           </tbody>
                         </table>
                       </div>
-                    ) : (
-                      <p key={bi} className={b.text.trim() ? '' : 'h-1'}><Bold text={b.text} /></p>
+                        ) : (
+                          <p key={bi} className={b.text.trim() ? '' : 'h-1'}><Bold text={b.text} /></p>
+                        ))}
+                      </React.Fragment>
                     ))}
                     {m.tools?.length > 0 && (
                       <div className="pt-1.5 flex flex-wrap gap-1">
