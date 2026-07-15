@@ -36,6 +36,7 @@ import EmployeeList from '../components/EmployeeList';
 import OtherExpense from '../components/OtherExpense';
 import QcRdMenu from '../components/QcRdMenu';
 import QcRdItems from '../components/QcRdItems';
+import AiNarai from '../components/AiNarai';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -2150,6 +2151,19 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            {/* AI NARAI — แชทถามข้อมูลด้วย Gemini (function calling → host API → SQL) */}
+            <div className="pt-2">
+              <button
+                onClick={() => { setActiveTab('aiNarai'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'aiNarai' ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-base leading-none">✨</span>
+                  <span>AI NARAI</span>
+                </div>
+              </button>
+            </div>
           </nav>
 
           {/* Sidebar Footer */}
@@ -2189,6 +2203,7 @@ export default function App() {
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
+                  : activeTab === 'aiNarai' ? '✨ AI NARAI'
                   : 'รายละเอียดรายการ'}
               </h1>
             </div>
@@ -2231,8 +2246,11 @@ export default function App() {
             {activeTab === 'qcrdMenu' && <QcRdMenu />}
             {activeTab === 'qcrdItems' && <QcRdItems />}
 
+            {/* AI NARAI: แชทถามข้อมูลด้วย Gemini */}
+            {activeTab === 'aiNarai' && <AiNarai />}
+
             {/* FILTER PANEL */}
-            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'otherExpense' || activeTab === 'qcrdMenu' || activeTab === 'qcrdItems') && (
+            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'otherExpense' || activeTab === 'qcrdMenu' || activeTab === 'qcrdItems' || activeTab === 'aiNarai') && (
             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">กำหนดช่วงวันที่และสาขา</h2>
               <div className="flex flex-wrap items-center gap-2 mb-4">
