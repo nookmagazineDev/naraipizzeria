@@ -8,8 +8,7 @@
 
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
-// gemini-flash-latest = โมเดล flash ล่าสุดที่บัญชีใช้ได้ (รุ่นระบุเลขเก่า ๆ ปิดรับผู้ใช้ใหม่/โควตา 0)
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 
 const OUTLETS = {
   7: 'SJP', 12: 'CRM', 19: 'XCM', 37: 'SLR', 51: 'SUM',
@@ -288,7 +287,10 @@ export default async function handler(req, res) {
         } catch (e) {
           result = { error: e.message };
         }
-        responses.push({ functionResponse: { name, response: { result } } });
+        // แนบ id กลับถ้าโมเดลส่งมา (Gemini 3.x ผูกคำตอบเครื่องมือกับ id ของ functionCall)
+        const fr = { name, response: { result } };
+        if (p.functionCall.id) fr.id = p.functionCall.id;
+        responses.push({ functionResponse: fr });
       }
       contents.push({ role: 'user', parts: responses });
     }
