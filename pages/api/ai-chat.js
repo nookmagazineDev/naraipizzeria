@@ -250,7 +250,9 @@ export default async function handler(req, res) {
         systemInstruction: { parts: [{ text: systemText }] },
         contents,
         tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 2048 },
+        // thinkingBudget 0 = ปิดโหมด "คิดก่อนตอบ" (เร็วขึ้น + กัน thought ภาษาอังกฤษหลุดมาในคำตอบ
+        // และกันความคิดกินโควตา token จนคำตอบจริงถูกตัด)
+        generationConfig: { temperature: 0.2, maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } },
       };
       const gr = await fetch(url, {
         method: 'POST',
@@ -267,7 +269,8 @@ export default async function handler(req, res) {
       const fnCalls = parts.filter(p => p.functionCall);
 
       if (fnCalls.length === 0) {
-        const text = parts.map(p => p.text || '').join('').trim() || '(ไม่มีคำตอบ)';
+        // ตัดส่วน "ความคิด" (thought) ของโมเดลออก เอาเฉพาะคำตอบจริง
+        const text = parts.filter(p => !p.thought).map(p => p.text || '').join('').trim() || '(ไม่มีคำตอบ)';
         return res.status(200).json({ text, toolCalls });
       }
 
