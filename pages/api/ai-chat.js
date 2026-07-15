@@ -8,7 +8,8 @@
 
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+// gemini-flash-latest = โมเดล flash ล่าสุดที่บัญชีใช้ได้ (รุ่นระบุเลขเก่า ๆ ปิดรับผู้ใช้ใหม่/โควตา 0)
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
 const OUTLETS = {
   7: 'SJP', 12: 'CRM', 19: 'XCM', 37: 'SLR', 51: 'SUM',
@@ -271,7 +272,8 @@ export default async function handler(req, res) {
       }
 
       // มีการเรียกเครื่องมือ → รันแล้วส่งผลกลับ
-      contents.push({ role: 'model', parts: fnCalls.map(p => ({ functionCall: p.functionCall })) });
+      // ต้องส่ง parts กลับตามที่โมเดลส่งมาทั้งก้อน (รวม thoughtSignature) ไม่งั้นโมเดลรุ่นใหม่จะ error
+      contents.push({ role: 'model', parts });
       const responses = [];
       for (const p of fnCalls) {
         const { name, args } = p.functionCall;
