@@ -155,6 +155,67 @@ const TOOL_HANDLERS = {
   async get_branches() {
     return { branches: Object.entries(OUTLETS).map(([id, name]) => ({ outletID: parseInt(id), code: name })) };
   },
+
+  // รายการบิลแบบแยกรายใบ (เลขบิล เวลา โต๊ะ ยอด ช่องทางจ่าย)
+  async get_bills({ start_date, end_date, branch, limit = 100 }) {
+    assertRange(start_date, end_date, 7); // รายใบข้อมูลเยอะ จำกัด 7 วันต่อครั้ง
+    const rows = await fetchSales(start_date, end_date, branch);
+    const bills = rows.map(b => ({
+      checkID: b.checkID,
+      branch: OUTLETS[b.outletID] || String(b.outletID),
+      time: String(b.startTime || b.date || '').slice(0, 16),
+      table: b.tableID,
+      total: r2(num(b.billTotal) - num(b.voucher1)),
+      paidType: b.paidType || '',
+    })).sort((a, b) => a.time.localeCompare(b.time));
+    const cap = Math.min(limit, 300);
+    return {
+      totalBills: bills.length,
+      sumTotal: r2(bills.reduce((s, b) => s + b.total, 0)),
+      bills: bills.slice(0, cap),
+      truncated: bills.length > cap ? `แสดง ${cap} จาก ${bills.length} ใบ` : undefined,
+    };
+  },
+
+  // เจาะยอดขายของเมนูเดียว (ค้นด้วยรหัสหรือชื่อ) แยกตามวันหรือตามสาขา
+  async get_item_sales({ item, start_date, end_date, branch, group_by = 'day' }) {
+    if (!item) throw new Error('ต้องระบุ item (รหัสหรือบางส่วนของชื่อเมนู)');
+    assertRange(start_date, end_date, 31);
+    const rows = await fetchDetails(start_date, end_date, branch);
+    const kw = String(item).trim().toLowerCase();
+    const hit = rows.filter(r => {
+      if (r.void) return false;
+      if (EXCLUDE_TABLES.includes(parseInt(r.tableID))) return false;
+      if (isExcludedItem(r.itemCode)) return false;
+      return String(r.itemCode) === kw || String(r.nameThai || '').toLowerCase().includes(kw);
+    });
+    if (!hit.length) {
+      // ไม่เจอ → แนะนำชื่อใกล้เคียง (คำแรกของ keyword)
+      const first = kw.slice(0, 4);
+      const sug = [...new Set(rows.filter(r => String(r.nameThai || '').toLowerCase().includes(first))
+        .map(r => `${r.itemCode} ${String(r.nameThai).trim()}`))].slice(0, 10);
+      return { found: false, message: `ไม่พบเมนูที่ตรงกับ "${item}" ในช่วงนี้`, suggestions: sug };
+    }
+    const matched = [...new Set(hit.map(r => `${r.itemCode} ${String(r.nameThai).trim()}`))].slice(0, 10);
+    const g = {};
+    hit.forEach(r => {
+      const key = group_by === 'branch'
+        ? (OUTLETS[r.outletID] || String(r.outletID))
+        : String(r.prtOrdTime || r.startTime || '').slice(0, 10);
+      if (!g[key]) g[key] = { [group_by === 'branch' ? 'branch' : 'date']: key, qty: 0, amount: 0 };
+      g[key].qty += num(r.quantity);
+      g[key].amount += num(r.grossPrice);
+    });
+    const out = Object.values(g).map(x => ({ ...x, qty: r2(x.qty), amount: r2(x.amount) }))
+      .sort((a, b) => String(a.date || a.branch).localeCompare(String(b.date || b.branch)));
+    return {
+      found: true, matchedItems: matched,
+      totalQty: r2(hit.reduce((s, r) => s + num(r.quantity), 0)),
+      totalAmount: r2(hit.reduce((s, r) => s + num(r.grossPrice), 0)),
+      rows: out,
+      note: 'amount = ยอดก่อน VAT ไม่รวม void',
+    };
+  },
 };
 
 // ── นิยามเครื่องมือให้ Gemini ──
@@ -213,6 +274,35 @@ const TOOL_DECLARATIONS = [
     },
   },
   { name: 'get_branches', description: 'รายชื่อสาขาทั้งหมดพร้อม outletID', parameters: { type: 'OBJECT', properties: {} } },
+  {
+    name: 'get_bills',
+    description: 'รายการบิลแบบแยกรายใบ (เลขบิล เวลา โต๊ะ ยอด ช่องทางจ่าย) สูงสุด 7 วันต่อครั้ง — ใช้เมื่อผู้ใช้อยากไล่ดูบิลทีละใบ',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
+        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (ห่างกันไม่เกิน 7 วัน)' },
+        branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
+        limit: { type: 'NUMBER', description: 'จำนวนบิลสูงสุดที่แสดง (default 100, สูงสุด 300)' },
+      },
+      required: ['start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'get_item_sales',
+    description: 'เจาะยอดขายของเมนูเดียว ค้นด้วยรหัสหรือบางส่วนของชื่อ แยกเป็นรายวันหรือรายสาขา — ใช้เมื่อถามถึงเมนูเฉพาะเจาะจง เช่น "เนื้อริบอายขายวันไหนเท่าไหร่"',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        item: { type: 'STRING', description: 'รหัสเมนู หรือบางส่วนของชื่อเมนู เช่น "ริบอาย"' },
+        start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
+        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (สูงสุด 31 วัน)' },
+        branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
+        group_by: { type: 'STRING', description: '"day" แยกรายวัน (default) หรือ "branch" แยกรายสาขา' },
+      },
+      required: ['item', 'start_date', 'end_date'],
+    },
+  },
 ];
 
 export default async function handler(req, res) {
