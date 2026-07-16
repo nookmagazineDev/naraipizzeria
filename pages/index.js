@@ -433,6 +433,7 @@ const DETAIL_COLUMNS = [
   { key: 'outletID', label: 'สาขา', type: 'outlet' },
   { key: 'itemCode', label: 'รหัสสินค้า', type: 'text' },
   { key: 'nameThai', label: 'ชื่อรายการ', type: 'text' },
+  { key: 'menuGroup', label: 'หมวดหมู่', type: 'text' },
   { key: 'quantity', label: 'จำนวน', type: 'num' },
   { key: 'unitPrice', label: 'ราคา/หน่วย', type: 'money' },
   { key: 'grossPrice', label: 'มูลค่ารวม', type: 'money' },
@@ -496,6 +497,7 @@ const DAILY_COLUMNS = [
 const ITEM_COLUMNS = [
   { key: 'itemCode', label: 'รหัสไอเทม', type: 'text' },
   { key: 'nameThai', label: 'ชื่อรายการ (ไทย)', type: 'text' },
+  { key: 'menuGroup', label: 'หมวดหมู่', type: 'text' },
   { key: 'nameEng', label: 'ชื่อ (Eng)', type: 'text' },
   { key: 'totalQty', label: 'จำนวนรวม', type: 'num' },
   { key: 'totalGross', label: 'มูลค่ารวม (฿)', type: 'money' },
@@ -568,6 +570,7 @@ export default function App() {
   const [detailRaw, setDetailRaw] = useState([]);        // กรองแล้ว (ใช้คำนวณ)
   const [detailAllRaw, setDetailAllRaw] = useState([]);  // ครบทุกแถว (ใช้แสดงหน้ารายละเอียด)
   const [costMap, setCostMap] = useState({});
+  const [menuGroupMap, setMenuGroupMap] = useState({});  // itemCode -> ชื่อหมวดหมู่เมนู
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
@@ -693,6 +696,11 @@ export default function App() {
         return r.json();
       });
 
+      // หมวดหมู่เมนู (itemCode -> ชื่อหมวด) — ไม่บังคับ ถ้าโหลดไม่ได้แค่ไม่โชว์หมวด
+      const menuGroupPromise = fetch(`/api/menugroup`)
+        .then(r => (r.ok ? r.json() : {}))
+        .catch(() => ({}));
+
       // ถ้าระบุสาขา → ดึงเฉพาะสาขานั้น (เร็วขึ้นมาก) ; ไม่ระบุ → ดึงทุกสาขาเหมือนเดิม
       const outletParam = selectedOutlet ? `&outlet=${encodeURIComponent(selectedOutlet)}` : '';
 
@@ -794,6 +802,7 @@ export default function App() {
       setDetailAllRaw(allDetails);
       setExcludedRaw(excludedDetails);
       setCostMap(costJson);
+      setMenuGroupMap(await menuGroupPromise);
       setLoaded(true);
 
       // Prepopulate branch comparison with top 3 outlets by sales
@@ -946,10 +955,16 @@ export default function App() {
   }, [salesWithCost, salesSearch, salesColF, selectedOutlet, salesSort]);
 
   // Enrich detail rows with unit cost & line cost (ต้นทุน/หน่วย, ต้นทุนรวม)
+  // หาชื่อหมวดจาก itemCode (เผื่อรหัสมี/ไม่มีศูนย์นำหน้า)
+  const groupOf = (code) => {
+    const c = String(code ?? '').trim();
+    return menuGroupMap[c] ?? menuGroupMap[c.replace(/^0+/, '')] ?? '';
+  };
+
   const detailsWithCost = useMemo(() => detailAllRaw.map(r => {
     const unitCost = costMap[r.itemCode] ?? 0;
-    return { ...r, unitCost, lineCost: unitCost * (parseFloat(r.quantity) || 0) };
-  }), [detailAllRaw, costMap]);
+    return { ...r, unitCost, lineCost: unitCost * (parseFloat(r.quantity) || 0), menuGroup: groupOf(r.itemCode) };
+  }), [detailAllRaw, costMap, menuGroupMap]);
 
   const filteredDetails = useMemo(() => {
     const d = applyFilters(detailsWithCost, DETAIL_COLUMNS, detailSearch, detailColF, selectedOutlet);
@@ -1571,7 +1586,7 @@ export default function App() {
       const cost = unitCost * qty;
 
       if (!grouped[code]) {
-        grouped[code] = { itemCode: code, nameThai: name, nameEng, totalQty: 0, totalGross: 0, totalCost: 0 };
+        grouped[code] = { itemCode: code, nameThai: name, menuGroup: groupOf(code), nameEng, totalQty: 0, totalGross: 0, totalCost: 0 };
       }
       grouped[code].totalQty += qty;
       grouped[code].totalGross += gross;
@@ -1582,7 +1597,7 @@ export default function App() {
       ...item,
       profit: item.totalGross - item.totalCost
     }));
-  }, [detailRaw, selectedOutlet, costMap]);
+  }, [detailRaw, selectedOutlet, costMap, menuGroupMap]);
 
   // Item Search: breakdown of selected item by branch
   const itemBranchData = useMemo(() => {
@@ -1751,25 +1766,25 @@ export default function App() {
       b.totalQty += qty; b.totalGross += gross; b.totalCost += cost;
     });
 
-    const header = ['รหัสไอเทม', 'ชื่อรายการ (ไทย)', 'สาขา', 'จำนวน (ชิ้น)', 'มูลค่ารวม (฿)', 'ต้นทุนรวม (฿)', 'กำไร (฿)', 'สัดส่วน (%)'];
+    const header = ['รหัสไอเทม', 'ชื่อรายการ (ไทย)', 'หมวดหมู่', 'สาขา', 'จำนวน (ชิ้น)', 'มูลค่ารวม (฿)', 'ต้นทุนรวม (฿)', 'กำไร (฿)', 'สัดส่วน (%)'];
     const aoa = [header];
 
     items.forEach(item => {
       const code = String(item.itemCode);
       // แถวสรุปรวมของไอเทม
-      aoa.push([code, item.nameThai, 'รวมทั้งหมด', r2(item.totalQty), r2(item.totalGross), r2(item.totalCost), r2(item.profit), 100]);
+      aoa.push([code, item.nameThai, item.menuGroup || '', 'รวมทั้งหมด', r2(item.totalQty), r2(item.totalGross), r2(item.totalCost), r2(item.profit), 100]);
       // แถวย่อยแยกตามสาขา (เรียงจำนวนมาก→น้อย)
       const branches = Object.values(branchMap[code] || {})
         .map(b => ({ ...b, profit: b.totalGross - b.totalCost }))
         .sort((a, b) => b.totalQty - a.totalQty);
       const sumQty = branches.reduce((s, b) => s + b.totalQty, 0) || item.totalQty || 1;
       branches.forEach(b => {
-        aoa.push(['', '', b.name, r2(b.totalQty), r2(b.totalGross), r2(b.totalCost), r2(b.profit), Math.round((b.totalQty / sumQty) * 1000) / 10]);
+        aoa.push(['', '', '', b.name, r2(b.totalQty), r2(b.totalGross), r2(b.totalCost), r2(b.profit), Math.round((b.totalQty / sumQty) * 1000) / 10]);
       });
     });
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 12 }, { wch: 34 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 11 }];
+    ws['!cols'] = [{ wch: 12 }, { wch: 34 }, { wch: 18 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 11 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'รายไอเทมแยกสาขา');
 
@@ -1781,7 +1796,7 @@ export default function App() {
     });
     const branchOids = [...branchOidSet].sort((a, b) => a - b);
     const shortName = oid => OUTLETS[parseInt(oid)] || String(oid);
-    const pivotHeader = ['รหัสไอเทม', 'ชื่อรายการ (ไทย)', ...branchOids.map(shortName), 'รวม'];
+    const pivotHeader = ['รหัสไอเทม', 'ชื่อรายการ (ไทย)', 'หมวดหมู่', ...branchOids.map(shortName), 'รวม'];
     const pivotAoa = [pivotHeader];
     items.forEach(item => {
       const code = String(item.itemCode);
@@ -1790,10 +1805,10 @@ export default function App() {
         const q = m[oid] ? m[oid].totalQty : 0;
         return q ? r2(q) : '';   // เว้นว่างถ้าสาขานั้นไม่ได้ขาย เพื่ออ่านง่าย
       });
-      pivotAoa.push([code, item.nameThai, ...qtyCells, r2(item.totalQty)]);
+      pivotAoa.push([code, item.nameThai, item.menuGroup || '', ...qtyCells, r2(item.totalQty)]);
     });
     const ws2 = XLSX.utils.aoa_to_sheet(pivotAoa);
-    ws2['!cols'] = [{ wch: 12 }, { wch: 32 }, ...branchOids.map(() => ({ wch: 8 })), { wch: 10 }];
+    ws2['!cols'] = [{ wch: 12 }, { wch: 32 }, { wch: 18 }, ...branchOids.map(() => ({ wch: 8 })), { wch: 10 }];
     XLSX.utils.book_append_sheet(wb, ws2, 'จำนวนแยกสาขา');
 
     XLSX.writeFile(wb, `item_report_${startDate}_to_${endDate}.xlsx`);
@@ -3105,6 +3120,11 @@ export default function App() {
                                     {row.nameThai || '-'}
                                     {isExcluded && <span className="ml-2 text-[9px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">ไม่นับ</span>}
                                   </td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap">
+                                    {row.menuGroup
+                                      ? <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full text-[11px] font-medium">{row.menuGroup}</span>
+                                      : <span className="text-slate-300">-</span>}
+                                  </td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono font-semibold">{fmtNum(row.quantity)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-slate-500">{fmtMoney(row.unitPrice)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap text-right font-mono text-emerald-600 font-bold">{fmtMoney(row.grossPrice)}</td>
@@ -3561,6 +3581,11 @@ export default function App() {
                               >
                                 <td className="px-4 py-2.5 font-mono text-slate-500">{item.itemCode}</td>
                                 <td className="px-4 py-2.5 text-slate-800 font-medium max-w-[220px] truncate">{item.nameThai}</td>
+                                <td className="px-4 py-2.5 whitespace-nowrap">
+                                  {item.menuGroup
+                                    ? <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full text-[11px] font-medium">{item.menuGroup}</span>
+                                    : <span className="text-slate-300">-</span>}
+                                </td>
                                 <td className="px-4 py-2.5 text-slate-400 max-w-[160px] truncate">{item.nameEng}</td>
                                 <td className="px-4 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(item.totalQty)}</td>
                                 <td className="px-4 py-2.5 text-right font-mono text-amber-600">{fmtMoney(item.totalGross)}</td>
