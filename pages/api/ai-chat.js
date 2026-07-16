@@ -7,6 +7,10 @@
 // เลือกโมเดลผ่าน env GEMINI_MODEL (default: gemini-2.0-flash)
 
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
+// ชีทต้นทุนเมนู (ตัวเดียวกับ /api/cost) + GAS ค่าใช้จ่าย/พนักงาน (ตัวเดียวกับ proxy)
+const COST_SHEET_CSV = 'https://docs.google.com/spreadsheets/d/1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw/export?format=csv&gid=0';
+const EXPENSE_GAS = process.env.EXPENSE_GAS_URL || 'https://script.google.com/macros/s/AKfycbwcRP65mAO0jWusYr1OfcgxpW8GU7yv0t85VcnQ3ShTjEROaXCF2d3MNo_VffNho6Y/exec';
+const HR_GAS = 'https://script.google.com/macros/s/AKfycbwIOFT32mCznuUzCpLZnyBrYrjkdYRskUdVEVXEkP2CeMNd2qzT7dAqd7Vfsz2ZKbF2Fw/exec';
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 // ลำดับ fallback เมื่อโมเดลหลักโควตาเต็ม (429) — เริ่มใหม่ทั้งบทสนทนากับโมเดลถัดไป
@@ -216,7 +220,197 @@ const TOOL_HANDLERS = {
       note: 'amount = ยอดก่อน VAT ไม่รวม void',
     };
   },
+
+  // ต้นทุน/กำไร: ยอดขายก่อน VAT − ต้นทุนจากชีทต้นทุนเมนู แยกรายวันหรือรายสาขา
+  async get_cost_profit({ start_date, end_date, branch, group_by = 'branch' }) {
+    assertRange(start_date, end_date, 31);
+    const [rows, costMap] = await Promise.all([fetchDetails(start_date, end_date, branch), fetchCostMap()]);
+    const g = {};
+    rows.forEach(r => {
+      if (r.void) return;
+      const tid = parseInt(r.tableID);
+      if (EXCLUDE_TABLES.includes(tid)) return;
+      if (isExcludedItem(r.itemCode)) return;
+      const key = group_by === 'day'
+        ? String(r.prtOrdTime || r.startTime || '').slice(0, 10)
+        : (OUTLETS[r.outletID] || String(r.outletID));
+      if (!g[key]) g[key] = { [group_by === 'day' ? 'date' : 'branch']: key, netSales: 0, cost: 0, prepCost: 0 };
+      const unitCost = costMap[String(r.itemCode)] || costMap[String(r.itemCode).replace(/^0+/, '')] || 0;
+      // โต๊ะ 500 = เตรียมของ (ไม่มียอดขาย) — แยกเป็น prepCost ไม่รวมในต้นทุนขาย (ตรงกับหน้ารายงาน)
+      if (tid === 500) { g[key].prepCost += num(r.quantity) * unitCost; return; }
+      g[key].netSales += num(r.grossPrice);
+      g[key].cost += num(r.quantity) * unitCost;
+    });
+    const out = Object.values(g).map(x => ({
+      ...x, netSales: r2(x.netSales), cost: r2(x.cost), prepCost: r2(x.prepCost),
+      profit: r2(x.netSales - x.cost),
+      costPct: x.netSales > 0 ? r2((x.cost / x.netSales) * 100) : 0,
+    })).sort((a, b) => String(a.date || a.branch).localeCompare(String(b.date || b.branch)));
+    return {
+      rows: out,
+      total: {
+        netSales: r2(out.reduce((s, x) => s + x.netSales, 0)),
+        cost: r2(out.reduce((s, x) => s + x.cost, 0)),
+        profit: r2(out.reduce((s, x) => s + x.profit, 0)),
+      },
+      note: 'netSales = ยอดก่อน VAT · cost จากชีทต้นทุนเมนู (เมนูที่ไม่มีต้นทุนในชีทคิดเป็น 0) · costPct = ต้นทุน%',
+    };
+  },
+
+  // รายการยกเลิก (void): สรุปต่อสาขา + เมนูที่โดน void บ่อย
+  async get_voids({ start_date, end_date, branch }) {
+    assertRange(start_date, end_date, 31);
+    const rows = await fetchDetails(start_date, end_date, branch);
+    const voided = rows.filter(r => r.void && !EXCLUDE_TABLES.includes(parseInt(r.tableID)));
+    const byBranch = {}, byItem = {}, byType = {};
+    voided.forEach(r => {
+      const b = OUTLETS[r.outletID] || String(r.outletID);
+      if (!byBranch[b]) byBranch[b] = { branch: b, lines: 0, qty: 0, value: 0 };
+      byBranch[b].lines++; byBranch[b].qty += num(r.quantity); byBranch[b].value += num(r.grossPrice);
+      const ik = `${r.itemCode} ${String(r.nameThai || '').trim()}`;
+      if (!byItem[ik]) byItem[ik] = { item: ik, lines: 0, qty: 0 };
+      byItem[ik].lines++; byItem[ik].qty += num(r.quantity);
+      const vt = String(r.voidType || 'ไม่ระบุ').trim() || 'ไม่ระบุ';
+      byType[vt] = (byType[vt] || 0) + 1;
+    });
+    return {
+      totalLines: voided.length,
+      totalValue: r2(voided.reduce((s, r) => s + num(r.grossPrice), 0)),
+      byBranch: Object.values(byBranch).map(x => ({ ...x, qty: r2(x.qty), value: r2(x.value) }))
+        .sort((a, b) => b.value - a.value),
+      topItems: Object.values(byItem).sort((a, b) => b.lines - a.lines).slice(0, 10),
+      byVoidType: byType,
+    };
+  },
+
+  // จำนวนลูกค้า (หัว) + ยอดใช้จ่ายต่อหัว — นับจากจานบุฟเฟต์ที่จ่ายจริง (สาขา WRM/WMT ใช้ coverAll)
+  async get_covers({ start_date, end_date, branch, group_by = 'branch' }) {
+    assertRange(start_date, end_date, 31);
+    const BUFFET = ['101001', '101002', '101003', '101004', '101107'];
+    const COVERALL_OUTLETS = [501, 503];
+    const [dets, sales] = await Promise.all([
+      fetchDetails(start_date, end_date, branch),
+      fetchSales(start_date, end_date, branch),
+    ]);
+    const keyOfD = r => group_by === 'day'
+      ? String(r.prtOrdTime || r.startTime || '').slice(0, 10)
+      : (OUTLETS[r.outletID] || String(r.outletID));
+    const g = {};
+    dets.forEach(r => {
+      if (r.void) return;
+      if (!BUFFET.includes(String(r.itemCode))) return;
+      if (COVERALL_OUTLETS.includes(parseInt(r.outletID))) return;
+      const k = keyOfD(r);
+      if (!g[k]) g[k] = { [group_by === 'day' ? 'date' : 'branch']: k, covers: 0, netSales: 0 };
+      g[k].covers += num(r.quantity);
+    });
+    // สาขาที่ใช้ coverAll จากบิล + ยอดขายจากบิล (ก่อน VAT)
+    sales.forEach(b => {
+      const bt = num(b.billTotal) - num(b.voucher1);
+      if (bt < 0) return;
+      const k = group_by === 'day'
+        ? String(b.startTime || b.date || '').slice(0, 10)
+        : (OUTLETS[b.outletID] || String(b.outletID));
+      if (!g[k]) g[k] = { [group_by === 'day' ? 'date' : 'branch']: k, covers: 0, netSales: 0 };
+      g[k].netSales += bt - num(b.vat);
+      if (COVERALL_OUTLETS.includes(parseInt(b.outletID))) g[k].covers += num(b.coverAll);
+    });
+    const out = Object.values(g).map(x => ({
+      ...x, covers: r2(x.covers), netSales: r2(x.netSales),
+      spendPerHead: x.covers > 0 ? r2(x.netSales / x.covers) : null,
+    })).sort((a, b) => String(a.date || a.branch).localeCompare(String(b.date || b.branch)));
+    return { rows: out, note: 'covers = จานบุฟเฟต์ที่จ่ายจริง (ไม่รวมเด็กฟรี) · spendPerHead = ยอดก่อน VAT ÷ หัว' };
+  },
+
+  // ยอดขายรายชั่วโมง — ช่วงเวลาไหนขายดี
+  async get_hourly_sales({ start_date, end_date, branch }) {
+    assertRange(start_date, end_date, 31);
+    const rows = await fetchSales(start_date, end_date, branch);
+    const g = {};
+    rows.forEach(b => {
+      const bt = num(b.billTotal) - num(b.voucher1);
+      if (bt <= 0) return;
+      const hh = String(b.startTime || b.date || '').slice(11, 13);
+      if (!hh) return;
+      const k = `${hh}:00`;
+      if (!g[k]) g[k] = { hour: k, bills: 0, total: 0 };
+      g[k].bills++; g[k].total += bt;
+    });
+    const out = Object.values(g).map(x => ({ ...x, total: r2(x.total) })).sort((a, b) => a.hour.localeCompare(b.hour));
+    return { rows: out, note: 'อิงเวลาเปิดบิล ยอดรวม VAT' };
+  },
+
+  // ค่าใช้จ่ายอื่นๆ (ค่าเช่า/ไฟ/น้ำ/แก๊ส/โทรศัพท์) จากชีทที่ทีมบันทึก
+  async get_expenses({ month, branch }) {
+    const list = await gasPost(EXPENSE_GAS, { action: 'getExpenses' });
+    let rows = list || [];
+    if (month) rows = rows.filter(r => String(r.month) === String(month));
+    if (branch) rows = rows.filter(r => String(r.branch).toUpperCase() === String(branch).toUpperCase());
+    if (!rows.length) return { found: false, message: 'ไม่มีข้อมูลค่าใช้จ่ายตามเงื่อนไข', months: [...new Set((list || []).map(r => r.month))].sort() };
+    const g = {};
+    rows.forEach(r => {
+      const k = `${r.month}|${r.branch}|${r.type}`;
+      if (!g[k]) g[k] = { month: r.month, branch: r.branch, type: r.type, total: 0 };
+      g[k].total += num(r.total);
+    });
+    const out = Object.values(g).map(x => ({ ...x, total: r2(x.total) }))
+      .sort((a, b) => a.month.localeCompare(b.month) || a.branch.localeCompare(b.branch));
+    return {
+      rows: out.slice(0, 200),
+      grandTotal: r2(out.reduce((s, x) => s + x.total, 0)),
+      note: 'ประเภท: ค่าเช่าพื้นที่/ไฟฟ้า/น้ำประปา/แก๊ส/tel — ข้อมูลเท่าที่ทีมบันทึกในระบบ',
+    };
+  },
+
+  // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว)
+  async get_employees_summary({ branch }) {
+    const list = await gasPost(HR_GAS, { action: 'getEmployees', branch: 'all' });
+    let emps = (list || []).filter(e => e.hrCode && String(e.fullName || '').trim() !== 'ชื่อ - สกุล');
+    if (branch) emps = emps.filter(e => String(e.branch).toUpperCase() === String(branch).toUpperCase());
+    const byBranch = {};
+    emps.forEach(e => {
+      const b = String(e.branch || '-').toUpperCase();
+      if (!byBranch[b]) byBranch[b] = { branch: b, active: 0, resigned: 0 };
+      if (e.status === 'ลาออก') byBranch[b].resigned++; else byBranch[b].active++;
+    });
+    return {
+      total: emps.length,
+      active: emps.filter(e => e.status !== 'ลาออก').length,
+      resigned: emps.filter(e => e.status === 'ลาออก').length,
+      byBranch: Object.values(byBranch).sort((a, b) => b.active - a.active),
+    };
+  },
 };
+
+// ── ตัวช่วยดึงข้อมูลภายนอก ──
+let costCache = { map: null, at: 0 };
+async function fetchCostMap() {
+  if (costCache.map && Date.now() - costCache.at < 10 * 60 * 1000) return costCache.map; // cache 10 นาที
+  const r = await fetch(COST_SHEET_CSV, { cache: 'no-store', redirect: 'follow' });
+  if (!r.ok) throw new Error(`cost sheet HTTP ${r.status}`);
+  const lines = (await r.text()).split('\n');
+  const map = {};
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    const code = (cols[0] || '').replace(/"/g, '').trim();
+    const cost = parseFloat((cols[4] || '').replace(/"/g, ''));
+    if (code && !isNaN(cost) && !(code in map)) map[code] = cost;
+  }
+  costCache = { map, at: Date.now() };
+  return map;
+}
+
+async function gasPost(url, payload) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+    redirect: 'follow',
+  });
+  const j = await r.json();
+  if (j.status !== 'success') throw new Error(j.message || 'GAS error');
+  return j.data;
+}
 
 // ── นิยามเครื่องมือให้ Gemini ──
 const TOOL_DECLARATIONS = [
@@ -301,6 +495,75 @@ const TOOL_DECLARATIONS = [
         group_by: { type: 'STRING', description: '"day" แยกรายวัน (default) หรือ "branch" แยกรายสาขา' },
       },
       required: ['item', 'start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'get_cost_profit',
+    description: 'วิเคราะห์ต้นทุนและกำไร: ยอดขายก่อน VAT, ต้นทุนวัตถุดิบ (จากชีทต้นทุนเมนู), กำไร, ต้นทุน% แยกรายวันหรือรายสาขา',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 31 วัน' },
+        branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
+        group_by: { type: 'STRING', description: '"branch" (default) หรือ "day"' },
+      },
+      required: ['start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'get_voids',
+    description: 'วิเคราะห์รายการยกเลิก (void): จำนวน/มูลค่าต่อสาขา เมนูที่โดน void บ่อย และประเภทการ void',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 31 วัน' },
+        branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
+      },
+      required: ['start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'get_covers',
+    description: 'จำนวนลูกค้า (หัว/จานบุฟเฟต์ที่จ่ายจริง) และยอดใช้จ่ายเฉลี่ยต่อหัว แยกรายวันหรือรายสาขา',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 31 วัน' },
+        branch: { type: 'STRING' },
+        group_by: { type: 'STRING', description: '"branch" (default) หรือ "day"' },
+      },
+      required: ['start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'get_hourly_sales',
+    description: 'ยอดขายแยกรายชั่วโมง (ช่วงเวลาไหนขายดี/บิลเยอะ) อิงเวลาเปิดบิล',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 31 วัน' },
+        branch: { type: 'STRING' },
+      },
+      required: ['start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'get_expenses',
+    description: 'ค่าใช้จ่ายอื่นๆ ที่ทีมบันทึกไว้ (ค่าเช่าพื้นที่ ไฟฟ้า น้ำประปา แก๊ส โทรศัพท์) ต่อเดือนต่อสาขา',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        month: { type: 'STRING', description: 'เดือน YYYY-MM (ไม่ระบุ = ทุกเดือน)' },
+        branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
+      },
+    },
+  },
+  {
+    name: 'get_employees_summary',
+    description: 'สรุปจำนวนพนักงาน: ทั้งหมด/ทำงานอยู่/ลาออก แยกรายสาขา',
+    parameters: {
+      type: 'OBJECT',
+      properties: { branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' } },
     },
   },
 ];
