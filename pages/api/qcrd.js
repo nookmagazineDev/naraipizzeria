@@ -98,7 +98,7 @@ export function inferUnit(name) {
 
 // อ่านผ่าน export?format=csv (ค่าดิบตรงตามชีท) — ห้ามใช้ gviz เพราะ gviz เดาชนิดคอลัมน์
 // แล้วทิ้งค่าที่ไม่ตรงชนิด เช่น รหัสเมนูที่เป็นข้อความในคอลัมน์ที่ส่วนใหญ่เป็นตัวเลข จะกลายเป็นช่องว่าง
-const SHEET_GIDS = { menu: '0', BOM: '419926693', item: '302875824' };
+const SHEET_GIDS = { menu: '0', BOM: '419926693', item: '302875824', menucodegroup: '1491689317' };
 
 async function fetchSheet(name) {
   const gid = SHEET_GIDS[name];
@@ -114,18 +114,28 @@ export default async function handler(req, res) {
   const { sheet } = req.query;
   try {
     if (sheet === 'menu') {
-      const rows = await fetchSheet('menu');
+      // ดึงชื่อหมวดมาด้วย เพื่อแปลง MenuCode (คอลัมน์ C) เป็นชื่อหมวดให้หน้าเว็บ
+      const [rows, groupRows] = await Promise.all([fetchSheet('menu'), fetchSheet('menucodegroup')]);
+      const groupName = {};
+      groupRows.slice(1).forEach(r => {
+        const c = (r[0] || '').trim();
+        if (c) groupName[c] = (r[1] || '').trim();
+      });
       const data = rows.slice(1)
         .filter(r => (r[0] || '').trim())
-        .map(r => ({
-          code: r[0].trim(),
-          name: (r[1] || '').trim(),
-          group: (r[2] || '').trim(),
-          price: num(r[3]),
-          cost: num(r[4]),
-          // F = สถานะเมนู (ว่าง = ใช้งาน)
-          status: (r[5] || '').trim() || 'ใช้งาน',
-        }));
+        .map(r => {
+          const menuCode = (r[2] || '').trim();   // C = MenuCode (เลขหมวด)
+          return {
+            code: r[0].trim(),
+            name: (r[1] || '').trim(),
+            group: menuCode,
+            groupName: groupName[menuCode] || '', // ชื่อหมวดสำหรับแสดงผล
+            price: num(r[3]),
+            cost: num(r[4]),
+            // F = สถานะเมนู (ว่าง = ใช้งาน)
+            status: (r[5] || '').trim() || 'ใช้งาน',
+          };
+        });
       return res.status(200).json({ status: 'success', data });
     }
 

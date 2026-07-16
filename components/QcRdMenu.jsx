@@ -21,6 +21,7 @@ export default function QcRdMenu() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [groupFilter, setGroupFilter] = useState('');
   const [page, setPage] = useState(1);
   const [togglingCode, setTogglingCode] = useState(null);
   const [viewCode, setViewCode] = useState(null);   // เมนูที่กำลังดูสูตร
@@ -56,15 +57,22 @@ export default function QcRdMenu() {
     const q = search.trim().toLowerCase();
     const list = menus.filter(m => {
       if (statusFilter && (m.status || 'ใช้งาน') !== statusFilter) return false;
+      if (groupFilter && (m.groupName || '') !== groupFilter) return false;
       if (!q) return true;
-      return m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
+      return m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
+        || (m.groupName || '').toLowerCase().includes(q);
     });
     // เมนูที่มีสูตร (BOM) ขึ้นก่อน แล้วคงลำดับเดิมตามชีท menu (ไม่เรียงตามเลขรหัส)
     const idx = new Map(menus.map((m, i) => [m.code, i]));
     return [...list].sort((a, b) =>
       ((bom[b.code] ? 1 : 0) - (bom[a.code] ? 1 : 0)) ||
       ((idx.get(a.code) ?? 0) - (idx.get(b.code) ?? 0)));
-  }, [menus, bom, search, statusFilter]);
+  }, [menus, bom, search, statusFilter, groupFilter]);
+
+  // รายชื่อหมวดหมู่ที่มีจริงในชีท (สำหรับ dropdown กรอง)
+  const groupOptions = useMemo(
+    () => [...new Set(menus.map(m => m.groupName).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
+    [menus]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
@@ -164,9 +172,14 @@ export default function QcRdMenu() {
         <div className="p-4 border-b border-slate-100 flex flex-wrap gap-3">
           <div className="relative flex-1 min-w-[220px] max-w-md">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหารหัส / ชื่อเมนู…"
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหารหัส / ชื่อเมนู / หมวดหมู่…"
               className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
+          <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <option value="">ทุกหมวดหมู่ ({groupOptions.length})</option>
+            {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
+          </select>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
             className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
             <option value="">ทุกสถานะ</option>
@@ -187,6 +200,7 @@ export default function QcRdMenu() {
               <tr className="text-xs font-bold uppercase tracking-wide">
                 <th className="px-4 py-3 text-left">รหัส</th>
                 <th className="px-4 py-3 text-left">ชื่อเมนู</th>
+                <th className="px-4 py-3 text-left">หมวดหมู่</th>
                 <th className="px-4 py-3 text-right">ราคาขาย</th>
                 <th className="px-4 py-3 text-right">ต้นทุน</th>
                 <th className="px-4 py-3 text-center">วัตถุดิบ</th>
@@ -196,11 +210,11 @@ export default function QcRdMenu() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : pageRows.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">ไม่พบเมนู</td></tr>
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">ไม่พบเมนู</td></tr>
               ) : pageRows.map(m => {
                 const nIng = bom[m.code]?.items?.length || 0;
                 const off = (m.status || 'ใช้งาน') === 'ปิดการใช้งาน';
@@ -210,6 +224,11 @@ export default function QcRdMenu() {
                     onClick={() => nIng && setViewCode(m.code)}>
                     <td className={`px-4 py-2 font-mono text-xs whitespace-nowrap ${off ? 'text-slate-300' : 'text-slate-500'}`}>{m.code}</td>
                     <td className={`px-4 py-2 font-medium ${off ? 'text-slate-400' : 'text-slate-800'}`}>{m.name}</td>
+                    <td className="px-4 py-2 whitespace-nowrap">
+                      {m.groupName
+                        ? <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-medium ${off ? 'bg-slate-100 text-slate-400' : 'bg-indigo-50 text-indigo-700'}`}>{m.groupName}</span>
+                        : <span className="text-slate-300">—</span>}
+                    </td>
                     <td className={`px-4 py-2 text-right font-mono ${off ? 'text-slate-300' : ''}`}>{fmt(m.price, 0)}</td>
                     <td className={`px-4 py-2 text-right font-mono ${off ? 'text-slate-300' : 'text-slate-600'}`}>{fmt(m.cost)}</td>
                     <td className="px-4 py-2 text-center whitespace-nowrap">
