@@ -609,6 +609,9 @@ export default function App() {
   const [itemSearch, setItemSearch] = useState('');
   const [itemSearchSort, setItemSearchSort] = useState({ col: 'totalQty', asc: false });
   const [selectedItem, setSelectedItem] = useState(null); // { itemCode, nameThai, nameEng }
+  // รวมโต๊ะ 600 (ของเสีย/เศษ — ไม่มีมูลค่าขาย แต่มีต้นทุน) ในหน้าค้นหารายไอเทม
+  // ปิดไว้เป็นค่าเริ่มต้น เพื่อให้ตัวเลขตรงกับแดชบอร์ด/รายงานที่ตัดโต๊ะ 600 ออก
+  const [includeT600, setIncludeT600] = useState(false);
   const [itemColF, setItemColF] = useState({});
   const [showDailyBillsModal, setShowDailyBillsModal] = useState({ open: false, title: '', bills: [] });
   const [showTotalDiffModal, setShowTotalDiffModal] = useState({ open: false, date: '', outletID: null, gross: 0, total: 0, diff: 0, issues: [] });
@@ -1570,9 +1573,13 @@ export default function App() {
 
   // Item Search: aggregate all items with total qty, gross, cost
   const itemSummaryData = useMemo(() => {
-    const details = selectedOutlet
-      ? detailRaw.filter(r => String(r.outletID) === String(selectedOutlet))
+    // เปิด "รวมโต๊ะ 600" → ใช้ชุดครบทุกแถว (ตัดเฉพาะไอเทมเตรียมของ/ยอดเหมา) จึงมีโต๊ะ 600 ติดมาด้วย
+    const src = includeT600
+      ? detailAllRaw.filter(r => !isExcludedItem(r.itemCode))
       : detailRaw;
+    const details = selectedOutlet
+      ? src.filter(r => String(r.outletID) === String(selectedOutlet))
+      : src;
 
     const grouped = {};
     details.forEach(r => {
@@ -1586,23 +1593,25 @@ export default function App() {
       const cost = unitCost * qty;
 
       if (!grouped[code]) {
-        grouped[code] = { itemCode: code, nameThai: name, menuGroup: groupOf(code), nameEng, totalQty: 0, totalGross: 0, totalCost: 0 };
+        grouped[code] = { itemCode: code, nameThai: name, menuGroup: groupOf(code), nameEng, totalQty: 0, totalGross: 0, totalCost: 0, t600Qty: 0 };
       }
       grouped[code].totalQty += qty;
       grouped[code].totalGross += gross;
       grouped[code].totalCost += cost;
+      if (parseInt(r.tableID) === 600) grouped[code].t600Qty += qty;
     });
 
     return Object.values(grouped).map(item => ({
       ...item,
       profit: item.totalGross - item.totalCost
     }));
-  }, [detailRaw, selectedOutlet, costMap, menuGroupMap]);
+  }, [detailRaw, detailAllRaw, includeT600, selectedOutlet, costMap, menuGroupMap]);
 
   // Item Search: breakdown of selected item by branch
   const itemBranchData = useMemo(() => {
     if (!selectedItem) return [];
-    const details = detailRaw.filter(r =>
+    const src = includeT600 ? detailAllRaw.filter(r => !isExcludedItem(r.itemCode)) : detailRaw;
+    const details = src.filter(r =>
       !r.void && String(r.itemCode) === String(selectedItem.itemCode)
     );
     const grouped = {};
@@ -1622,7 +1631,7 @@ export default function App() {
     return Object.values(grouped)
       .map(b => ({ ...b, profit: b.totalGross - b.totalCost }))
       .sort((a, b) => b.totalQty - a.totalQty);
-  }, [detailRaw, selectedItem, costMap]);
+  }, [detailRaw, detailAllRaw, includeT600, selectedItem, costMap]);
 
   // Filtered + sorted item search list
   const filteredItemSummary = useMemo(() => {
@@ -1748,10 +1757,11 @@ export default function App() {
     if (!items.length) return;
     const r2 = v => Math.round((parseFloat(v) || 0) * 100) / 100;
 
-    // ข้อมูลแยกตามสาขาของทุกไอเทม (สอดคล้องกับ itemSummaryData: กรองตามสาขาที่เลือกถ้ามี)
+    // ข้อมูลแยกตามสาขาของทุกไอเทม (สอดคล้องกับ itemSummaryData: ตามสาขาที่เลือก + สวิตช์รวมโต๊ะ 600)
+    const src = includeT600 ? detailAllRaw.filter(r => !isExcludedItem(r.itemCode)) : detailRaw;
     const details = selectedOutlet
-      ? detailRaw.filter(r => String(r.outletID) === String(selectedOutlet))
-      : detailRaw;
+      ? src.filter(r => String(r.outletID) === String(selectedOutlet))
+      : src;
     const branchMap = {}; // itemCode -> { outletID -> { name, totalQty, totalGross, totalCost } }
     details.forEach(r => {
       if (r.void) return;
@@ -3525,6 +3535,19 @@ export default function App() {
                         <div>
                           <h2 className="text-sm font-bold text-slate-800">ค้นหาตามรายการอาหาร / ไอเทม</h2>
                           <p className="text-xs text-slate-400 mt-0.5">พบ {filteredItemSummary.length.toLocaleString('th-TH')} รายการ | กดแถวใดเพื่อดูรายละเอียดแยกตามสาขา</p>
+                          {/* สวิตช์รวมโต๊ะ 600 (ของเสีย/เศษ) — เปิดแล้วตัวเลขจะไม่ตรงกับแดชบอร์ดที่ตัดโต๊ะ 600 ออก */}
+                          <label className="mt-2 inline-flex items-center gap-2 cursor-pointer select-none">
+                            <input type="checkbox" checked={includeT600} onChange={e => setIncludeT600(e.target.checked)}
+                              className="w-3.5 h-3.5 accent-rose-500 cursor-pointer" />
+                            <span className={`text-[11px] font-semibold ${includeT600 ? 'text-rose-600' : 'text-slate-400'}`}>
+                              รวมโต๊ะ 600 (ของเสีย/เศษ)
+                            </span>
+                            {includeT600 && (
+                              <span className="text-[10px] text-rose-500 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded-full">
+                                ตัวเลขจะไม่ตรงกับแดชบอร์ด
+                              </span>
+                            )}
+                          </label>
                         </div>
                         <div className="relative">
                           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -3580,7 +3603,15 @@ export default function App() {
                                 className={`cursor-pointer transition-colors hover:bg-amber-50 ${selectedItem?.itemCode === item.itemCode ? 'bg-amber-100 font-semibold' : i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}`}
                               >
                                 <td className="px-4 py-2.5 font-mono text-slate-500">{item.itemCode}</td>
-                                <td className="px-4 py-2.5 text-slate-800 font-medium max-w-[220px] truncate">{item.nameThai}</td>
+                                <td className="px-4 py-2.5 text-slate-800 font-medium max-w-[220px] truncate">
+                                  {item.nameThai}
+                                  {item.t600Qty > 0 && (
+                                    <span title={`มาจากโต๊ะ 600 (ของเสีย) ${fmtNum(item.t600Qty)} หน่วย`}
+                                      className="ml-1.5 text-[9px] font-bold text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded whitespace-nowrap">
+                                      เสีย {fmtNum(item.t600Qty)}
+                                    </span>
+                                  )}
+                                </td>
                                 <td className="px-4 py-2.5 whitespace-nowrap">
                                   {item.menuGroup
                                     ? <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full text-[11px] font-medium">{item.menuGroup}</span>
