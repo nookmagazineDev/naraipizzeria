@@ -104,7 +104,8 @@ export default function StockTotalList() {
       const validBranches = branches.filter(b => b.outletId);
       
       const usagePromises = validBranches.map(b => 
-        fetch(`/api/usage?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
+        // ยอดใช้คำนวณสดจาก ยอดขายจริง × สูตร BOM (เดิมอ่านชีท UsageHistory ที่หยุดอัปเดต 24 มิ.ย.)
+        fetch(`/api/usage-bom?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
         .then(r => r.json()).catch(() => ({ status: 'error' }))
       );
       

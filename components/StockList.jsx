@@ -114,7 +114,8 @@ export default function StockList() {
     try {
       const qs = `branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`;
       const [usageRes, receivedRes, usageMenuRes] = await Promise.all([
-        fetch(`/api/usage?${qs}`).then(r => r.json()),
+        // ยอดใช้คำนวณสดจาก ยอดขายจริง × สูตร BOM (เดิมอ่านชีท UsageHistory ที่หยุดอัปเดต)
+        fetch(`/api/usage-bom?${qs}`).then(r => r.json()),
         fetch(`/api/orderd?${qs}`).then(r => r.json()),
         fetch(`/api/usagemenu?${qs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
       ]);
