@@ -179,6 +179,8 @@ export default async function handler(req, res) {
             // I=ตัวแปลงหน่วย (หน่วยเล็กต่อ 1 หน่วยซื้อ), J=สาขาที่ใช้ (คั่นด้วย ,)
             converter: num(r[8]),
             usedBranches: (r[9] || '').split(',').map(s => s.trim()).filter(Boolean),
+            // N=หมวดสโตร์ (ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
+            storeCategory: (r[13] || '').trim(),
           };
         });
       return res.status(200).json({ status: 'success', data });

@@ -166,8 +166,8 @@ function saveMenuStatus_(ss, data) {
   return { status: 'error', message: 'ไม่พบรหัส ' + code + ' ในชีท menu' };
 }
 
-// แก้ไขข้อมูลวัตถุดิบ: ชื่อ(B) ราคา(C) สถานะ(E) ไอเทมทดแทน(F-H) ตัวแปลงหน่วย(I) สาขาที่ใช้(J)
-// payload: { code, name, price, status, subs: ['รหัส1','รหัส2','รหัส3'], converter, branches: ['SJP','CRM'] }
+// แก้ไขข้อมูลวัตถุดิบ: ชื่อ(B) ราคา(C) สถานะ(E) ไอเทมทดแทน(F-H) ตัวแปลงหน่วย(I) สาขาที่ใช้(J) หมวดสโตร์(N)
+// payload: { code, name, price, status, subs: ['รหัส1','รหัส2','รหัส3'], converter, branches: ['SJP','CRM'], storeCategory }
 function saveItem_(ss, data) {
   var code = String(data.code || '').trim();
   if (!code) return { status: 'error', message: 'ต้องระบุรหัสวัตถุดิบ' };
@@ -192,6 +192,9 @@ function saveItem_(ss, data) {
       if (data.branches !== undefined) {
         sh.getRange(row, 10).setValue((data.branches || []).join(','));
       }
+      if (data.storeCategory !== undefined) {
+        sh.getRange(row, 14).setValue(String(data.storeCategory || '').trim());
+      }
       return { status: 'success', data: { code: code, row: row } };
     }
   }
@@ -199,8 +202,8 @@ function saveItem_(ss, data) {
 }
 
 // เพิ่มวัตถุดิบใหม่: ต่อแถวใหม่ท้ายชีท item (กันรหัสซ้ำ)
-// คอลัมน์: A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ F–H=ไอเทมทดแทน I=ตัวแปลง J=สาขาที่ใช้
-// payload: { code, name, price, status, subs[], converter, branches[] }
+// คอลัมน์: A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ F–H=ไอเทมทดแทน I=ตัวแปลง J=สาขาที่ใช้ N=หมวดสโตร์
+// payload: { code, name, price, status, subs[], converter, branches[], storeCategory }
 function addItem_(ss, data) {
   var code = String(data.code || '').trim();
   if (!code) return { status: 'error', message: 'ต้องระบุรหัสวัตถุดิบ' };
@@ -217,12 +220,16 @@ function addItem_(ss, data) {
   var subs = (data.subs || []).slice(0, 3);
   var price = (data.price !== undefined && data.price !== '' && !isNaN(Number(data.price))) ? Number(data.price) : '';
   var converter = (data.converter !== undefined && data.converter !== '' && !isNaN(Number(data.converter))) ? Number(data.converter) : '';
-  sh.appendRow([
+  var storeCategory = String(data.storeCategory || '').trim();
+  var newRow = sh.getLastRow() + 1;
+  // ใช้ setValues แทน appendRow เพื่อคุมตำแหน่งคอลัมน์ N (K,L,M เว้นว่างไว้ตามชีทเดิม)
+  sh.getRange(newRow, 1, 1, 14).setValues([[
     code, name, price, '', String(data.status || 'ใช้งาน').trim(),
     subs[0] || '', subs[1] || '', subs[2] || '',
     converter, (data.branches || []).join(','),
-  ]);
-  return { status: 'success', data: { code: code, row: sh.getLastRow() } };
+    '', '', '', storeCategory,
+  ]]);
+  return { status: 'success', data: { code: code, row: newRow } };
 }
 
 // เติมหน่วยลงคอลัมน์ D ของชีท item — เขียนเฉพาะช่องที่ยังว่าง (ไม่ทับของเดิม)

@@ -3,10 +3,11 @@ import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, P
 import { apiCall } from '../lib/qcrdApi';
 
 /*
- * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน จากชีท item (1v8WRT…)
+ * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน / หมวดสโตร์ จากชีท item (1v8WRT…)
  * - หน่วย (คอลัมน์ D) ว่าง → วิเคราะห์จากชื่ออัตโนมัติ (badge "วิเคราะห์") + ปุ่มเขียนลงชีท
- * - แก้ไขได้: ชื่อ (B), สถานะใช้งาน/ปิดการใช้งาน (E), ไอเทมทดแทนสูงสุด 3 ตัว (F–H)
- *   ผ่าน Apps Script action: saveItem
+ * - แก้ไขได้: ชื่อ (B), ราคา (C), สถานะ (E), ไอเทมทดแทนสูงสุด 3 ตัว (F–H), ตัวแปลงหน่วย (I),
+ *   สาขาที่ใช้ (J), หมวดสโตร์ (N — ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
+ *   ผ่าน Apps Script action: saveItem / addItem
  */
 
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -31,6 +32,7 @@ export default function QcRdItems() {
   const [search, setSearch] = useState('');
   const [unitFilter, setUnitFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [storeFilter, setStoreFilter] = useState('');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null); // { ok, msg }
   const [editItem, setEditItem] = useState(null); // { code, name, status, subs[] }
@@ -58,16 +60,21 @@ export default function QcRdItems() {
   const units = useMemo(() => [...new Set(items.map(i => i.unit).filter(Boolean))].sort(), [items]);
   const autoCount = useMemo(() => items.filter(i => i.unitSource === 'auto' && i.unit).length, [items]);
   const inactiveCount = useMemo(() => items.filter(i => i.status === 'ปิดการใช้งาน').length, [items]);
+  // รายชื่อหมวดสโตร์ที่มีจริงในชีท (ใช้ทั้งกรองและแนะนำในฟอร์มแก้ไข — ชีทมีตัวสะกดไม่เป๊ะปนอยู่)
+  const storeCategories = useMemo(
+    () => [...new Set(items.map(i => i.storeCategory).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
+    [items]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter(i => {
       if (unitFilter && i.unit !== unitFilter) return false;
       if (statusFilter && i.status !== statusFilter) return false;
+      if (storeFilter && (i.storeCategory || '') !== storeFilter) return false;
       if (!q) return true;
       return codeMatch(i.code, q) || i.name.toLowerCase().includes(q);
     });
-  }, [items, search, unitFilter, statusFilter]);
+  }, [items, search, unitFilter, statusFilter, storeFilter]);
 
   const saveUnits = async () => {
     setSaving(true);
@@ -88,12 +95,13 @@ export default function QcRdItems() {
     isNew: false,
     code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])],
     price: i.price ?? '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
+    storeCategory: i.storeCategory || '',
   });
 
   const openNew = () => setEditItem({
     isNew: true,
     code: '', name: '', status: 'ใช้งาน', subs: [],
-    price: '', converter: '', branches: [],
+    price: '', converter: '', branches: [], storeCategory: '',
   });
 
   const toggleBranch = (b) => setEditItem(m => ({
@@ -114,7 +122,7 @@ export default function QcRdItems() {
         code, name: editItem.name.trim(),
         status: editItem.status, subs: editItem.subs.slice(0, 3),
         price: editItem.price, converter: editItem.converter,
-        branches: editItem.branches,
+        branches: editItem.branches, storeCategory: (editItem.storeCategory || '').trim(),
       });
       setToast({ ok: true, msg: editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ` });
       setEditItem(null);
@@ -180,6 +188,11 @@ export default function QcRdItems() {
             <option value="ใช้งาน">ใช้งาน</option>
             <option value="ปิดการใช้งาน">ปิดการใช้งาน</option>
           </select>
+          <select value={storeFilter} onChange={e => setStoreFilter(e.target.value)}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="">ทุกหมวดสโตร์ ({storeCategories.length})</option>
+            {storeCategories.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
         </div>
 
         {error && (
@@ -198,6 +211,7 @@ export default function QcRdItems() {
                 <th className="px-4 py-3 text-right">ราคาต้นทุน</th>
                 <th className="px-3 py-3 text-right">ตัวแปลง</th>
                 <th className="px-3 py-3 text-left">สาขาที่ใช้</th>
+                <th className="px-3 py-3 text-left">หมวดสโตร์</th>
                 <th className="px-4 py-3 text-center">สถานะ</th>
                 <th className="px-4 py-3 text-left">ไอเทมทดแทน</th>
                 <th className="px-4 py-3 text-center">จัดการ</th>
@@ -205,11 +219,11 @@ export default function QcRdItems() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
+                <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
               ) : filtered.map(i => (
                 <tr key={i.code} className={`hover:bg-slate-50/60 ${i.status === 'ปิดการใช้งาน' ? 'bg-rose-50/40 text-slate-400' : ''}`}>
                   <td className="px-4 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{i.code}</td>
@@ -236,6 +250,11 @@ export default function QcRdItems() {
                         )}
                       </div>
                     )}
+                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {i.storeCategory ? (
+                      <span className="inline-block px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-100 rounded-full text-[11px] font-medium">{i.storeCategory}</span>
+                    ) : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-4 py-2 text-center whitespace-nowrap">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${i.status === 'ปิดการใช้งาน' ? 'bg-rose-100 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
@@ -315,6 +334,17 @@ export default function QcRdItems() {
                     onChange={e => setEditItem(m => ({ ...m, converter: e.target.value }))} placeholder="เช่น 1000"
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-500">หมวดสโตร์ <span className="font-normal">(ตำแหน่งจัดเก็บ เช่น ของแห้ง / ห้องผัก / ตู้1)</span></label>
+                <input list="store-category-options" value={editItem.storeCategory}
+                  onChange={e => setEditItem(m => ({ ...m, storeCategory: e.target.value }))}
+                  placeholder="เช่น ของแห้ง"
+                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                <datalist id="store-category-options">
+                  {storeCategories.map(s => <option key={s} value={s} />)}
+                </datalist>
               </div>
 
               <div>
