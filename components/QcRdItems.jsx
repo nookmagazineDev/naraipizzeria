@@ -95,13 +95,13 @@ export default function QcRdItems() {
     isNew: false,
     code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])],
     price: i.price ?? '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
-    storeCategory: i.storeCategory || '',
+    storeCategory: i.storeCategory || '', addingNewStore: false,
   });
 
   const openNew = () => setEditItem({
     isNew: true,
     code: '', name: '', status: 'ใช้งาน', subs: [],
-    price: '', converter: '', branches: [], storeCategory: '',
+    price: '', converter: '', branches: [], storeCategory: '', addingNewStore: false,
   });
 
   const toggleBranch = (b) => setEditItem(m => ({
@@ -338,13 +338,34 @@ export default function QcRdItems() {
 
               <div>
                 <label className="text-xs font-bold text-slate-500">หมวดสโตร์ <span className="font-normal">(ตำแหน่งจัดเก็บ เช่น ของแห้ง / ห้องผัก / ตู้1)</span></label>
-                <input list="store-category-options" value={editItem.storeCategory}
-                  onChange={e => setEditItem(m => ({ ...m, storeCategory: e.target.value }))}
-                  placeholder="เช่น ของแห้ง"
-                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                <datalist id="store-category-options">
-                  {storeCategories.map(s => <option key={s} value={s} />)}
-                </datalist>
+                {editItem.addingNewStore ? (
+                  <div className="mt-1 flex gap-2">
+                    <input autoFocus value={editItem.storeCategory}
+                      onChange={e => setEditItem(m => ({ ...m, storeCategory: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); setEditItem(m => ({ ...m, addingNewStore: false })); } }}
+                      placeholder="พิมพ์ชื่อหมวดใหม่…"
+                      className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    <button type="button" onClick={() => setEditItem(m => ({ ...m, addingNewStore: false }))}
+                      className="px-3 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100">
+                      ✓ เสร็จ
+                    </button>
+                  </div>
+                ) : (
+                  <select value={editItem.storeCategory}
+                    onChange={e => {
+                      if (e.target.value === '__new__') setEditItem(m => ({ ...m, addingNewStore: true, storeCategory: '' }));
+                      else setEditItem(m => ({ ...m, storeCategory: e.target.value }));
+                    }}
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                    <option value="">— ไม่ระบุ —</option>
+                    {/* ถ้าค่าปัจจุบันเป็นหมวดที่พิมพ์ใหม่ (ยังไม่มีในชีท) ให้โผล่เป็นตัวเลือกด้วย จะได้ไม่หายตอนสลับกลับมาดู */}
+                    {editItem.storeCategory && !storeCategories.includes(editItem.storeCategory) && (
+                      <option value={editItem.storeCategory}>{editItem.storeCategory} (ใหม่)</option>
+                    )}
+                    {storeCategories.map(s => <option key={s} value={s}>{s}</option>)}
+                    <option value="__new__">+ เพิ่มหมวดใหม่…</option>
+                  </select>
+                )}
               </div>
 
               <div>
