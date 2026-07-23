@@ -64,13 +64,16 @@ export default function QcRdItems() {
   const storeCategories = useMemo(
     () => [...new Set(items.map(i => i.storeCategory).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
     [items]);
+  const noStoreCount = useMemo(() => items.filter(i => !i.storeCategory).length, [items]);
+  const NO_STORE = '__none__'; // ค่าพิเศษของตัวกรอง = แสดงเฉพาะรายการที่ยังไม่ได้ระบุหมวดสโตร์
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter(i => {
       if (unitFilter && i.unit !== unitFilter) return false;
       if (statusFilter && i.status !== statusFilter) return false;
-      if (storeFilter && (i.storeCategory || '') !== storeFilter) return false;
+      if (storeFilter === NO_STORE) { if (i.storeCategory) return false; }
+      else if (storeFilter && (i.storeCategory || '') !== storeFilter) return false;
       if (!q) return true;
       return codeMatch(i.code, q) || i.name.toLowerCase().includes(q);
     });
@@ -192,6 +195,7 @@ export default function QcRdItems() {
             className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
             <option value="">ทุกหมวดสโตร์ ({storeCategories.length})</option>
             {storeCategories.map(s => <option key={s} value={s}>{s}</option>)}
+            {noStoreCount > 0 && <option value={NO_STORE}>— ไม่ได้ระบุ ({noStoreCount})</option>}
           </select>
         </div>
 
