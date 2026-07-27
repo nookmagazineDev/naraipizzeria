@@ -37,6 +37,7 @@ import OtherExpense from '../components/OtherExpense';
 import QcRdMenu from '../components/QcRdMenu';
 import QcRdItems from '../components/QcRdItems';
 import AiNarai from '../components/AiNarai';
+import PlanList from '../components/PlanList';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -556,6 +557,7 @@ export default function App() {
   const [stockOpen, setStockOpen] = useState(true);
   const [hrOpen, setHrOpen] = useState(true);
   const [qcrdOpen, setQcrdOpen] = useState(true);
+  const [purchaseOpen, setPurchaseOpen] = useState(true);
   const [branchChartMode, setBranchChartMode] = useState('sales'); // 'sales' or 'covers'
   const [dashValueMode, setDashValueMode] = useState('money'); // 'money' | 'percent' (การ์ดแดชบอร์ด: ตัวเงิน หรือ %ของยอดขาย)
   const [pendingSearch, setPendingSearch] = useState(false); // ตั้งวันที่จากปุ่มด่วนแล้วให้ค้นหาอัตโนมัติ
@@ -2177,6 +2179,32 @@ export default function App() {
               )}
             </div>
 
+            {/* จัดซื้อ Main Menu — แพลนสินค้า จากชีท plan (ประวัติการสั่งของแต่ละสาขา) */}
+            <div className="pt-2">
+              <button
+                onClick={() => setPurchaseOpen(!purchaseOpen)}
+                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${purchaseOpen ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+              >
+                <div className="flex items-center gap-3">
+                  <ShoppingBag size={18} className="text-amber-500" />
+                  <span>จัดซื้อ</span>
+                </div>
+                {purchaseOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              </button>
+
+              {purchaseOpen && (
+                <div className="pl-4 space-y-1.5 mt-1 border-l border-slate-800 ml-6">
+                  <button
+                    onClick={() => { setActiveTab('planList'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'planList' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <ClipboardList size={16} />
+                    <span>แพลนสินค้า</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* AI NARAI — แชทถามข้อมูลด้วย Gemini (function calling → host API → SQL) */}
             <div className="pt-2">
               <button
@@ -2218,6 +2246,7 @@ export default function App() {
                 {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdMenu' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdItems' && <ClipboardList size={20} className="text-amber-600" />}
+                {activeTab === 'planList' && <ShoppingBag size={20} className="text-amber-600" />}
                 {activeTab === 'dashboard' ? 'แดชบอร์ดหลัก'
                   : activeTab === 'sales' ? 'รายงานยอดการขาย'
                   : activeTab === 'dailySale' ? 'รายงานยอดรายวันทุกสาขา'
@@ -2228,6 +2257,7 @@ export default function App() {
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
+                  : activeTab === 'planList' ? 'จัดซื้อ — แพลนสินค้า'
                   : activeTab === 'aiNarai' ? '✨ AI NARAI'
                   : 'รายละเอียดรายการ'}
               </h1>
@@ -2274,8 +2304,11 @@ export default function App() {
             {/* AI NARAI: แชทถามข้อมูลด้วย Gemini */}
             {activeTab === 'aiNarai' && <AiNarai />}
 
+            {/* จัดซื้อ: แพลนสินค้า จากชีท plan */}
+            {activeTab === 'planList' && <PlanList />}
+
             {/* FILTER PANEL */}
-            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'otherExpense' || activeTab === 'qcrdMenu' || activeTab === 'qcrdItems' || activeTab === 'aiNarai') && (
+            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'otherExpense' || activeTab === 'qcrdMenu' || activeTab === 'qcrdItems' || activeTab === 'aiNarai' || activeTab === 'planList') && (
             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">กำหนดช่วงวันที่และสาขา</h2>
               <div className="flex flex-wrap items-center gap-2 mb-4">

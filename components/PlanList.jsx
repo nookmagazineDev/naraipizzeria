@@ -1,0 +1,300 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info } from 'lucide-react';
+import * as XLSX from 'xlsx-js-style';
+
+/*
+ * จัดซื้อ — แพลนสินค้า: อ่านชีท "plan" (ประวัติการสั่งของแต่ละสาขา) ผ่าน /api/plan
+ * หน้าหลักสรุปยอดรวมต่อรายการ (จำนวน/มูลค่า/จำนวนสาขา/จำนวนครั้งสั่ง)
+ * กดแถว → ดูแยกตามสาขา (สั่งเท่าไหร่ รับของวันไหนบ้าง) + รายละเอียดทุกแถวพร้อมวันที่คีย์ข้อมูล
+ */
+
+const fmtNum = v => (v === null || v === undefined || isNaN(v)) ? '—'
+  : Number(v).toLocaleString('th-TH', { maximumFractionDigits: 2 });
+const fmtMoney = v => (v === null || v === undefined || isNaN(v)) ? '—'
+  : Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// คีย์เรียงเวลาจาก orderDate (DD/MM/YYYY) + recordTime (HH:MM:SS)
+const sortKey = r => {
+  const [d, m, y] = (r.orderDate || '').split('/');
+  if (!d || !m || !y) return '';
+  return `${y}${m.padStart(2, '0')}${d.padStart(2, '0')}${(r.recordTime || '').replace(/:/g, '')}`;
+};
+
+const HEAD_STYLE = {
+  font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
+  fill: { patternType: 'solid', fgColor: { rgb: '0E7490' } }, // cyan-700
+};
+
+export default function PlanList() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [branchFilter, setBranchFilter] = useState('');
+  const [selectedItem, setSelectedItem] = useState(null); // itemCode ที่กำลังดูรายละเอียด
+
+  const load = () => {
+    setLoading(true);
+    fetch('/api/plan')
+      .then(r => r.json())
+      .then(res => {
+        if (res.status === 'success') { setRows(res.data || []); setError(''); }
+        else setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
+      })
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+
+  const branches = useMemo(() => [...new Set(rows.map(r => r.branch).filter(Boolean))].sort(), [rows]);
+
+  // สรุปยอดรวมต่อรายการ (itemCode)
+  const summary = useMemo(() => {
+    const g = {};
+    rows.forEach(r => {
+      if (branchFilter && r.branch !== branchFilter) return;
+      const k = r.itemCode;
+      if (!g[k]) g[k] = { itemCode: k, itemName: r.itemName, unit: r.unit, qty: 0, total: 0, branches: new Set(), lines: 0 };
+      g[k].qty += r.qty;
+      g[k].total += r.total;
+      g[k].branches.add(r.branch);
+      g[k].lines++;
+    });
+    return Object.values(g).map(x => ({ ...x, branchCount: x.branches.size }))
+      .sort((a, b) => b.qty - a.qty);
+  }, [rows, branchFilter]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return summary;
+    return summary.filter(x => x.itemCode.toLowerCase().includes(q) || x.itemName.toLowerCase().includes(q));
+  }, [summary, search]);
+
+  const grand = useMemo(() => ({
+    qty: filtered.reduce((s, x) => s + x.qty, 0),
+    total: filtered.reduce((s, x) => s + x.total, 0),
+  }), [filtered]);
+
+  // แถวดิบของรายการที่เลือก (ตามตัวกรองสาขาปัจจุบันด้วย) เรียงคีย์เวลาล่าสุดก่อน
+  const detailRows = useMemo(() => {
+    if (!selectedItem) return [];
+    return rows
+      .filter(r => r.itemCode === selectedItem && (!branchFilter || r.branch === branchFilter))
+      .sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
+  }, [rows, selectedItem, branchFilter]);
+
+  const branchBreakdown = useMemo(() => {
+    const g = {};
+    detailRows.forEach(r => {
+      if (!g[r.branch]) g[r.branch] = { branch: r.branch, qty: 0, total: 0, lines: 0, receiveDates: new Set() };
+      g[r.branch].qty += r.qty;
+      g[r.branch].total += r.total;
+      g[r.branch].lines++;
+      if (r.receiveDate) g[r.branch].receiveDates.add(r.receiveDate);
+    });
+    return Object.values(g).map(x => ({ ...x, receiveDates: [...x.receiveDates].sort() }))
+      .sort((a, b) => b.qty - a.qty);
+  }, [detailRows]);
+
+  const selectedInfo = filtered.find(x => x.itemCode === selectedItem) || summary.find(x => x.itemCode === selectedItem);
+
+  // Export Excel: ชีตสรุปรายการ + ชีตรายละเอียดทุกแถว (ตามตัวกรองปัจจุบัน)
+  const exportExcel = () => {
+    if (!filtered.length) return;
+    const wb = XLSX.utils.book_new();
+
+    const sumAoa = [['รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนรวม', 'มูลค่ารวม', 'จำนวนสาขาที่สั่ง', 'จำนวนครั้งสั่ง']];
+    filtered.forEach(x => sumAoa.push([x.itemCode, x.itemName, x.unit, x.qty, x.total, x.branchCount, x.lines]));
+    const ws1 = XLSX.utils.aoa_to_sheet(sumAoa);
+    ws1['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }];
+    for (let c = 0; c < 7; c++) { const cell = ws1[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
+    XLSX.utils.book_append_sheet(wb, ws1, 'สรุปรายการ');
+
+    const detAoa = [['วันที่คีย์ข้อมูล', 'เวลา', 'สาขา', 'เลขที่ใบสั่ง', 'รหัสสินค้า', 'ชื่อสินค้า', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่ารวม', 'วันที่รับของ', 'ผู้บันทึก']];
+    const detailSrc = branchFilter ? rows.filter(r => r.branch === branchFilter) : rows;
+    [...detailSrc].sort((a, b) => sortKey(b).localeCompare(sortKey(a))).forEach(r =>
+      detAoa.push([r.orderDate, r.recordTime, r.branch, r.orderNo, r.itemCode, r.itemName, r.qty, r.unit, r.unitPrice, r.total, r.receiveDate, r.recordedBy]));
+    const ws2 = XLSX.utils.aoa_to_sheet(detAoa);
+    ws2['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 34 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+    for (let c = 0; c < 12; c++) { const cell = ws2[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
+    XLSX.utils.book_append_sheet(wb, ws2, 'รายละเอียดทั้งหมด');
+
+    XLSX.writeFile(wb, `plan_procurement_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-5">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-cyan-100 text-cyan-700 rounded-xl"><ClipboardList className="w-6 h-6" /></div>
+            <div>
+              <h2 className="text-xl font-bold text-slate-800">แพลนสินค้า</h2>
+              <p className="text-sm text-slate-500 mt-0.5">
+                {filtered.length.toLocaleString()} รายการ · จำนวนรวม {fmtNum(grand.qty)} · มูลค่ารวม ฿{fmtMoney(grand.total)}
+              </p>
+            </div>
+          </div>
+          <button onClick={exportExcel} disabled={loading || !filtered.length}
+            className="inline-flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+            <Download size={14} /> Export Excel
+          </button>
+        </div>
+
+        <div className="p-4 flex flex-wrap gap-3 border-b border-slate-100">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหารหัส / ชื่อสินค้า…"
+              className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+          </div>
+          <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500">
+            <option value="">ทุกสาขา ({branches.length})</option>
+            {branches.map(b => <option key={b} value={b}>{b}</option>)}
+          </select>
+        </div>
+
+        {error && (
+          <div className="m-4 p-3 bg-rose-50 border border-rose-100 rounded-xl text-sm text-rose-700 flex items-center gap-2">
+            <AlertCircle size={16} /><span>{error}</span>
+          </div>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 sticky top-0">
+              <tr className="text-xs font-bold uppercase tracking-wide">
+                <th className="px-4 py-3 text-left">รหัสสินค้า</th>
+                <th className="px-4 py-3 text-left">ชื่อสินค้า</th>
+                <th className="px-3 py-3 text-center">หน่วย</th>
+                <th className="px-4 py-3 text-right">จำนวนรวม</th>
+                <th className="px-4 py-3 text-right">มูลค่ารวม</th>
+                <th className="px-3 py-3 text-center">สาขาที่สั่ง</th>
+                <th className="px-3 py-3 text-center">จำนวนครั้ง</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loading ? (
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                  <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
+                </td></tr>
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
+              ) : filtered.map(x => (
+                <tr key={x.itemCode} onClick={() => setSelectedItem(x.itemCode)}
+                  className="cursor-pointer hover:bg-cyan-50/50 transition-colors">
+                  <td className="px-4 py-2.5 font-mono text-xs text-slate-500 whitespace-nowrap">{x.itemCode}</td>
+                  <td className="px-4 py-2.5 text-slate-800 font-medium">{x.itemName}</td>
+                  <td className="px-3 py-2.5 text-center text-slate-500 whitespace-nowrap">{x.unit || '—'}</td>
+                  <td className="px-4 py-2.5 text-right font-mono font-bold text-slate-800">{fmtNum(x.qty)}</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-cyan-700">{fmtMoney(x.total)}</td>
+                  <td className="px-3 py-2.5 text-center">
+                    <span className="inline-block px-2 py-0.5 bg-cyan-50 text-cyan-700 rounded-full text-xs font-semibold">{x.branchCount}</span>
+                  </td>
+                  <td className="px-3 py-2.5 text-center text-slate-500">{x.lines}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!loading && (
+          <div className="px-4 py-3 border-t border-slate-100 text-xs text-slate-400 flex items-center gap-2">
+            <Info size={13} />
+            กดแถวเพื่อดูรายละเอียดแยกตามสาขา + วันที่รับของ + วันที่คีย์ข้อมูล
+          </div>
+        )}
+      </div>
+
+      {/* ───── Modal รายละเอียดรายการ ───── */}
+      {selectedItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedItem(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[88vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-slate-800">{selectedInfo?.itemName || selectedItem}</h3>
+                <p className="text-xs text-slate-400 mt-0.5 font-mono">รหัส {selectedItem} · จำนวนรวม {fmtNum(selectedInfo?.qty)} {selectedInfo?.unit} · มูลค่ารวม ฿{fmtMoney(selectedInfo?.total)}</p>
+              </div>
+              <button onClick={() => setSelectedItem(null)} className="text-slate-400 hover:text-slate-700"><X size={20} /></button>
+            </div>
+
+            <div className="overflow-auto p-5 space-y-5">
+              {/* แยกตามสาขา: สั่งเท่าไหร่ + รับของวันไหนบ้าง */}
+              <div>
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                  <Building2 size={13} /> แยกตามสาขา
+                </h4>
+                <div className="overflow-x-auto border border-slate-100 rounded-xl">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-slate-500">
+                      <tr className="text-xs font-bold">
+                        <th className="px-3 py-2 text-left">สาขา</th>
+                        <th className="px-3 py-2 text-right">จำนวนรวม</th>
+                        <th className="px-3 py-2 text-right">มูลค่ารวม</th>
+                        <th className="px-3 py-2 text-center">จำนวนครั้งสั่ง</th>
+                        <th className="px-3 py-2 text-left">วันที่รับของ</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {branchBreakdown.map(b => (
+                        <tr key={b.branch} className="hover:bg-slate-50/60">
+                          <td className="px-3 py-2 font-semibold text-slate-800">{b.branch}</td>
+                          <td className="px-3 py-2 text-right font-mono">{fmtNum(b.qty)}</td>
+                          <td className="px-3 py-2 text-right font-mono text-cyan-700">{fmtMoney(b.total)}</td>
+                          <td className="px-3 py-2 text-center text-slate-500">{b.lines}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap gap-1">
+                              {b.receiveDates.length === 0 ? <span className="text-slate-300 text-xs">—</span> : b.receiveDates.map(d => (
+                                <span key={d} className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded text-[11px]">
+                                  <Calendar size={9} />{d}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* รายละเอียดทุกแถว พร้อมวันที่คีย์ข้อมูล */}
+              <div>
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">รายละเอียดทุกครั้งที่สั่ง ({detailRows.length} แถว)</h4>
+                <div className="overflow-x-auto border border-slate-100 rounded-xl max-h-80 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 text-slate-500 sticky top-0">
+                      <tr className="font-bold">
+                        <th className="px-3 py-2 text-left">วันที่คีย์ข้อมูล</th>
+                        <th className="px-3 py-2 text-left">สาขา</th>
+                        <th className="px-3 py-2 text-left">เลขที่ใบสั่ง</th>
+                        <th className="px-3 py-2 text-right">จำนวน</th>
+                        <th className="px-3 py-2 text-right">ราคา/หน่วย</th>
+                        <th className="px-3 py-2 text-right">มูลค่า</th>
+                        <th className="px-3 py-2 text-left">วันที่รับ</th>
+                        <th className="px-3 py-2 text-left">ผู้บันทึก</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {detailRows.map((r, i) => (
+                        <tr key={i} className="hover:bg-slate-50/60">
+                          <td className="px-3 py-1.5 font-mono whitespace-nowrap">{r.orderDate} <span className="text-slate-400">{r.recordTime}</span></td>
+                          <td className="px-3 py-1.5 font-semibold">{r.branch}</td>
+                          <td className="px-3 py-1.5 font-mono text-slate-500">{r.orderNo}</td>
+                          <td className="px-3 py-1.5 text-right font-mono">{fmtNum(r.qty)} {r.unit}</td>
+                          <td className="px-3 py-1.5 text-right font-mono">{fmtMoney(r.unitPrice)}</td>
+                          <td className="px-3 py-1.5 text-right font-mono font-semibold">{fmtMoney(r.total)}</td>
+                          <td className="px-3 py-1.5 whitespace-nowrap">{r.receiveDate || '—'}</td>
+                          <td className="px-3 py-1.5 text-slate-500">{r.recordedBy || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
