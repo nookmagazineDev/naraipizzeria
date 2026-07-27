@@ -32,6 +32,10 @@ export default function PlanList() {
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
   const [selectedItem, setSelectedItem] = useState(null); // itemCode ที่กำลังดูรายละเอียด
+  const [openDateKey, setOpenDateKey] = useState(null); // `${branch}|${date}` ที่กดเปิดดูจำนวนอยู่
+
+  // เปลี่ยนรายการที่ดู → ปิดวันที่ที่ค้างขยายไว้ กันโชว์ข้อมูลผิดรายการ
+  useEffect(() => { setOpenDateKey(null); }, [selectedItem]);
 
   const load = () => {
     setLoading(true);
@@ -94,6 +98,20 @@ export default function PlanList() {
     });
     return Object.values(g).map(x => ({ ...x, receiveDates: [...x.receiveDates].sort() }))
       .sort((a, b) => b.qty - a.qty);
+  }, [detailRows]);
+
+  // จำนวน/มูลค่าต่อ (สาขา, วันที่รับ) — ใช้แสดงตอนกดวันที่ในตาราง "แยกตามสาขา"
+  const branchDateQty = useMemo(() => {
+    const m = {};
+    detailRows.forEach(r => {
+      if (!r.receiveDate) return;
+      const k = `${r.branch}|${r.receiveDate}`;
+      if (!m[k]) m[k] = { qty: 0, total: 0, lines: 0 };
+      m[k].qty += r.qty;
+      m[k].total += r.total;
+      m[k].lines++;
+    });
+    return m;
   }, [detailRows]);
 
   const selectedInfo = filtered.find(x => x.itemCode === selectedItem) || summary.find(x => x.itemCode === selectedItem);
@@ -243,11 +261,23 @@ export default function PlanList() {
                           <td className="px-3 py-2 text-center text-slate-500">{b.lines}</td>
                           <td className="px-3 py-2">
                             <div className="flex flex-wrap gap-1">
-                              {b.receiveDates.length === 0 ? <span className="text-slate-300 text-xs">—</span> : b.receiveDates.map(d => (
-                                <span key={d} className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded text-[11px]">
-                                  <Calendar size={9} />{d}
-                                </span>
-                              ))}
+                              {b.receiveDates.length === 0 ? <span className="text-slate-300 text-xs">—</span> : b.receiveDates.map(d => {
+                                const key = `${b.branch}|${d}`;
+                                const info = branchDateQty[key];
+                                const isOpen = openDateKey === key;
+                                return (
+                                  <button key={d} type="button" onClick={() => setOpenDateKey(isOpen ? null : key)}
+                                    title="กดเพื่อดูจำนวนที่สั่งของวันนี้"
+                                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] border transition-colors ${isOpen
+                                      ? 'bg-emerald-600 text-white border-emerald-600'
+                                      : 'bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100'}`}>
+                                    <Calendar size={9} />{d}
+                                    {isOpen && info && (
+                                      <span className="font-bold whitespace-nowrap">· {fmtNum(info.qty)} {selectedInfo?.unit || ''}</span>
+                                    )}
+                                  </button>
+                                );
+                              })}
                             </div>
                           </td>
                         </tr>
