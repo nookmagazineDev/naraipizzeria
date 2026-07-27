@@ -20,6 +20,13 @@ const sortKey = r => {
   return `${y}${m.padStart(2, '0')}${d.padStart(2, '0')}${(r.recordTime || '').replace(/:/g, '')}`;
 };
 
+// แปลง orderDate (DD/MM/YYYY) -> YYYY-MM-DD เพื่อเทียบกับ <input type="date">
+const toISO = ddmmyyyy => {
+  const [d, m, y] = (ddmmyyyy || '').split('/');
+  if (!d || !m || !y) return '';
+  return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+};
+
 const HEAD_STYLE = {
   font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
   fill: { patternType: 'solid', fgColor: { rgb: '0E7490' } }, // cyan-700
@@ -31,6 +38,8 @@ export default function PlanList() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState(''); // กรองช่วงวันที่บันทึกข้อมูล (orderDate) — YYYY-MM-DD
+  const [dateTo, setDateTo] = useState('');
   const [selectedItem, setSelectedItem] = useState(null); // itemCode ที่กำลังดูรายละเอียด
   const [openDateKey, setOpenDateKey] = useState(null); // `${branch}|${date}` ที่กดเปิดดูจำนวนอยู่
 
@@ -52,21 +61,35 @@ export default function PlanList() {
 
   const branches = useMemo(() => [...new Set(rows.map(r => r.branch).filter(Boolean))].sort(), [rows]);
 
-  // สรุปยอดรวมต่อรายการ (itemCode)
+  // ตัดเฉพาะแถวที่ "วันที่บันทึกข้อมูล" (orderDate) อยู่ในช่วงที่เลือก — ใช้ต่อทั้งสรุป/รายละเอียด/export
+  const baseRows = useMemo(() => {
+    if (!dateFrom && !dateTo) return rows;
+    return rows.filter(r => {
+      const iso = toISO(r.orderDate);
+      if (!iso) return false;
+      if (dateFrom && iso < dateFrom) return false;
+      if (dateTo && iso > dateTo) return false;
+      return true;
+    });
+  }, [rows, dateFrom, dateTo]);
+
+  // สรุปยอดรวมต่อรายการ (itemCode) พร้อมวันที่บันทึกข้อมูลล่าสุดของแต่ละรายการ
   const summary = useMemo(() => {
     const g = {};
-    rows.forEach(r => {
+    baseRows.forEach(r => {
       if (branchFilter && r.branch !== branchFilter) return;
       const k = r.itemCode;
-      if (!g[k]) g[k] = { itemCode: k, itemName: r.itemName, unit: r.unit, qty: 0, total: 0, branches: new Set(), lines: 0 };
+      if (!g[k]) g[k] = { itemCode: k, itemName: r.itemName, unit: r.unit, qty: 0, total: 0, branches: new Set(), lines: 0, lastRecorded: '', _key: '' };
       g[k].qty += r.qty;
       g[k].total += r.total;
       g[k].branches.add(r.branch);
       g[k].lines++;
+      const key = sortKey(r);
+      if (key > g[k]._key) { g[k]._key = key; g[k].lastRecorded = r.orderDate; }
     });
     return Object.values(g).map(x => ({ ...x, branchCount: x.branches.size }))
       .sort((a, b) => b.qty - a.qty);
-  }, [rows, branchFilter]);
+  }, [baseRows, branchFilter]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -79,13 +102,13 @@ export default function PlanList() {
     total: filtered.reduce((s, x) => s + x.total, 0),
   }), [filtered]);
 
-  // แถวดิบของรายการที่เลือก (ตามตัวกรองสาขาปัจจุบันด้วย) เรียงคีย์เวลาล่าสุดก่อน
+  // แถวดิบของรายการที่เลือก (ตามตัวกรองสาขา+ช่วงวันที่บันทึกด้วย) เรียงคีย์เวลาล่าสุดก่อน
   const detailRows = useMemo(() => {
     if (!selectedItem) return [];
-    return rows
+    return baseRows
       .filter(r => r.itemCode === selectedItem && (!branchFilter || r.branch === branchFilter))
       .sort((a, b) => sortKey(b).localeCompare(sortKey(a)));
-  }, [rows, selectedItem, branchFilter]);
+  }, [baseRows, selectedItem, branchFilter]);
 
   const branchBreakdown = useMemo(() => {
     const g = {};
@@ -121,15 +144,15 @@ export default function PlanList() {
     if (!filtered.length) return;
     const wb = XLSX.utils.book_new();
 
-    const sumAoa = [['รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนรวม', 'มูลค่ารวม', 'จำนวนสาขาที่สั่ง', 'จำนวนครั้งสั่ง']];
-    filtered.forEach(x => sumAoa.push([x.itemCode, x.itemName, x.unit, x.qty, x.total, x.branchCount, x.lines]));
+    const sumAoa = [['รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนรวม', 'มูลค่ารวม', 'จำนวนสาขาที่สั่ง', 'จำนวนครั้งสั่ง', 'บันทึกล่าสุด']];
+    filtered.forEach(x => sumAoa.push([x.itemCode, x.itemName, x.unit, x.qty, x.total, x.branchCount, x.lines, x.lastRecorded]));
     const ws1 = XLSX.utils.aoa_to_sheet(sumAoa);
-    ws1['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }];
-    for (let c = 0; c < 7; c++) { const cell = ws1[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
+    ws1['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }];
+    for (let c = 0; c < 8; c++) { const cell = ws1[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
     XLSX.utils.book_append_sheet(wb, ws1, 'สรุปรายการ');
 
     const detAoa = [['วันที่คีย์ข้อมูล', 'เวลา', 'สาขา', 'เลขที่ใบสั่ง', 'รหัสสินค้า', 'ชื่อสินค้า', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่ารวม', 'วันที่รับของ', 'ผู้บันทึก']];
-    const detailSrc = branchFilter ? rows.filter(r => r.branch === branchFilter) : rows;
+    const detailSrc = branchFilter ? baseRows.filter(r => r.branch === branchFilter) : baseRows;
     [...detailSrc].sort((a, b) => sortKey(b).localeCompare(sortKey(a))).forEach(r =>
       detAoa.push([r.orderDate, r.recordTime, r.branch, r.orderNo, r.itemCode, r.itemName, r.qty, r.unit, r.unitPrice, r.total, r.receiveDate, r.recordedBy]));
     const ws2 = XLSX.utils.aoa_to_sheet(detAoa);
@@ -150,6 +173,9 @@ export default function PlanList() {
               <h2 className="text-xl font-bold text-slate-800">แพลนสินค้า</h2>
               <p className="text-sm text-slate-500 mt-0.5">
                 {filtered.length.toLocaleString()} รายการ · จำนวนรวม {fmtNum(grand.qty)} · มูลค่ารวม ฿{fmtMoney(grand.total)}
+                {(dateFrom || dateTo) && (
+                  <span className="ml-1.5 text-cyan-600 font-semibold">· บันทึกวันที่ {dateFrom || '…'} ถึง {dateTo || '…'}</span>
+                )}
               </p>
             </div>
           </div>
@@ -170,6 +196,19 @@ export default function PlanList() {
             <option value="">ทุกสาขา ({branches.length})</option>
             {branches.map(b => <option key={b} value={b}>{b}</option>)}
           </select>
+          <div className="flex items-center gap-2 bg-cyan-50/60 border border-cyan-100 rounded-xl px-3 py-1.5">
+            <Calendar size={14} className="text-cyan-600 flex-shrink-0" />
+            <span className="text-xs font-semibold text-cyan-700 whitespace-nowrap">วันที่บันทึก:</span>
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              className="border border-slate-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-cyan-500" />
+            <span className="text-slate-400 text-xs">-</span>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              className="border border-slate-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-cyan-500" />
+            {(dateFrom || dateTo) && (
+              <button onClick={() => { setDateFrom(''); setDateTo(''); }}
+                className="text-rose-400 hover:text-rose-600 text-xs font-semibold whitespace-nowrap">ล้าง</button>
+            )}
+          </div>
         </div>
 
         {error && (
@@ -189,15 +228,16 @@ export default function PlanList() {
                 <th className="px-4 py-3 text-right">มูลค่ารวม</th>
                 <th className="px-3 py-3 text-center">สาขาที่สั่ง</th>
                 <th className="px-3 py-3 text-center">จำนวนครั้ง</th>
+                <th className="px-4 py-3 text-left">บันทึกล่าสุด</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
               ) : filtered.map(x => (
                 <tr key={x.itemCode} onClick={() => setSelectedItem(x.itemCode)}
                   className="cursor-pointer hover:bg-cyan-50/50 transition-colors">
@@ -210,6 +250,7 @@ export default function PlanList() {
                     <span className="inline-block px-2 py-0.5 bg-cyan-50 text-cyan-700 rounded-full text-xs font-semibold">{x.branchCount}</span>
                   </td>
                   <td className="px-3 py-2.5 text-center text-slate-500">{x.lines}</td>
+                  <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap font-mono text-xs">{x.lastRecorded || '—'}</td>
                 </tr>
               ))}
             </tbody>
