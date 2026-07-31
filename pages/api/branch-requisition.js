@@ -78,36 +78,22 @@ export default async function handler(req, res) {
     });
 
     // ชีท "ใบเบิก" ไม่มีหัวคอลัมน์ — เรียงตายตัว: เวลาบันทึก, สาขา, ชื่อสินค้า, จำนวน
+    // ส่งเป็นแถวดิบ (ไม่ pivot ที่ฝั่ง API) เพื่อให้หน้าเว็บกรองตามเดือนแล้วรวมยอดใหม่ได้เอง
     const branchSet = new Set();
-    const itemsMap = {};
-    reqRows
+    const logs = reqRows
       .filter(r => r.some(x => String(x).trim()))
-      .forEach(r => {
-        const timestamp = (r[0] || '').trim();
-        const branch = (r[1] || '').trim().toUpperCase();
-        const itemName = (r[2] || '').trim();
-        const qty = num(r[3]);
-        if (!itemName || !branch) return;
-        branchSet.add(branch);
-        if (!itemsMap[itemName]) {
-          itemsMap[itemName] = {
-            itemName,
-            ...(itemInfo[itemName] || { code: '', oldCode: '', unit: '', image: '', price: null, remainNew: '', remainOld: '', supplier: '' }),
-            total: 0,
-            qtyByBranch: {},
-            lastRequested: '',
-          };
-        }
-        const it = itemsMap[itemName];
-        it.total += qty;
-        it.qtyByBranch[branch] = (it.qtyByBranch[branch] || 0) + qty;
-        if (timestamp > it.lastRequested) it.lastRequested = timestamp;
-      });
+      .map(r => ({
+        timestamp: (r[0] || '').trim(),   // DD/MM/YYYY HH:MM:SS
+        branch: (r[1] || '').trim().toUpperCase(),
+        itemName: (r[2] || '').trim(),
+        qty: num(r[3]),
+      }))
+      .filter(r => r.itemName && r.branch);
+    logs.forEach(r => branchSet.add(r.branch));
 
     const branches = [...branchSet].sort();
-    const items = Object.values(itemsMap).sort((a, b) => a.itemName.localeCompare(b.itemName, 'th'));
 
-    res.status(200).json({ status: 'success', data: { branches, items } });
+    res.status(200).json({ status: 'success', data: { branches, logs, itemInfo } });
   } catch (err) {
     console.error('Branch requisition API error:', err.message);
     res.status(502).json({ status: 'error', message: err.message });

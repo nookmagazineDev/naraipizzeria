@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PackageOpen, Search, Loader2, AlertCircle, Download, Info, ImageOff } from 'lucide-react';
+import { PackageOpen, Search, Loader2, AlertCircle, Download, Info, ImageOff, Calendar } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 
 /*
  * จัดซื้อ — เบิกของสาขา: อ่านชีท "ใบเบิก" + "data" ผ่าน /api/branch-requisition
- * ตารางเรียงไอเทมเป็นแถว หัวคอลัมน์เป็นสาขา ช่องตารางเป็นจำนวนที่เบิกรวมของไอเทมนั้นในสาขานั้น
+ * API ส่งแถวดิบ (logs) มา — หน้านี้กรองตามเดือนที่เลือกแล้วค่อย pivot (แถว=ไอเทม, คอลัมน์=สาขา, ช่อง=จำนวนรวม)
  */
 
 const fmtNum = v => (v === null || v === undefined || v === 0 || isNaN(v)) ? '' : Number(v).toLocaleString('th-TH', { maximumFractionDigits: 2 });
@@ -13,6 +13,22 @@ const fmtMoney = v => (v === null || v === undefined || isNaN(v)) ? '—' : Numb
 const HEAD_STYLE = {
   font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
   fill: { patternType: 'solid', fgColor: { rgb: '0E7490' } }, // cyan-700
+};
+
+const THAI_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+// timestamp ในชีทใบเบิก: "DD/MM/YYYY HH:MM:SS" — ดึงคีย์เดือน "YYYY-MM" ไว้กรอง/จัดกลุ่ม
+const monthKeyOf = timestamp => {
+  const [datePart] = String(timestamp || '').split(' ');
+  const [d, m, y] = (datePart || '').split('/');
+  if (!d || !m || !y) return '';
+  return `${y}-${m.padStart(2, '0')}`;
+};
+const monthLabel = key => {
+  const [y, m] = key.split('-');
+  const mi = parseInt(m, 10) - 1;
+  return `${THAI_MONTHS[mi] || m} ${y}`;
 };
 
 function ItemImage({ src, alt }) {
@@ -32,11 +48,13 @@ function ItemImage({ src, alt }) {
 
 export default function BranchRequisition() {
   const [branches, setBranches] = useState([]);
-  const [items, setItems] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [itemInfo, setItemInfo] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
+  const [monthFilter, setMonthFilter] = useState(''); // '' = ทุกเดือน, ไม่งั้น 'YYYY-MM'
 
   const load = () => {
     setLoading(true);
@@ -45,7 +63,8 @@ export default function BranchRequisition() {
       .then(res => {
         if (res.status === 'success') {
           setBranches(res.data?.branches || []);
-          setItems(res.data?.items || []);
+          setLogs(res.data?.logs || []);
+          setItemInfo(res.data?.itemInfo || {});
           setError('');
         } else setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
       })
@@ -53,6 +72,36 @@ export default function BranchRequisition() {
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
+
+  // เดือนที่มีข้อมูลจริงในชีทใบเบิก เรียงล่าสุดก่อน
+  const months = useMemo(() => {
+    const set = new Set(logs.map(r => monthKeyOf(r.timestamp)).filter(Boolean));
+    return [...set].sort().reverse();
+  }, [logs]);
+
+  const emptyInfo = { code: '', oldCode: '', unit: '', image: '', price: null, remainNew: '', remainOld: '', supplier: '' };
+
+  // pivot ไอเทม × สาขา จาก log ที่กรองเดือนแล้ว — คำนวณสดทุกครั้งที่เปลี่ยนตัวกรองเดือน
+  const items = useMemo(() => {
+    const rows = monthFilter ? logs.filter(r => monthKeyOf(r.timestamp) === monthFilter) : logs;
+    const map = {};
+    rows.forEach(r => {
+      if (!map[r.itemName]) {
+        map[r.itemName] = {
+          itemName: r.itemName,
+          ...(itemInfo[r.itemName] || emptyInfo),
+          total: 0,
+          qtyByBranch: {},
+          lastRequested: '',
+        };
+      }
+      const it = map[r.itemName];
+      it.total += r.qty;
+      it.qtyByBranch[r.branch] = (it.qtyByBranch[r.branch] || 0) + r.qty;
+      if (r.timestamp > it.lastRequested) it.lastRequested = r.timestamp;
+    });
+    return Object.values(map).sort((a, b) => a.itemName.localeCompare(b.itemName, 'th'));
+  }, [logs, itemInfo, monthFilter]);
 
   const visibleBranches = useMemo(
     () => branchFilter ? branches.filter(b => b === branchFilter) : branches,
@@ -96,7 +145,8 @@ export default function BranchRequisition() {
       if (cell) cell.s = HEAD_STYLE;
     }
     XLSX.utils.book_append_sheet(wb, ws, 'เบิกของสาขา');
-    XLSX.writeFile(wb, `branch_requisition_${new Date().toISOString().split('T')[0]}.xlsx`);
+    const suffix = monthFilter || new Date().toISOString().split('T')[0];
+    XLSX.writeFile(wb, `branch_requisition_${suffix}.xlsx`);
   };
 
   return (
@@ -110,6 +160,7 @@ export default function BranchRequisition() {
               <p className="text-sm text-slate-500 mt-0.5">
                 {filtered.length.toLocaleString()} รายการ · จำนวนเบิกรวม {fmtNum(grandTotal) || 0}
                 {branchFilter && <span className="ml-1.5 text-cyan-600 font-semibold">· เฉพาะสาขา {branchFilter}</span>}
+                {monthFilter && <span className="ml-1.5 text-cyan-600 font-semibold">· เดือน{monthLabel(monthFilter)}</span>}
               </p>
             </div>
           </div>
@@ -130,6 +181,14 @@ export default function BranchRequisition() {
             <option value="">ทุกสาขา ({branches.length})</option>
             {branches.map(b => <option key={b} value={b}>{b}</option>)}
           </select>
+          <div className="flex items-center gap-2 bg-cyan-50/60 border border-cyan-100 rounded-xl px-3 py-1.5">
+            <Calendar size={14} className="text-cyan-600 flex-shrink-0" />
+            <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)}
+              className="border-0 bg-transparent text-xs font-semibold text-cyan-700 focus:outline-none">
+              <option value="">ทุกเดือน</option>
+              {months.map(mk => <option key={mk} value={mk}>{monthLabel(mk)}</option>)}
+            </select>
+          </div>
         </div>
 
         {error && (
