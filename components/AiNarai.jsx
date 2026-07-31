@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Loader2, Send, AlertCircle, Trash2, Database } from 'lucide-react';
+import { Loader2, Send, AlertCircle, Trash2, Database, FileSpreadsheet } from 'lucide-react';
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, Legend, CartesianGrid,
 } from 'recharts';
+import * as XLSX from 'xlsx-js-style';
 
 /*
  * AI NARAI — แชทถามข้อมูลยอดขาย/รายการขายด้วยภาษาคน
@@ -122,6 +123,61 @@ function Bold({ text }) {
   return parts.map((p, i) => (i % 2 === 1 ? <strong key={i}>{p}</strong> : p));
 }
 
+const XLSX_HEAD_STYLE = {
+  font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
+  fill: { patternType: 'solid', fgColor: { rgb: '7C3AED' } }, // violet-600
+};
+
+// ตัดชื่อชีทให้ผ่านกฎ Excel (≤31 ตัวอักษร, ห้าม : \ / ? * [ ])
+const sheetName = s => (String(s || 'Sheet').replace(/[:\\/?*[\]]/g, ' ').trim().slice(0, 31)) || 'Sheet';
+
+// ดึงตาราง markdown + ข้อมูลกราฟ (```chart) จากคำตอบ AI มาเป็นชีทสำหรับ export Excel
+function extractExportSheets(text) {
+  const sheets = [];
+  let tableN = 0, chartN = 0;
+  splitSegments(text).forEach(seg => {
+    if (seg.kind === 'chart') {
+      const { xKey = 'label', series = [{ key: 'value', name: 'ค่า' }], data = [], title } = seg.spec || {};
+      if (Array.isArray(data) && data.length) {
+        chartN++;
+        const header = [xKey, ...series.map(s => s.name || s.key)];
+        const aoa = [header, ...data.map(d => [d[xKey], ...series.map(s => d[s.key])])];
+        sheets.push({ name: title || `กราฟ${chartN}`, aoa });
+      }
+    } else {
+      renderLite(seg.text).forEach(b => {
+        if (b.type === 'table' && b.rows.length > 1) {
+          tableN++;
+          sheets.push({ name: `ตาราง${tableN}`, aoa: b.rows });
+        }
+      });
+    }
+  });
+  return sheets;
+}
+
+// รวมชีททั้งหมดของคำตอบเป็นไฟล์ .xlsx เดียวแล้วดาวน์โหลด
+function exportSheetsToExcel(sheets) {
+  if (!sheets.length) return;
+  const wb = XLSX.utils.book_new();
+  const used = new Set();
+  sheets.forEach((s, i) => {
+    let name = sheetName(s.name || `Sheet${i + 1}`);
+    if (used.has(name)) name = sheetName(`${name}_${i + 1}`);
+    used.add(name);
+    const ws = XLSX.utils.aoa_to_sheet(s.aoa);
+    const ncols = s.aoa[0]?.length || 0;
+    ws['!cols'] = Array.from({ length: ncols }, () => ({ wch: 16 }));
+    for (let c = 0; c < ncols; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+      if (cell) cell.s = XLSX_HEAD_STYLE;
+    }
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  });
+  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+  XLSX.writeFile(wb, `ai_narai_${stamp}.xlsx`);
+}
+
 export default function AiNarai() {
   const [messages, setMessages] = useState([]); // {role:'user'|'model', text, tools?}
   const [input, setInput] = useState('');
@@ -195,7 +251,9 @@ export default function AiNarai() {
             </div>
           )}
 
-          {messages.map((m, i) => (
+          {messages.map((m, i) => {
+            const exportSheets = m.role === 'model' ? extractExportSheets(m.text) : [];
+            return (
             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm ${m.role === 'user'
                 ? 'bg-violet-500 text-white rounded-br-md'
@@ -223,9 +281,15 @@ export default function AiNarai() {
                         ))}
                       </React.Fragment>
                     ))}
-                    {m.tools?.length > 0 && (
-                      <div className="pt-1.5 flex flex-wrap gap-1">
-                        {m.tools.map((t, ti) => (
+                    {(exportSheets.length > 0 || m.tools?.length > 0) && (
+                      <div className="pt-1.5 flex flex-wrap items-center gap-1.5">
+                        {exportSheets.length > 0 && (
+                          <button onClick={() => exportSheetsToExcel(exportSheets)}
+                            className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-violet-200 text-violet-600 rounded-lg text-[11px] font-semibold hover:bg-violet-50 transition-colors">
+                            <FileSpreadsheet size={11} /> ส่งออก Excel
+                          </button>
+                        )}
+                        {m.tools?.map((t, ti) => (
                           <span key={ti} title={JSON.stringify(t.args)}
                             className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-white border border-slate-200 rounded text-[9px] text-slate-400">
                             <Database size={8} /> {t.name}
@@ -237,7 +301,7 @@ export default function AiNarai() {
                 ) : m.text}
               </div>
             </div>
-          ))}
+          );})}
 
           {loading && (
             <div className="flex justify-start">
