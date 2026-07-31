@@ -197,22 +197,22 @@ export default function BranchRequisition() {
           </div>
         )}
 
-        <div className="overflow-x-auto">
+        <div className="overflow-auto max-h-[70vh]">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-500 sticky top-0">
+            <thead className="bg-slate-50 text-slate-500 sticky top-0 z-10 shadow-sm">
               <tr className="text-xs font-bold uppercase tracking-wide">
-                <th className="px-3 py-3 text-left">รูป</th>
-                <th className="px-3 py-3 text-left">รหัส</th>
-                <th className="px-4 py-3 text-left">ชื่อ</th>
-                <th className="px-3 py-3 text-center">หน่วย</th>
-                <th className="px-3 py-3 text-right">ราคา</th>
-                <th className="px-3 py-3 text-right">คงเหลือใหม่</th>
-                <th className="px-3 py-3 text-right">คงเหลือเก่า</th>
-                <th className="px-3 py-3 text-left">ซัพ</th>
+                <th className="px-3 py-3 text-left bg-slate-50">รูป</th>
+                <th className="px-3 py-3 text-left bg-slate-50">รหัส</th>
+                <th className="px-4 py-3 text-left bg-slate-50">ชื่อ</th>
+                <th className="px-3 py-3 text-center bg-slate-50">หน่วย</th>
+                <th className="px-3 py-3 text-right bg-slate-50">ราคา</th>
+                <th className="px-3 py-3 text-right bg-slate-50">คงเหลือใหม่</th>
+                <th className="px-3 py-3 text-right bg-slate-50">คงเหลือเก่า</th>
+                <th className="px-3 py-3 text-left bg-slate-50">ซัพ</th>
                 {visibleBranches.map(b => (
-                  <th key={b} className="px-3 py-3 text-center whitespace-nowrap">{b}</th>
+                  <th key={b} className="px-3 py-3 text-center whitespace-nowrap bg-slate-50">{b}</th>
                 ))}
-                <th className="px-4 py-3 text-right">รวม</th>
+                <th className="px-4 py-3 text-right bg-slate-50">รวม</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
