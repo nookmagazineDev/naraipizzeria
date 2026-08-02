@@ -162,9 +162,12 @@ export default async function handler(req, res) {
 
     if (sheet === 'item') {
       const rows = await fetchSheet('item');
+      // เก็บเลขแถวจริงในชีท (1-indexed) ไว้ตั้งแต่ก่อน filter — ใช้ระบุแถวที่ต้องการลบให้แม่นยำ
+      // เผื่อกรณีรหัสซ้ำกัน (ลบด้วยรหัสอย่างเดียวจะเจอแถวแรกเสมอ ไม่ตรงเจตนา)
       const data = rows.slice(1)
-        .filter(r => (r[0] || '').trim())
-        .map(r => {
+        .map((r, idx) => ({ r, row: idx + 2 }))
+        .filter(({ r }) => (r[0] || '').trim())
+        .map(({ r, row }) => {
           const name = (r[1] || '').trim();
           const sheetUnit = (r[3] || '').trim();
           return {
@@ -181,6 +184,7 @@ export default async function handler(req, res) {
             usedBranches: (r[9] || '').split(',').map(s => s.trim()).filter(Boolean),
             // N=หมวดสโตร์ (ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
             storeCategory: (r[13] || '').trim(),
+            _row: row,
           };
         });
       return res.status(200).json({ status: 'success', data });

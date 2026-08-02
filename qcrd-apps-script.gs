@@ -35,6 +35,8 @@ function doPost(e) {
       res = saveItem_(ss, data);
     } else if (action === 'addItem') {
       res = addItem_(ss, data);
+    } else if (action === 'deleteItem') {
+      res = deleteItem_(ss, data);
     } else if (action === 'saveMenuStatus') {
       res = saveMenuStatus_(ss, data);
     } else if (action === 'sortBom') {
@@ -230,6 +232,37 @@ function addItem_(ss, data) {
     '', '', '', storeCategory,
   ]]);
   return { status: 'success', data: { code: code, row: newRow } };
+}
+
+// ลบวัตถุดิบ: ลบทั้งแถวออกจากชีท item
+// payload: { code, row }  — row = เลขแถวจริงในชีท (1-indexed) จาก field _row ที่ /api/qcrd?sheet=item ส่งมา
+//   ส่ง row มาด้วยเพื่อความแม่นยำ เผื่อรหัสซ้ำกันหลายแถว (ลบด้วยรหัสอย่างเดียวจะเจอแค่แถวแรกเสมอ)
+function deleteItem_(ss, data) {
+  var code = String(data.code || '').trim();
+  if (!code) return { status: 'error', message: 'ต้องระบุรหัสวัตถุดิบ' };
+  var sh = ss.getSheetByName('item');
+  if (!sh) return { status: 'error', message: 'ไม่พบชีท item' };
+  var values = sh.getRange(1, 1, sh.getLastRow(), 1).getValues();
+
+  var targetRow = Number(data.row) || 0;
+  if (targetRow > 1 && targetRow <= values.length) {
+    var cellCode = String(values[targetRow - 1][0] || '').trim();
+    if (cellCode !== code) {
+      return { status: 'error', message: 'แถว ' + targetRow + ' ไม่ตรงกับรหัส ' + code + ' (ข้อมูลในชีทอาจเปลี่ยนไปแล้ว รีเฟรชหน้าแล้วลองอีกครั้ง)' };
+    }
+    sh.deleteRow(targetRow);
+    return { status: 'success', data: { code: code, row: targetRow } };
+  }
+
+  // ไม่ได้ส่ง row มา (หรือ row ไม่ตรงกับที่เช็ค) → หาแถวแรกที่รหัสตรง
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === code) {
+      var row = i + 1;
+      sh.deleteRow(row);
+      return { status: 'success', data: { code: code, row: row } };
+    }
+  }
+  return { status: 'error', message: 'ไม่พบรหัส ' + code + ' ในชีท item' };
 }
 
 // เติมหน่วยลงคอลัมน์ D ของชีท item — เขียนเฉพาะช่องที่ยังว่าง (ไม่ทับของเดิม)

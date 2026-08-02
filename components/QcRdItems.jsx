@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft } from 'lucide-react';
+import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle } from 'lucide-react';
 import { apiCall } from '../lib/qcrdApi';
 
 /*
@@ -7,7 +7,8 @@ import { apiCall } from '../lib/qcrdApi';
  * - หน่วย (คอลัมน์ D) ว่าง → วิเคราะห์จากชื่ออัตโนมัติ (badge "วิเคราะห์") + ปุ่มเขียนลงชีท
  * - แก้ไขได้: ชื่อ (B), ราคา (C), สถานะ (E), ไอเทมทดแทนสูงสุด 3 ตัว (F–H), ตัวแปลงหน่วย (I),
  *   สาขาที่ใช้ (J), หมวดสโตร์ (N — ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
- *   ผ่าน Apps Script action: saveItem / addItem
+ *   ลบได้ (ทั้งแถว) — ใช้ _row (เลขแถวจริงในชีท) ระบุแถวให้แม่นยำ เผื่อรหัสซ้ำกันหลายแถว
+ *   ผ่าน Apps Script action: saveItem / addItem / deleteItem
  */
 
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -37,6 +38,8 @@ export default function QcRdItems() {
   const [toast, setToast] = useState(null); // { ok, msg }
   const [editItem, setEditItem] = useState(null); // { code, name, status, subs[] }
   const [savingItem, setSavingItem] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null); // { code, name, row }
+  const [deleting, setDeleting] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -66,6 +69,13 @@ export default function QcRdItems() {
     [items]);
   const noStoreCount = useMemo(() => items.filter(i => !i.storeCategory).length, [items]);
   const NO_STORE = '__none__'; // ค่าพิเศษของตัวกรอง = แสดงเฉพาะรายการที่ยังไม่ได้ระบุหมวดสโตร์
+
+  // รหัสที่มีมากกว่า 1 แถวในชีท (กรอกซ้ำ) — เตือนไว้ เพราะฟีเจอร์แก้ไข/ลบด้วยรหัสอย่างเดียวจะโดนแค่แถวแรกเสมอ
+  const duplicateCodes = useMemo(() => {
+    const count = {};
+    items.forEach(i => { count[i.code] = (count[i.code] || 0) + 1; });
+    return new Set(Object.keys(count).filter(c => count[c] > 1));
+  }, [items]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -137,6 +147,22 @@ export default function QcRdItems() {
     }
   };
 
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setToast(null);
+    try {
+      await apiCall('deleteItem', { code: deleteTarget.code, row: deleteTarget.row });
+      setToast({ ok: true, msg: `ลบ ${deleteTarget.code} สำเร็จ` });
+      setDeleteTarget(null);
+      load();
+    } catch (err) {
+      setToast({ ok: false, msg: err.message || 'ลบไม่สำเร็จ' });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto space-y-5">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
@@ -149,6 +175,9 @@ export default function QcRdItems() {
                 {items.length.toLocaleString()} รายการจากชีท item
                 {autoCount > 0 && ` · หน่วยวิเคราะห์อัตโนมัติ ${autoCount.toLocaleString()}`}
                 {inactiveCount > 0 && ` · ปิดการใช้งาน ${inactiveCount}`}
+                {duplicateCodes.size > 0 && (
+                  <span className="text-amber-600 font-semibold"> · รหัสซ้ำ {duplicateCodes.size} รหัส</span>
+                )}
               </p>
             </div>
           </div>
@@ -229,8 +258,15 @@ export default function QcRdItems() {
               ) : filtered.length === 0 ? (
                 <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
               ) : filtered.map(i => (
-                <tr key={i.code} className={`hover:bg-slate-50/60 ${i.status === 'ปิดการใช้งาน' ? 'bg-rose-50/40 text-slate-400' : ''}`}>
-                  <td className="px-4 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{i.code}</td>
+                <tr key={i._row ?? i.code} className={`hover:bg-slate-50/60 ${i.status === 'ปิดการใช้งาน' ? 'bg-rose-50/40 text-slate-400' : ''}`}>
+                  <td className="px-4 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">
+                    {i.code}
+                    {duplicateCodes.has(i.code) && (
+                      <span title="รหัสนี้มีมากกว่า 1 แถวในชีท" className="ml-1 inline-flex items-center gap-0.5 px-1 py-0.5 bg-amber-50 text-amber-600 border border-amber-200 rounded text-[9px] font-bold align-middle">
+                        <AlertTriangle size={9} />ซ้ำ
+                      </span>
+                    )}
+                  </td>
                   <td className={`px-4 py-2 ${i.status === 'ปิดการใช้งาน' ? '' : 'text-slate-800'}`}>{i.name}</td>
                   <td className="px-4 py-2 text-center whitespace-nowrap">
                     {i.unit ? (
@@ -278,10 +314,17 @@ export default function QcRdItems() {
                     )}
                   </td>
                   <td className="px-4 py-2 text-center">
-                    <button onClick={() => openEdit(i)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50">
-                      <Pencil size={12} /> แก้ไข
-                    </button>
+                    <div className="inline-flex items-center gap-1.5">
+                      <button onClick={() => openEdit(i)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50">
+                        <Pencil size={12} /> แก้ไข
+                      </button>
+                      <button onClick={() => setDeleteTarget({ code: i.code, name: i.name, row: i._row })}
+                        title="ลบวัตถุดิบนี้"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-500 bg-white border border-slate-200 rounded-lg hover:bg-rose-50 hover:border-rose-200">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -448,6 +491,33 @@ export default function QcRdItems() {
                 className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
                 {savingItem ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />}
                 {savingItem ? 'กำลังบันทึก…' : (editItem.isNew ? 'เพิ่มวัตถุดิบ' : 'บันทึก')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ───── Modal ยืนยันลบวัตถุดิบ ───── */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !deleting && setDeleteTarget(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
+            <div className="p-5 flex items-start gap-3">
+              <div className="p-2 bg-rose-50 text-rose-500 rounded-xl flex-shrink-0"><AlertTriangle size={20} /></div>
+              <div>
+                <h3 className="font-bold text-slate-800">ลบวัตถุดิบนี้?</h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  <span className="font-mono text-xs text-slate-400">{deleteTarget.code}</span> {deleteTarget.name}
+                </p>
+                <p className="text-xs text-rose-500 mt-2">ลบทั้งแถวออกจากชีท item ทันที — ย้อนกลับไม่ได้</p>
+              </div>
+            </div>
+            <div className="p-4 border-t border-slate-100 flex items-center justify-end gap-2">
+              <button onClick={() => setDeleteTarget(null)} disabled={deleting}
+                className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
+              <button onClick={confirmDelete} disabled={deleting}
+                className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-rose-500 hover:bg-rose-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+                {deleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                {deleting ? 'กำลังลบ…' : 'ลบเลย'}
               </button>
             </div>
           </div>
