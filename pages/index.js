@@ -4005,7 +4005,9 @@ export default function App() {
       )}
 
       {modal.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setModal(m => ({ ...m, open: false }))}>
+        // z-[60] สูงกว่า modal อื่น (z-50) เสมอ — กันซ้อนอยู่หลัง เวลาเปิดจาก modal อื่น
+        // (เช่น "รายการบิลแยกตามประเภท") เพราะ modal นี้อาจถูกเปิดซ้อนจากหลายจุดในหน้า
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setModal(m => ({ ...m, open: false }))}>
           <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
             {/* Modal Header */}
             <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between flex-shrink-0">
