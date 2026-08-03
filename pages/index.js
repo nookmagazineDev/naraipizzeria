@@ -1345,6 +1345,25 @@ export default function App() {
       .sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.outletID - b.outletID),
     [dailyReportData]);
 
+  // สรุป Void รายวัน แยกตามสาขา (ใช้แจ้งเตือนในหน้ายอดรายวัน — กดสาขาเพื่อดูบิลได้)
+  const dailyVoidSummary = useMemo(() => {
+    const byDate = {};
+    salesWithCost.forEach(r => {
+      if (!(r.voidCount > 0)) return;
+      const d = dateFromRow(r);
+      const oid = r.outletID;
+      if (!byDate[d]) byDate[d] = { date: d, bills: 0, items: 0, branches: {} };
+      byDate[d].bills += 1;
+      byDate[d].items += r.voidCount;
+      if (!byDate[d].branches[oid]) byDate[d].branches[oid] = { outletID: oid, bills: 0, items: 0 };
+      byDate[d].branches[oid].bills += 1;
+      byDate[d].branches[oid].items += r.voidCount;
+    });
+    return Object.values(byDate)
+      .map(x => ({ ...x, branches: Object.values(x.branches).sort((a, b) => b.bills - a.bills) }))
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [salesWithCost]);
+
   // Tab 1 (Dashboard) Calculations
   const stats = useMemo(() => {
     const sales = selectedOutlet 
@@ -3312,6 +3331,42 @@ export default function App() {
                   </div>
                 )}
 
+                {loaded && dailyVoidSummary.length > 0 && (
+                  <div className="mx-6 mt-4 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle size={16} className="text-orange-500 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-orange-700">
+                          🗑 แจ้งเตือน Void รายวัน — พบ {dailyVoidSummary.reduce((s, d) => s + d.bills, 0)} บิล ({dailyVoidSummary.reduce((s, d) => s + d.items, 0)} รายการ) ใน {dailyVoidSummary.length} วัน
+                        </p>
+                        <p className="text-[11px] text-orange-500 mb-2">กดที่สาขาเพื่อดูบิลที่มีรายการ Void ของวันนั้น</p>
+                        <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                          {dailyVoidSummary.map(d => (
+                            <div key={d.date} className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-mono text-[11px] font-semibold text-slate-600 w-20 flex-shrink-0">{d.date}</span>
+                              <span className="text-[11px] text-orange-600 font-bold whitespace-nowrap">{d.items} รายการ / {d.bills} บิล</span>
+                              <div className="flex flex-wrap gap-1">
+                                {d.branches.map(b => (
+                                  <button
+                                    key={b.outletID}
+                                    onClick={() => handleDailyCellClick(d.date, b.outletID, 'บิลที่มีรายการ Void', r => r.voidCount > 0)}
+                                    title="กดดูบิลที่มีรายการ Void ของสาขานี้"
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-orange-200 text-orange-700 text-[10px] font-medium hover:bg-orange-100 transition-colors"
+                                  >
+                                    <span className="font-semibold">{OUTLETS[b.outletID] || b.outletID}</span>
+                                    <span className="text-orange-300">•</span>
+                                    <span className="font-mono">{b.bills} บิล ({b.items})</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {!loaded ? (
                   <div className="flex flex-col items-center justify-center py-20 text-slate-400">
                     <Receipt size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
@@ -4306,18 +4361,19 @@ export default function App() {
                       <th className="px-5 py-3 text-slate-600 font-bold text-right text-rose-600">ต้นทุนรวม</th>
                       <th className="px-5 py-3 text-slate-600 font-bold">ประเภทชำระ</th>
                       <th className="px-5 py-3 text-slate-600 font-bold">เลขที่สมาชิก</th>
+                      <th className="px-5 py-3 text-slate-600 font-bold">Void</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-slate-700">
                     {showDailyBillsModal.bills.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-5 py-8 text-center text-slate-400">ไม่พบรายการบิล</td>
+                        <td colSpan={8} className="px-5 py-8 text-center text-slate-400">ไม่พบรายการบิล</td>
                       </tr>
                     ) : (
                       showDailyBillsModal.bills.map((row, i) => (
-                        <tr key={i} className={`hover:bg-slate-50/50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}`}>
+                        <tr key={i} className={`transition-colors ${row.voidCount > 0 ? 'bg-rose-50 hover:bg-rose-100/70' : (i % 2 === 0 ? 'bg-white hover:bg-slate-50/50' : 'bg-slate-50/50 hover:bg-slate-100/50')}`}>
                           <td className="px-5 py-2.5">
-                            <button 
+                            <button
                               onClick={() => {
                                 openDetail(row);
                               }}
@@ -4341,6 +4397,17 @@ export default function App() {
                             </span>
                           </td>
                           <td className="px-5 py-2.5 font-mono text-slate-600">{row.memberTel || '-'}</td>
+                          <td className="px-5 py-2.5 whitespace-nowrap">
+                            {row.voidCount > 0 ? (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 w-fit">
+                                  <XCircle size={11} />
+                                  <span>Void ({row.voidCount})</span>
+                                </span>
+                                {row.voidTypes && <span className="text-[10px] text-rose-600 font-medium">{row.voidTypes}</span>}
+                              </div>
+                            ) : <span className="text-slate-300">-</span>}
+                          </td>
                         </tr>
                       ))
                     )}
@@ -4350,7 +4417,7 @@ export default function App() {
                       <td className="px-5 py-3" colSpan={3}>รวมทั้งหมด</td>
                       <td className="px-5 py-3 text-right font-mono text-amber-700">{fmtMoney(showDailyBillsModal.bills.reduce((s, b) => s + (parseFloat(b.billTotal) || 0), 0))}</td>
                       <td className="px-5 py-3 text-right font-mono text-rose-700">{fmtMoney(showDailyBillsModal.bills.reduce((s, b) => s + (parseFloat(b.billCost) || 0), 0))}</td>
-                      <td colSpan={2} />
+                      <td colSpan={3} />
                     </tr>
                   </tfoot>
                 </table>
