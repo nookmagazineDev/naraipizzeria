@@ -7,8 +7,7 @@
 // เลือกโมเดลผ่าน env GEMINI_MODEL (default: gemini-2.0-flash)
 
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
-// ชีทต้นทุนเมนู (ตัวเดียวกับ /api/cost) + GAS ค่าใช้จ่าย/พนักงาน (ตัวเดียวกับ proxy)
-const COST_SHEET_CSV = 'https://docs.google.com/spreadsheets/d/1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw/export?format=csv&gid=0';
+// GAS ค่าใช้จ่าย/พนักงาน (ตัวเดียวกับ proxy) — ส่วนชีท Google อยู่ในทะเบียน SHEETS ด้านล่าง
 const EXPENSE_GAS = process.env.EXPENSE_GAS_URL || 'https://script.google.com/macros/s/AKfycbwcRP65mAO0jWusYr1OfcgxpW8GU7yv0t85VcnQ3ShTjEROaXCF2d3MNo_VffNho6Y/exec';
 const HR_GAS = 'https://script.google.com/macros/s/AKfycbwIOFT32mCznuUzCpLZnyBrYrjkdYRskUdVEVXEkP2CeMNd2qzT7dAqd7Vfsz2ZKbF2Fw/exec';
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
@@ -37,6 +36,9 @@ const isExcludedItem = c => {
 
 const num = v => parseFloat(v) || 0;
 const r2 = v => Math.round(v * 100) / 100;
+const txt = v => String(v ?? '').trim();
+// ตัวเลขจากชีท: อาจมี comma คั่นหลัก ("1,234.5") ซึ่ง parseFloat ตรง ๆ จะได้ 1 → ต้องตัดออกก่อน
+const snum = v => { const n = parseFloat(txt(v).replace(/,/g, '')); return isNaN(n) ? null : n; };
 
 function assertRange(start, end, maxDays = 62) {
   const d1 = new Date(start), d2 = new Date(end);
@@ -380,23 +382,396 @@ const TOOL_HANDLERS = {
       byBranch: Object.values(byBranch).sort((a, b) => b.active - a.active),
     };
   },
+
+  // ── ข้อมูลจาก Google Sheet (อ่านอย่างเดียวทั้งหมด) ──
+
+  // สารบัญชีท: มีชีทอะไร แท็บอะไรบ้าง — ใช้ก่อน read_sheet เมื่อไม่มีเครื่องมือเฉพาะรองรับ
+  async list_sheets() {
+    return {
+      sheets: Object.entries(SHEETS).map(([key, s]) => ({
+        sheet: key, title: s.title, tabs: Object.keys(s.tabs), about: s.about,
+      })),
+      note: 'ข้อมูลที่ใช้บ่อยมีเครื่องมือเฉพาะแล้ว (get_menu_costs, get_menu_recipe, get_raw_materials, get_stock_counts, get_purchase_plan, get_branch_requisition, get_material_usage) ให้เลือกใช้ตัวเฉพาะก่อน — read_sheet ไว้ใช้กับข้อมูลที่ไม่มีเครื่องมือรองรับเท่านั้น',
+    };
+  },
+
+  // อ่านแท็บใดก็ได้ในทะเบียนแบบดิบ — ตัวช่วยครอบจักรวาลสำหรับคำถามที่เครื่องมือเฉพาะไม่ครอบคลุม
+  async read_sheet({ sheet, tab, search, limit = 50 }) {
+    if (!sheet || !tab) throw new Error('ต้องระบุ sheet และ tab (ดูรายการที่มีจาก list_sheets)');
+    const rows = await fetchTab(sheet, tab);
+    if (!rows.length) return { sheet, tab, totalRows: 0, rows: [] };
+    // จำกัด 24 คอลัมน์แรก กัน token บวมจากชีทที่มีคอลัมน์สูตรพ่วงท้ายเยอะ
+    const headers = (rows[0] || []).slice(0, 24).map((h, i) => txt(h) || `col${i + 1}`);
+    let body = rows.slice(1).filter(r => r.some(x => txt(x)));
+    const kw = txt(search).toLowerCase();
+    if (kw) body = body.filter(r => r.some(x => txt(x).toLowerCase().includes(kw)));
+    const cap = Math.min(Number(limit) || 50, 200);
+    return {
+      sheet, tab, headers, totalRows: body.length,
+      rows: body.slice(0, cap).map(r => Object.fromEntries(headers.map((h, i) => [h, txt(r[i])]))),
+      truncated: body.length > cap ? `แสดง ${cap} จาก ${body.length} แถว — ใส่ search เพื่อกรองให้แคบลง` : undefined,
+      note: 'แถวแรกถูกใช้เป็นหัวคอลัมน์ — แท็บ "ใบเบิก" ไม่มีหัวคอลัมน์จริง ให้ใช้ get_branch_requisition แทน',
+    };
+  },
+
+  // เมนูขายทั้งหมด: ราคา ต้นทุน ต้นทุน% หมวด สถานะ (ชีท qcrd/menu)
+  async get_menu_costs({ search, missing_cost_only, limit = 50 }) {
+    const [rows, groupRows] = await Promise.all([fetchTab('qcrd', 'menu'), fetchTab('qcrd', 'menucodegroup')]);
+    const groupName = {};
+    groupRows.slice(1).forEach(r => { const c = txt(r[0]); if (c) groupName[c] = txt(r[1]); });
+    let list = rows.slice(1).filter(r => txt(r[0])).map(r => {
+      const price = snum(r[3]) || 0, cost = snum(r[4]) || 0;
+      return {
+        code: txt(r[0]), name: txt(r[1]),
+        group: groupName[txt(r[2])] || txt(r[2]),
+        price: r2(price), cost: r2(cost),
+        costPct: price > 0 ? r2((cost / price) * 100) : null,
+        status: txt(r[5]) || 'ใช้งาน',
+      };
+    });
+    const kw = txt(search).toLowerCase();
+    if (kw) list = list.filter(m => m.code.toLowerCase() === kw || m.name.toLowerCase().includes(kw) || m.group.toLowerCase().includes(kw));
+    if (missing_cost_only) list = list.filter(m => !m.cost);
+    const cap = Math.min(Number(limit) || 50, 200);
+    return {
+      totalMenus: list.length,
+      menus: list.slice(0, cap),
+      truncated: list.length > cap ? `แสดง ${cap} จาก ${list.length} เมนู` : undefined,
+      note: 'cost = ต้นทุนวัตถุดิบต่อจานจากสูตร BOM · costPct = ต้นทุน ÷ ราคาขาย × 100 · ต้นทุน 0 = ยังไม่ได้ทำสูตรในชีท',
+    };
+  },
+
+  // สูตรวัตถุดิบของเมนู (ชีท qcrd/BOM) — ค้นด้วยรหัสเมนูหรือบางส่วนของชื่อ
+  async get_menu_recipe({ menu }) {
+    if (!menu) throw new Error('ต้องระบุ menu (รหัสเมนูหรือบางส่วนของชื่อเมนู)');
+    const rows = await fetchTab('qcrd', 'BOM');
+    const kw = txt(menu).toLowerCase();
+    const hit = rows.slice(1).filter(r => txt(r[0]).toLowerCase() === kw || txt(r[1]).toLowerCase().includes(kw));
+    if (!hit.length) return { found: false, message: `ไม่พบสูตรของ "${menu}" ในชีท BOM` };
+    const byMenu = {};
+    hit.forEach(r => {
+      const code = txt(r[0]);
+      if (!byMenu[code]) byMenu[code] = { menuCode: code, menuName: txt(r[1]), items: [], totalCost: 0 };
+      const lineCost = snum(r[13]) || 0;
+      byMenu[code].items.push({
+        seq: txt(r[2]), itemCode: txt(r[3]), itemName: txt(r[4]),
+        qtyPerServe: snum(r[5]), converter: snum(r[7]),
+        itemPrice: snum(r[9]), lineCost: r2(lineCost),
+      });
+      byMenu[code].totalCost += lineCost;
+    });
+    const menus = Object.values(byMenu).map(m => ({ ...m, totalCost: r2(m.totalCost) }));
+    return {
+      found: true, matched: menus.length, menus: menus.slice(0, 10),
+      note: 'qtyPerServe = ยอดใช้ต่อ 1 จาน (หน่วยเล็ก เช่น กรัม) · converter = หน่วยเล็กต่อ 1 หน่วยซื้อ · lineCost = ต้นทุนวัตถุดิบตัวนั้นต่อจาน',
+    };
+  },
+
+  // วัตถุดิบทั้งหมด (ชีท qcrd/item): รหัส ชื่อ ราคา หน่วย ตัวแปลง สาขาที่ใช้ หมวดสโตร์ สถานะ
+  async get_raw_materials({ search, store_category, branch, status, limit = 50 }) {
+    const rows = await fetchTab('qcrd', 'item');
+    let list = rows.slice(1).filter(r => txt(r[0])).map(r => ({
+      code: txt(r[0]), name: txt(r[1]),
+      price: snum(r[2]), unit: txt(r[3]),
+      status: txt(r[4]) || 'ใช้งาน',
+      subs: [r[5], r[6], r[7]].map(txt).filter(Boolean),
+      converter: snum(r[8]),
+      usedBranches: txt(r[9]).split(',').map(s => s.trim()).filter(Boolean),
+      storeCategory: txt(r[13]),
+    }));
+    const kw = txt(search).toLowerCase();
+    if (kw) list = list.filter(i => i.code.toLowerCase() === kw || i.code.replace(/^0+/, '') === kw.replace(/^0+/, '') || i.name.toLowerCase().includes(kw));
+    if (store_category) list = list.filter(i => i.storeCategory === txt(store_category));
+    if (branch) list = list.filter(i => i.usedBranches.some(b => b.toUpperCase() === txt(branch).toUpperCase()));
+    if (status) list = list.filter(i => i.status === txt(status));
+    const cap = Math.min(Number(limit) || 50, 200);
+    return {
+      totalItems: list.length,
+      items: list.slice(0, cap),
+      storeCategories: [...new Set(rows.slice(1).map(r => txt(r[13])).filter(Boolean))],
+      truncated: list.length > cap ? `แสดง ${cap} จาก ${list.length} รายการ — ใส่ search เพื่อกรองให้แคบลง` : undefined,
+      note: 'price = ราคาต่อหน่วยซื้อ · converter = หน่วยเล็กต่อ 1 หน่วยซื้อ · storeCategory = ตำแหน่งจัดเก็บ · subs = รหัสไอเทมทดแทน',
+    };
+  },
+
+  // วัตถุดิบตัวนี้ถูกใช้ในเมนูอะไรบ้าง (ค้นย้อนจากชีท qcrd/BOM)
+  async which_menus_use_item({ item, limit = 50 }) {
+    if (!item) throw new Error('ต้องระบุ item (รหัสหรือบางส่วนของชื่อวัตถุดิบ)');
+    const rows = await fetchTab('qcrd', 'BOM');
+    const kw = txt(item).toLowerCase();
+    const hit = rows.slice(1).filter(r => {
+      const code = txt(r[3]).toLowerCase();
+      return code === kw || code.replace(/^0+/, '') === kw.replace(/^0+/, '') || txt(r[4]).toLowerCase().includes(kw);
+    });
+    if (!hit.length) return { found: false, message: `ไม่มีเมนูไหนใช้วัตถุดิบ "${item}" ในชีท BOM` };
+    const cap = Math.min(Number(limit) || 50, 200);
+    return {
+      found: true,
+      matchedItems: [...new Set(hit.map(r => `${txt(r[3])} ${txt(r[4])}`))].slice(0, 10),
+      totalMenus: hit.length,
+      menus: hit.slice(0, cap).map(r => ({
+        menuCode: txt(r[0]), menuName: txt(r[1]),
+        itemCode: txt(r[3]), itemName: txt(r[4]),
+        qtyPerServe: snum(r[5]), lineCost: r2(snum(r[13]) || 0),
+      })),
+      truncated: hit.length > cap ? `แสดง ${cap} จาก ${hit.length} เมนู` : undefined,
+    };
+  },
+
+  // ยอดคงเหลือสต๊อกล่าสุดต่อสาขา (จาก Apps Script สต๊อก)
+  async get_stock_counts({ branch, search, limit = 50 }) {
+    const list = await gasPost(HR_GAS, { action: 'getStockTotal', endDate: '' });
+    const kw = txt(search).toLowerCase();
+    const bq = txt(branch).toUpperCase();
+    let items = (list || []).map(it => {
+      let details = (it.branchDetails || []).map(bd => ({
+        branch: txt(bd.branch).toUpperCase(),
+        remaining: snum(bd.remaining) || 0,
+        countedAt: txt(bd.date).split(' ')[0],
+      }));
+      if (bq) details = details.filter(d => d.branch === bq);
+      return {
+        code: txt(it.productId), name: txt(it.name),
+        unit: txt(it.unit), storeCategory: txt(it.storageCat),
+        totalRemaining: r2(details.reduce((s, d) => s + d.remaining, 0)),
+        branches: details,
+      };
+    });
+    if (bq) items = items.filter(i => i.branches.length);
+    if (kw) items = items.filter(i => i.code.toLowerCase() === kw || i.name.toLowerCase().includes(kw) || i.storeCategory.toLowerCase().includes(kw));
+    const cap = Math.min(Number(limit) || 50, 150);
+    return {
+      totalItems: items.length,
+      items: items.slice(0, cap),
+      truncated: items.length > cap ? `แสดง ${cap} จาก ${items.length} รายการ — ใส่ search หรือ branch เพื่อกรองให้แคบลง` : undefined,
+      note: 'remaining = ยอดคงเหลือจากการนับครั้งล่าสุดของสาขานั้น (countedAt = วันที่นับ) ไม่ใช่ยอด real-time',
+    };
+  },
+
+  // ประวัติการสั่งของแต่ละสาขา (ชีท stock/plan)
+  async get_purchase_plan({ branch, start_date, end_date, search, group_by, limit = 50 }) {
+    const rows = await fetchTab('stock', 'plan');
+    const col = colFinder(rows[0]);
+    const c = {
+      orderDate: col('วันที่สั่ง'), branch: col('สาขา'), orderNo: col('เลขที่ใบสั่ง'),
+      receiveDate: col('วันที่รับ'), itemCode: col('รหัสสินค้า'), itemName: col('ชื่อสินค้า'),
+      qty: col('จำนวน'), unit: col('หน่วย'), unitPrice: col('ราคา/หน่วย'),
+      total: col('มูลค่ารวม'), type: col('ประเภท'),
+    };
+    // ชีทเก็บวันที่สั่งเป็น DD/MM/YYYY — แปลงเป็น YYYY-MM-DD ก่อนเทียบช่วง
+    const toYMD = s => {
+      const m = txt(s).split(' ')[0].split('/');
+      return m.length === 3 ? `${m[2]}-${m[1].padStart(2, '0')}-${m[0].padStart(2, '0')}` : '';
+    };
+    let list = rows.slice(1).filter(r => txt(r[c.itemCode])).map(r => ({
+      orderDate: toYMD(r[c.orderDate]),
+      branch: txt(r[c.branch]).toUpperCase(),
+      orderNo: txt(r[c.orderNo]), receiveDate: txt(r[c.receiveDate]),
+      itemCode: txt(r[c.itemCode]), itemName: txt(r[c.itemName]),
+      qty: snum(r[c.qty]) || 0, unit: txt(r[c.unit]),
+      unitPrice: snum(r[c.unitPrice]) || 0, total: snum(r[c.total]) || 0,
+      type: txt(r[c.type]),
+    }));
+    if (branch) list = list.filter(x => x.branch === txt(branch).toUpperCase());
+    if (start_date) list = list.filter(x => x.orderDate && x.orderDate >= start_date);
+    if (end_date) list = list.filter(x => x.orderDate && x.orderDate <= end_date);
+    const kw = txt(search).toLowerCase();
+    if (kw) list = list.filter(x => x.itemCode.toLowerCase() === kw || x.itemName.toLowerCase().includes(kw));
+    const grandTotal = r2(list.reduce((s, x) => s + x.total, 0));
+
+    // สรุปรวมแทนการไล่รายแถว เมื่อผู้ใช้ถามภาพรวม (ประหยัด token กว่ามาก)
+    if (group_by === 'branch' || group_by === 'item') {
+      const g = {};
+      list.forEach(x => {
+        const k = group_by === 'branch' ? x.branch : `${x.itemCode}|${x.itemName}`;
+        if (!g[k]) g[k] = group_by === 'branch'
+          ? { branch: k, orders: 0, qty: 0, total: 0 }
+          : { itemCode: x.itemCode, itemName: x.itemName, orders: 0, qty: 0, total: 0 };
+        g[k].orders++; g[k].qty += x.qty; g[k].total += x.total;
+      });
+      const out = Object.values(g).map(x => ({ ...x, qty: r2(x.qty), total: r2(x.total) }))
+        .sort((a, b) => b.total - a.total);
+      return { groupedBy: group_by, rows: out.slice(0, 100), grandTotal, totalRows: list.length };
+    }
+
+    const cap = Math.min(Number(limit) || 50, 200);
+    return {
+      totalRows: list.length, grandTotal,
+      rows: list.slice(0, cap),
+      truncated: list.length > cap ? `แสดง ${cap} จาก ${list.length} แถว — ใช้ group_by หรือใส่ตัวกรองเพิ่ม` : undefined,
+      note: 'total = มูลค่ารวมของแถวนั้น · ใช้ group_by="branch" หรือ "item" เพื่อดูภาพรวมแทนรายแถว',
+    };
+  },
+
+  // ใบเบิกของสาขา (ชีท requisition/ใบเบิก + ข้อมูลไอเทมจากแท็บ data)
+  async get_branch_requisition({ branch, month, search, group_by, limit = 50 }) {
+    const [reqRows, dataRows] = await Promise.all([
+      fetchTab('requisition', 'ใบเบิก'),
+      fetchTab('requisition', 'data'),
+    ]);
+    const col = colFinder(dataRows[0]);
+    const c = { code: col('รหัสอุปกรณ์ใหม่'), name: col('รายการสินค้า'), unit: col('หน่วย'), price: col('ราคา'), supplier: col('ซัพฯ') };
+    const info = {};
+    dataRows.slice(1).forEach(r => {
+      const n = txt(r[c.name]);
+      if (n) info[n] = { code: txt(r[c.code]), unit: txt(r[c.unit]), price: snum(r[c.price]), supplier: txt(r[c.supplier]) };
+    });
+    // แท็บ "ใบเบิก" ไม่มีหัวคอลัมน์ — เรียงตายตัว: เวลาบันทึก(DD/MM/YYYY HH:MM:SS), สาขา, ชื่อสินค้า, จำนวน
+    let logs = reqRows.filter(r => r.some(x => txt(x))).map(r => {
+      const ts = txt(r[0]);
+      const d = ts.split(' ')[0].split('/');
+      return {
+        date: d.length === 3 ? `${d[2]}-${d[1].padStart(2, '0')}-${d[0].padStart(2, '0')}` : '',
+        branch: txt(r[1]).toUpperCase(), itemName: txt(r[2]), qty: snum(r[3]) || 0,
+      };
+    }).filter(x => x.itemName && x.branch);
+    if (branch) logs = logs.filter(x => x.branch === txt(branch).toUpperCase());
+    if (month) logs = logs.filter(x => x.date.slice(0, 7) === txt(month));
+    const kw = txt(search).toLowerCase();
+    if (kw) logs = logs.filter(x => x.itemName.toLowerCase().includes(kw));
+    const withInfo = logs.map(x => ({ ...x, ...(info[x.itemName] || {}), value: r2(x.qty * (info[x.itemName]?.price || 0)) }));
+
+    if (group_by === 'branch' || group_by === 'item') {
+      const g = {};
+      withInfo.forEach(x => {
+        const k = group_by === 'branch' ? x.branch : x.itemName;
+        if (!g[k]) g[k] = group_by === 'branch' ? { branch: k, times: 0, qty: 0, value: 0 } : { itemName: k, unit: x.unit || '', times: 0, qty: 0, value: 0 };
+        g[k].times++; g[k].qty += x.qty; g[k].value += x.value;
+      });
+      const out = Object.values(g).map(x => ({ ...x, qty: r2(x.qty), value: r2(x.value) })).sort((a, b) => b.qty - a.qty);
+      return { groupedBy: group_by, rows: out.slice(0, 100), totalRows: withInfo.length };
+    }
+
+    const cap = Math.min(Number(limit) || 50, 200);
+    return {
+      totalRows: withInfo.length,
+      branches: [...new Set(logs.map(x => x.branch))].sort(),
+      rows: withInfo.slice(0, cap),
+      truncated: withInfo.length > cap ? `แสดง ${cap} จาก ${withInfo.length} แถว — ใช้ group_by หรือใส่ month/branch` : undefined,
+      note: 'value = จำนวน × ราคาต่อหน่วยจากแท็บ data (ไอเทมที่ไม่มีราคาในชีทคิดเป็น 0)',
+    };
+  },
+
+  // ยอดใช้วัตถุดิบตามที่ระบบบันทึกไว้ในชีท (recipe/UsageHistory)
+  async get_material_usage({ start_date, end_date, branch, item, limit = 50 }) {
+    const rows = await fetchTab('recipe', 'UsageHistory');
+    // A=วันที่ B=เลขสาขา C=ชื่อสาขา D=รหัสสินค้า F=จำนวนที่ใช้ไป
+    let list = rows.slice(1).filter(r => txt(r[3])).map(r => ({
+      date: txt(r[0]).slice(0, 10),
+      branch: txt(r[2]).toUpperCase(),
+      itemCode: txt(r[3]),
+      qty: snum(r[5]) || 0,
+    }));
+    if (start_date) list = list.filter(x => x.date >= start_date);
+    if (end_date) list = list.filter(x => x.date <= end_date);
+    if (branch) list = list.filter(x => x.branch === txt(branch).toUpperCase());
+    if (item) {
+      const kw = txt(item).toLowerCase().replace(/^0+/, '');
+      list = list.filter(x => x.itemCode.toLowerCase().replace(/^0+/, '') === kw);
+    }
+    const cap = Math.min(Number(limit) || 50, 200);
+    return {
+      totalRows: list.length,
+      totalQty: r2(list.reduce((s, x) => s + x.qty, 0)),
+      rows: list.slice(0, cap),
+      truncated: list.length > cap ? `แสดง ${cap} จาก ${list.length} แถว` : undefined,
+      note: 'ชีท UsageHistory หยุดอัปเดตแล้ว — ถ้าต้องการยอดใช้วัตถุดิบปัจจุบัน ให้คำนวณจาก get_top_items (ยอดขาย) × get_menu_recipe (สูตร BOM) แทน และบอกผู้ใช้ด้วยว่าข้อมูลชีทนี้เก่า',
+    };
+  },
 };
 
 // ── ตัวช่วยดึงข้อมูลภายนอก ──
-let costCache = { map: null, at: 0 };
-async function fetchCostMap() {
-  if (costCache.map && Date.now() - costCache.at < 10 * 60 * 1000) return costCache.map; // cache 10 นาที
-  const r = await fetch(COST_SHEET_CSV, { cache: 'no-store', redirect: 'follow' });
-  if (!r.ok) throw new Error(`cost sheet HTTP ${r.status}`);
-  const lines = (await r.text()).split('\n');
-  const map = {};
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',');
-    const code = (cols[0] || '').replace(/"/g, '').trim();
-    const cost = parseFloat((cols[4] || '').replace(/"/g, ''));
-    if (code && !isNaN(cost) && !(code in map)) map[code] = cost;
+
+// ทะเบียนชีท Google ทั้งหมดที่ AI เข้าถึงได้ (whitelist — อ่านอย่างเดียว ไม่มีทางเขียน)
+// ค่าของ tab = gid → อ่านผ่าน export?format=csv (ได้ค่าดิบตรงตามชีท ไม่โดน gviz เดาชนิดคอลัมน์)
+//              null → ชีทนั้นไม่รู้ gid ใช้ชื่อแท็บผ่าน gviz แทน
+const SHEETS = {
+  qcrd: {
+    id: '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw',
+    title: 'ต้นทุนเมนู QC/RD',
+    tabs: { menu: '0', BOM: '419926693', item: '302875824', menucodegroup: '1491689317' },
+    about: 'menu = เมนูขาย ราคา ต้นทุน · BOM = สูตรวัตถุดิบต่อเมนู · item = วัตถุดิบทั้งหมด · menucodegroup = ชื่อหมวดเมนู',
+  },
+  stock: {
+    id: '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ',
+    title: 'สต๊อก / แพลนสั่งของ',
+    tabs: { plan: '571271047' },
+    about: 'plan = ประวัติการสั่งของแต่ละสาขา (วันที่สั่ง สาขา สินค้า จำนวน มูลค่า)',
+  },
+  requisition: {
+    id: '12Wb7tMXfT548XvK1H0Cp6uOysjS8ksmMFzQZ-Rpay2k',
+    title: 'ใบเบิกของสาขา (จัดซื้อ)',
+    tabs: { 'ใบเบิก': null, data: null },
+    about: 'ใบเบิก = log ทุกครั้งที่สาขากดเบิก (ไม่มีหัวคอลัมน์ เรียงตายตัว: เวลา, สาขา, ชื่อสินค้า, จำนวน) · data = ข้อมูลไอเทม (รหัส หน่วย ราคา ซัพพลายเออร์)',
+  },
+  extraOrders: {
+    id: '1gijgBrK56bsjR7-R5NVWiTGTcxM57wjuYR3FUpl3EDQ',
+    title: 'ออเดอร์เพิ่มเติม (สั่งอาหารภายนอก)',
+    tabs: { orders: '255916825', PaymentSummary: null },
+    about: 'orders = รายการออเดอร์ที่สั่งนอกระบบ POS · PaymentSummary = ช่องทางจ่ายต่อออเดอร์',
+  },
+  recipe: {
+    id: '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg',
+    title: 'สูตรเมนู / ยอดใช้วัตถุดิบ',
+    tabs: { RcpDtls: null, UsageHistory: null },
+    about: 'RcpDtls = สูตรเมนูฝั่ง POS (A=รหัสเมนู C=ชื่อเมนู E=รหัสวัตถุดิบ) · UsageHistory = ยอดใช้วัตถุดิบที่ระบบบันทึก (ชีทนี้หยุดอัปเดตแล้ว ยอดใช้ปัจจุบันคำนวณจากยอดขาย × BOM แทน)',
+  },
+};
+
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n') { row.push(field); field = ''; rows.push(row); row = []; }
+    else if (c !== '\r') field += c;
   }
-  costCache = { map, at: Date.now() };
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+// อ่านแท็บจากชีทในทะเบียน + cache 10 นาที (คำถามเดียวมักเรียกหลายเครื่องมือที่ใช้ชีทเดียวกัน)
+const sheetCache = {};
+async function fetchTab(sheetKey, tabName) {
+  const src = SHEETS[sheetKey];
+  if (!src) throw new Error(`ไม่รู้จักชีท "${sheetKey}" — ที่มี: ${Object.keys(SHEETS).join(', ')}`);
+  if (!(tabName in src.tabs)) {
+    throw new Error(`ชีท "${sheetKey}" ไม่มีแท็บ "${tabName}" — ที่มี: ${Object.keys(src.tabs).join(', ')}`);
+  }
+  const key = `${sheetKey}|${tabName}`;
+  const hit = sheetCache[key];
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.rows;
+  const gid = src.tabs[tabName];
+  const url = gid
+    ? `https://docs.google.com/spreadsheets/d/${src.id}/export?format=csv&gid=${gid}`
+    : `https://docs.google.com/spreadsheets/d/${src.id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
+  const r = await fetch(url, { cache: 'no-store', redirect: 'follow' });
+  if (!r.ok) throw new Error(`Google Sheets HTTP ${r.status} (${sheetKey}/${tabName})`);
+  const rows = parseCSV(await r.text());
+  sheetCache[key] = { rows, at: Date.now() };
+  return rows;
+}
+
+// หา index คอลัมน์จากชื่อหัวตาราง (กันชีทสลับตำแหน่งคอลัมน์ในอนาคต)
+const colFinder = headerRow => {
+  const header = (headerRow || []).map(h => txt(h));
+  return name => header.indexOf(name);
+};
+
+// ต้นทุนต่อเมนูจากชีท menu (A=รหัส, E=ต้นทุน) — ใช้คำนวณกำไรใน get_cost_profit
+async function fetchCostMap() {
+  const rows = await fetchTab('qcrd', 'menu');
+  const map = {};
+  rows.slice(1).forEach(r => {
+    const code = txt(r[0]);
+    const cost = snum(r[4]);
+    if (code && cost !== null && !(code in map)) map[code] = cost;
+  });
   return map;
 }
 
@@ -566,6 +941,127 @@ const TOOL_DECLARATIONS = [
       properties: { branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' } },
     },
   },
+  {
+    name: 'get_menu_costs',
+    description: 'รายการเมนูขายทั้งหมดจากชีทต้นทุนเมนู: ราคาขาย ต้นทุนวัตถุดิบต่อจาน ต้นทุน% หมวดเมนู สถานะ — ใช้เมื่อถามถึง "ต้นทุนเมนู" "เมนูไหนกำไรดี" "เมนูที่ยังไม่มีต้นทุน"',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        search: { type: 'STRING', description: 'รหัสเมนู ชื่อเมนู หรือชื่อหมวด (ไม่ระบุ = ทั้งหมด)' },
+        missing_cost_only: { type: 'BOOLEAN', description: 'true = เอาเฉพาะเมนูที่ยังไม่มีต้นทุนในชีท' },
+        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50, สูงสุด 200)' },
+      },
+    },
+  },
+  {
+    name: 'get_menu_recipe',
+    description: 'สูตรวัตถุดิบของเมนู (BOM): ใช้วัตถุดิบอะไรบ้าง อย่างละเท่าไหร่ต่อจาน ต้นทุนแต่ละตัว — ใช้เมื่อถาม "เมนูนี้ใช้อะไรบ้าง" "สูตรเมนู…"',
+    parameters: {
+      type: 'OBJECT',
+      properties: { menu: { type: 'STRING', description: 'รหัสเมนู หรือบางส่วนของชื่อเมนู' } },
+      required: ['menu'],
+    },
+  },
+  {
+    name: 'get_raw_materials',
+    description: 'วัตถุดิบทั้งหมดจากชีท item: รหัส ชื่อ ราคาต้นทุน หน่วย ตัวแปลงหน่วย สาขาที่ใช้ หมวดสโตร์ สถานะ ไอเทมทดแทน — ใช้เมื่อถามถึงราคา/ข้อมูลวัตถุดิบ',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        search: { type: 'STRING', description: 'รหัสหรือบางส่วนของชื่อวัตถุดิบ' },
+        store_category: { type: 'STRING', description: 'หมวดสโตร์ (ตำแหน่งจัดเก็บ) เช่น ของแห้ง' },
+        branch: { type: 'STRING', description: 'เอาเฉพาะวัตถุดิบที่สาขานี้ใช้' },
+        status: { type: 'STRING', description: '"ใช้งาน" หรือ "ปิดการใช้งาน"' },
+        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50, สูงสุด 200)' },
+      },
+    },
+  },
+  {
+    name: 'which_menus_use_item',
+    description: 'ค้นย้อนว่าวัตถุดิบตัวหนึ่งถูกใช้ในเมนูอะไรบ้าง พร้อมปริมาณต่อจาน — ใช้เมื่อถาม "วัตถุดิบนี้ใช้เมนูไหนบ้าง" หรือประเมินผลกระทบเวลาราคาวัตถุดิบขึ้น',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        item: { type: 'STRING', description: 'รหัสหรือบางส่วนของชื่อวัตถุดิบ' },
+        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50, สูงสุด 200)' },
+      },
+      required: ['item'],
+    },
+  },
+  {
+    name: 'get_stock_counts',
+    description: 'ยอดคงเหลือสต๊อกจากการนับครั้งล่าสุดของแต่ละสาขา (รหัส ชื่อ หน่วย หมวดสโตร์ ยอดคงเหลือ วันที่นับ) — ใช้เมื่อถาม "ของเหลือเท่าไหร่" "สาขาไหนของใกล้หมด"',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
+        search: { type: 'STRING', description: 'รหัส/ชื่อวัตถุดิบ หรือหมวดสโตร์' },
+        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50, สูงสุด 150)' },
+      },
+    },
+  },
+  {
+    name: 'get_purchase_plan',
+    description: 'ประวัติการสั่งของ (แพลนสินค้า) ของแต่ละสาขาจากชีท plan: วันที่สั่ง สินค้า จำนวน มูลค่า — ใช้เมื่อถาม "สาขาไหนสั่งของเท่าไหร่" "สั่งอะไรบ่อย" "ยอดสั่งซื้อเดือนนี้"',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
+        start_date: { type: 'STRING', description: 'วันที่สั่งตั้งแต่ YYYY-MM-DD' },
+        end_date: { type: 'STRING', description: 'วันที่สั่งถึง YYYY-MM-DD' },
+        search: { type: 'STRING', description: 'รหัสหรือชื่อสินค้า' },
+        group_by: { type: 'STRING', description: '"branch" หรือ "item" = สรุปรวมแทนรายแถว (แนะนำเมื่อถามภาพรวม)' },
+        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50, สูงสุด 200)' },
+      },
+    },
+  },
+  {
+    name: 'get_branch_requisition',
+    description: 'ใบเบิกของสาขา (จัดซื้อ): สาขาไหนเบิกอะไร เท่าไหร่ เมื่อไหร่ พร้อมมูลค่า — ใช้เมื่อถามถึงการเบิกของ/อุปกรณ์',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
+        month: { type: 'STRING', description: 'เดือน YYYY-MM' },
+        search: { type: 'STRING', description: 'ชื่อสินค้า' },
+        group_by: { type: 'STRING', description: '"branch" หรือ "item" = สรุปรวมแทนรายแถว' },
+        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50, สูงสุด 200)' },
+      },
+    },
+  },
+  {
+    name: 'get_material_usage',
+    description: 'ยอดใช้วัตถุดิบตามที่บันทึกในชีท UsageHistory (ข้อมูลเก่า หยุดอัปเดตแล้ว) — ใช้เฉพาะเมื่อผู้ใช้ถามถึงชีทนี้ตรง ๆ ถ้าอยากได้ยอดใช้ปัจจุบันให้คำนวณจากยอดขาย × สูตร BOM แทน',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        start_date: { type: 'STRING', description: 'YYYY-MM-DD' },
+        end_date: { type: 'STRING', description: 'YYYY-MM-DD' },
+        branch: { type: 'STRING', description: 'รหัสสาขา' },
+        item: { type: 'STRING', description: 'รหัสวัตถุดิบ' },
+        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50, สูงสุด 200)' },
+      },
+    },
+  },
+  {
+    name: 'list_sheets',
+    description: 'สารบัญ Google Sheet ทั้งหมดที่เข้าถึงได้ (ชื่อชีท แท็บ และคำอธิบายว่าแต่ละแท็บเก็บอะไร) — เรียกก่อนใช้ read_sheet เมื่อไม่มีเครื่องมือเฉพาะรองรับคำถาม',
+    parameters: { type: 'OBJECT', properties: {} },
+  },
+  {
+    name: 'read_sheet',
+    description: 'อ่านแท็บใดก็ได้ในชีทที่อนุญาตแบบดิบ (คืนแถวเป็น key-value ตามหัวคอลัมน์) — ใช้เป็นทางเลือกสุดท้ายเมื่อเครื่องมือเฉพาะไม่ครอบคลุมข้อมูลที่ถาม ต้องเรียก list_sheets ก่อนเพื่อดูชื่อ sheet/tab ที่ถูกต้อง',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        sheet: { type: 'STRING', description: 'คีย์ชีทจาก list_sheets เช่น qcrd, stock, requisition, extraOrders, recipe' },
+        tab: { type: 'STRING', description: 'ชื่อแท็บจาก list_sheets เช่น menu, BOM, item, plan, PaymentSummary' },
+        search: { type: 'STRING', description: 'กรองเฉพาะแถวที่มีคำนี้อยู่ในช่องใดช่องหนึ่ง' },
+        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50, สูงสุด 200)' },
+      },
+      required: ['sheet', 'tab'],
+    },
+  },
 ];
 
 export default async function handler(req, res) {
@@ -589,6 +1085,11 @@ export default async function handler(req, res) {
       `ถ้าผู้ใช้ไม่ระบุช่วงวันที่ ให้ตีความอย่างสมเหตุผล (เช่น "เดือนนี้" = วันที่ 1 ของเดือนถึงวันนี้) และบอกช่วงที่ใช้ในคำตอบ ` +
       `สาขาที่มี: ${Object.values(OUTLETS).join(', ')} ` +
       `เมื่อแสดงตัวเลขเงินให้ใส่ comma และหน่วยบาท ถ้าเหมาะสมให้จัดเป็นตาราง markdown\n\n` +
+      `แหล่งข้อมูล: (1) ยอดขายจริงจากฐานข้อมูล POS (2) Google Sheet ของทีม — ต้นทุนเมนู/สูตร BOM/วัตถุดิบ, ` +
+      `สต๊อกคงเหลือ, แพลนสั่งของ, ใบเบิกสาขา, ค่าใช้จ่าย, พนักงาน ` +
+      `ถ้าคำถามเกี่ยวกับข้อมูลในชีทที่ไม่มีเครื่องมือเฉพาะ ให้เรียก list_sheets ดูสารบัญก่อน แล้วใช้ read_sheet อ่านแท็บที่ต้องการ ` +
+      `เครื่องมือที่มี limit ให้ใส่ตัวกรอง (search/branch/ช่วงวันที่) หรือ group_by ก่อนเสมอ อย่าดึงทั้งชีทมาไล่เอง ` +
+      `ถ้าผลลัพธ์มีฟิลด์ truncated ให้บอกผู้ใช้ว่าแสดงไม่ครบและแนะนำให้ถามให้แคบลง\n\n` +
       `การแสดงกราฟ: ถ้าคำตอบเหมาะกับกราฟ (เปรียบเทียบ/จัดอันดับ/แนวโน้มตามเวลา/สัดส่วน) ` +
       `หรือผู้ใช้ขอ "กราฟ/ชาร์ต/รูป/ภาพ" ให้แทรกบล็อกนี้ (JSON ล้วน ห้ามมีคอมเมนต์):\n` +
       '```chart\n{"type":"bar","title":"ชื่อกราฟ","xKey":"label","series":[{"key":"value","name":"ยอดขาย (บาท)"}],"data":[{"label":"XSB","value":1166937}]}\n```\n' +
