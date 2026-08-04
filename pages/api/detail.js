@@ -1,22 +1,16 @@
-export const config = {
-  runtime: 'edge',
-};
+// เดิมเป็น Edge Function — Vercel Edge runtime มี hard timeout ราว ~25 วินาที
+// ซึ่งไม่พอกับข้อมูลรายการระดับไอเทม (มากกว่ายอดบิลหลายเท่า) เวลาดึงทุกสาขา
+// พร้อมกันในช่วงกว้าง ทำให้ได้หน้า error ของแพลตฟอร์ม ("An error occurred...")
+// แทน JSON แล้วฝั่งเว็บ parse ไม่ออก → เปลี่ยนเป็น Node.js serverless function
+// ธรรมดา (เหมือน API อื่นในโปรเจกต์) เพื่อใช้ maxDuration ที่นานกว่า Edge ได้มาก
+export const config = { maxDuration: 60 };
 
-// ปลายทาง API บนโฮสต์ (SQL Server ผ่าน ngrok) — ตั้งทับด้วย env STORE_API_BASE ได้
-const STORE_API_BASE =
-  process.env.STORE_API_BASE || 'https://disparate-hurray-detective.ngrok-free.dev';
+const STORE_API_BASE = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 
-export default async function handler(req) {
-  const { searchParams } = new URL(req.url);
-  const start = searchParams.get('start');
-  const end = searchParams.get('end');
-  const outlet = searchParams.get('outlet'); // ระบุสาขา (ไม่บังคับ) → ดึงเฉพาะสาขานั้น
-
+export default async function handler(req, res) {
+  const { start, end, outlet } = req.query;
   if (!start || !end) {
-    return new Response(JSON.stringify({ error: 'start and end required' }), {
-      status: 400,
-      headers: { 'content-type': 'application/json' },
-    });
+    return res.status(400).json({ error: 'start and end required' });
   }
 
   try {
@@ -24,21 +18,14 @@ export default async function handler(req) {
     if (outlet) url += `&outlet=${encodeURIComponent(outlet)}`;
     const upstream = await fetch(url, {
       cache: 'no-store',
-      signal: AbortSignal.timeout(25000),
-      headers: { 'ngrok-skip-browser-warning': 'true' }, // ข้ามหน้าเตือนของ ngrok free
+      signal: AbortSignal.timeout(55000),
+      headers: { 'ngrok-skip-browser-warning': 'true' },
     });
-
     if (!upstream.ok) throw new Error(`Upstream HTTP ${upstream.status}`);
     const data = await upstream.json();
-    return new Response(JSON.stringify(data), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
+    return res.status(200).json(data);
   } catch (err) {
     console.error('Detail API proxy error:', err.message);
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 502,
-      headers: { 'content-type': 'application/json' },
-    });
+    return res.status(502).json({ error: err.message });
   }
 }

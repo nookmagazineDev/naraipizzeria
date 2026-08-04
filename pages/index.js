@@ -238,6 +238,24 @@ const normalizeArray = json =>
   : Array.isArray(json.result) ? json.result
   : Object.values(json).find(v => Array.isArray(v)) ?? [];
 
+// อ่าน response แบบปลอดภัย: ถ้าเซิร์ฟเวอร์ล้ม/หมดเวลาจะได้หน้า error เป็น HTML/ข้อความดิบ
+// (เช่น "An error occurred..." ของ Vercel) ไม่ใช่ JSON — เดิม res.json() ตรงนี้จะโยน
+// SyntaxError ดิบที่อ่านไม่รู้เรื่อง ("Unexpected token 'A'...") ฟังก์ชันนี้แปลงเป็น
+// ข้อความไทยที่บอกสาเหตุและช่วงวันที่ที่มีปัญหาแทน
+async function safeFetchJson(res, label, chunkLabel) {
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); }
+  catch {
+    const isTimeout = /FUNCTION_INVOCATION_TIMEOUT|An error occurred with your deployment/i.test(text);
+    throw new Error(isTimeout
+      ? `${label}: เซิร์ฟเวอร์ตอบช้าเกินไป (หมดเวลา) ช่วง ${chunkLabel} — ลองกด "ค้นหาข้อมูล" ใหม่อีกครั้ง หรือเลือกช่วงวันที่/สาขาให้แคบลง`
+      : `${label}: ได้รับข้อมูลที่ไม่ใช่ JSON (สถานะ ${res.status}) ช่วง ${chunkLabel}`);
+  }
+  if (!res.ok) throw new Error(json.error || `${label}: HTTP ${res.status} (ช่วง ${chunkLabel})`);
+  return json;
+}
+
 const PAGE_SIZE = 50;
 
 function ExcelFilterDropdown({
@@ -730,11 +748,9 @@ export default function App() {
           fetch(`/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`)
         ]);
 
-        const salesJson = await salesRes.json();
-        const detailJson = await detailRes.json();
-
-        if (!salesRes.ok) throw new Error(salesJson.error || `Sales API: HTTP ${salesRes.status} (ช่วง ${chunk.start} ถึง ${chunk.end})`);
-        if (!detailRes.ok) throw new Error(detailJson.error || `Detail API: HTTP ${detailRes.status} (ช่วง ${chunk.start} ถึง ${chunk.end})`);
+        const chunkLabel = `${chunk.start} ถึง ${chunk.end}`;
+        const salesJson = await safeFetchJson(salesRes, 'Sales API', chunkLabel);
+        const detailJson = await safeFetchJson(detailRes, 'Detail API', chunkLabel);
 
         allSales = allSales.concat(normalizeArray(salesJson));
         allDetails = allDetails.concat(normalizeArray(detailJson));
@@ -1950,8 +1966,7 @@ export default function App() {
     // Fallback: Fetch from API for that specific day
     try {
       const res = await fetch(`/api/detail?start=${date}&end=${date}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      const json = await safeFetchJson(res, 'Detail API', date);
       const list = normalizeArray(json);
       const matched = list.filter(r => String(r.chkCheckID) === String(checkID));
       setModal({ open: true, checkID, rows: matched, loading: false, error: '' });
