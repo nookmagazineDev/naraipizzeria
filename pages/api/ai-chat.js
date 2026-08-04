@@ -4,7 +4,8 @@
 // ฝั่งนี้ก่อนส่งให้ AI (กัน token บวม + AI ไม่มีสิทธิ์ยิง SQL ตรง)
 //
 // ต้องตั้ง env: GEMINI_API_KEY (ขอฟรีที่ https://aistudio.google.com/apikey)
-// เลือกโมเดลผ่าน env GEMINI_MODEL (default: gemini-2.0-flash)
+// เลือกโมเดลผ่าน env GEMINI_MODEL — ถ้าไม่ตั้ง จะใช้ค่า default ในบรรทัด GEMINI_MODEL ด้านล่าง
+// (คำตอบจาก /api/ai-chat มีฟิลด์ model บอกว่ารอบนั้นตอบด้วยโมเดลไหนจริง ๆ)
 
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 // GAS ค่าใช้จ่าย/พนักงาน (ตัวเดียวกับ proxy) — ส่วนชีท Google อยู่ในทะเบียน SHEETS ด้านล่าง
@@ -39,6 +40,18 @@ const r2 = v => Math.round(v * 100) / 100;
 const txt = v => String(v ?? '').trim();
 // ตัวเลขจากชีท: อาจมี comma คั่นหลัก ("1,234.5") ซึ่ง parseFloat ตรง ๆ จะได้ 1 → ต้องตัดออกก่อน
 const snum = v => { const n = parseFloat(txt(v).replace(/,/g, '')); return isNaN(n) ? null : n; };
+
+// เพดานจำนวนแถวที่ส่งให้ AI
+// ทำไมต้องมี: ผลลัพธ์เครื่องมือถูกแนบกลับเข้าบทสนทนาและส่งซ้ำ "ทุกรอบ" ที่โมเดลเรียกเครื่องมือ
+// (สูงสุด 6 รอบ) ก้อนใหญ่จึงกินโควตาแบบทวีคูณ ไม่ใช่แค่ครั้งเดียว — ที่ผ่านมาเจอ 429 บ่อย
+// จนต้องมี MODEL_CHAIN ไว้สำรอง จึงตั้ง default เล็กไว้ก่อน
+// แต่ไม่ได้ล็อกตายอีกต่อไป: ส่ง limit=0 = เอาทั้งหมด (ยังมีเพดานแข็ง MAX_ROWS กันอุบัติเหตุ)
+const MAX_ROWS = 5000;
+const rowCap = (limit, dflt = 50) => {
+  const n = Number(limit);
+  if (n === 0) return MAX_ROWS;
+  return Math.min(n > 0 ? n : dflt, MAX_ROWS);
+};
 
 function assertRange(start, end, maxDays = 62) {
   const d1 = new Date(start), d2 = new Date(end);
@@ -108,7 +121,7 @@ const TOOL_HANDLERS = {
       g[k].amount += num(r.grossPrice);
     });
     const sorted = Object.values(g).sort((a, b) => by === 'qty' ? b.qty - a.qty : b.amount - a.amount);
-    const top = sorted.slice(0, Math.min(limit, 50)).map(x => ({ ...x, qty: r2(x.qty), amount: r2(x.amount) }));
+    const top = sorted.slice(0, rowCap(limit, 20)).map(x => ({ ...x, qty: r2(x.qty), amount: r2(x.amount) }));
     return { items: top, totalItems: sorted.length, note: 'amount = ยอดก่อน VAT, ไม่รวมรายการ void/ไอเทมเตรียมของ' };
   },
 
@@ -174,7 +187,7 @@ const TOOL_HANDLERS = {
       total: r2(num(b.billTotal) - num(b.voucher1)),
       paidType: b.paidType || '',
     })).sort((a, b) => a.time.localeCompare(b.time));
-    const cap = Math.min(limit, 300);
+    const cap = rowCap(limit, 100);
     return {
       totalBills: bills.length,
       sumTotal: r2(bills.reduce((s, b) => s + b.total, 0)),
@@ -405,7 +418,7 @@ const TOOL_HANDLERS = {
     let body = rows.slice(1).filter(r => r.some(x => txt(x)));
     const kw = txt(search).toLowerCase();
     if (kw) body = body.filter(r => r.some(x => txt(x).toLowerCase().includes(kw)));
-    const cap = Math.min(Number(limit) || 50, 200);
+    const cap = rowCap(limit);
     return {
       sheet, tab, headers, totalRows: body.length,
       rows: body.slice(0, cap).map(r => Object.fromEntries(headers.map((h, i) => [h, txt(r[i])]))),
@@ -432,7 +445,7 @@ const TOOL_HANDLERS = {
     const kw = txt(search).toLowerCase();
     if (kw) list = list.filter(m => m.code.toLowerCase() === kw || m.name.toLowerCase().includes(kw) || m.group.toLowerCase().includes(kw));
     if (missing_cost_only) list = list.filter(m => !m.cost);
-    const cap = Math.min(Number(limit) || 50, 200);
+    const cap = rowCap(limit);
     return {
       totalMenus: list.length,
       menus: list.slice(0, cap),
@@ -484,7 +497,7 @@ const TOOL_HANDLERS = {
     if (store_category) list = list.filter(i => i.storeCategory === txt(store_category));
     if (branch) list = list.filter(i => i.usedBranches.some(b => b.toUpperCase() === txt(branch).toUpperCase()));
     if (status) list = list.filter(i => i.status === txt(status));
-    const cap = Math.min(Number(limit) || 50, 200);
+    const cap = rowCap(limit);
     return {
       totalItems: list.length,
       items: list.slice(0, cap),
@@ -504,7 +517,7 @@ const TOOL_HANDLERS = {
       return code === kw || code.replace(/^0+/, '') === kw.replace(/^0+/, '') || txt(r[4]).toLowerCase().includes(kw);
     });
     if (!hit.length) return { found: false, message: `ไม่มีเมนูไหนใช้วัตถุดิบ "${item}" ในชีท BOM` };
-    const cap = Math.min(Number(limit) || 50, 200);
+    const cap = rowCap(limit);
     return {
       found: true,
       matchedItems: [...new Set(hit.map(r => `${txt(r[3])} ${txt(r[4])}`))].slice(0, 10),
@@ -539,7 +552,7 @@ const TOOL_HANDLERS = {
     });
     if (bq) items = items.filter(i => i.branches.length);
     if (kw) items = items.filter(i => i.code.toLowerCase() === kw || i.name.toLowerCase().includes(kw) || i.storeCategory.toLowerCase().includes(kw));
-    const cap = Math.min(Number(limit) || 50, 150);
+    const cap = rowCap(limit);
     return {
       totalItems: items.length,
       items: items.slice(0, cap),
@@ -594,7 +607,7 @@ const TOOL_HANDLERS = {
       return { groupedBy: group_by, rows: out.slice(0, 100), grandTotal, totalRows: list.length };
     }
 
-    const cap = Math.min(Number(limit) || 50, 200);
+    const cap = rowCap(limit);
     return {
       totalRows: list.length, grandTotal,
       rows: list.slice(0, cap),
@@ -642,7 +655,7 @@ const TOOL_HANDLERS = {
       return { groupedBy: group_by, rows: out.slice(0, 100), totalRows: withInfo.length };
     }
 
-    const cap = Math.min(Number(limit) || 50, 200);
+    const cap = rowCap(limit);
     return {
       totalRows: withInfo.length,
       branches: [...new Set(logs.map(x => x.branch))].sort(),
@@ -669,7 +682,7 @@ const TOOL_HANDLERS = {
       const kw = txt(item).toLowerCase().replace(/^0+/, '');
       list = list.filter(x => x.itemCode.toLowerCase().replace(/^0+/, '') === kw);
     }
-    const cap = Math.min(Number(limit) || 50, 200);
+    const cap = rowCap(limit);
     return {
       totalRows: list.length,
       totalQty: r2(list.reduce((s, x) => s + x.qty, 0)),
@@ -811,7 +824,7 @@ const TOOL_DECLARATIONS = [
         start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
         end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD' },
         branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
-        limit: { type: 'NUMBER', description: 'จำนวนอันดับ (default 20, สูงสุด 50)' },
+        limit: { type: 'NUMBER', description: 'จำนวนอันดับ (default 20) — ใส่ 0 = ทุกเมนูที่ขายได้ในช่วงนั้น' },
         by: { type: 'STRING', description: '"amount" เรียงตามยอดเงิน หรือ "qty" เรียงตามจำนวน' },
       },
       required: ['start_date', 'end_date'],
@@ -852,7 +865,7 @@ const TOOL_DECLARATIONS = [
         start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
         end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (ห่างกันไม่เกิน 7 วัน)' },
         branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
-        limit: { type: 'NUMBER', description: 'จำนวนบิลสูงสุดที่แสดง (default 100, สูงสุด 300)' },
+        limit: { type: 'NUMBER', description: 'จำนวนบิลสูงสุดที่แสดง (default 100) — ใส่ 0 = ทุกใบในช่วงนั้น' },
       },
       required: ['start_date', 'end_date'],
     },
@@ -949,7 +962,7 @@ const TOOL_DECLARATIONS = [
       properties: {
         search: { type: 'STRING', description: 'รหัสเมนู ชื่อเมนู หรือชื่อหมวด (ไม่ระบุ = ทั้งหมด)' },
         missing_cost_only: { type: 'BOOLEAN', description: 'true = เอาเฉพาะเมนูที่ยังไม่มีต้นทุนในชีท' },
-        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50, สูงสุด 200)' },
+        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
     },
   },
@@ -972,7 +985,7 @@ const TOOL_DECLARATIONS = [
         store_category: { type: 'STRING', description: 'หมวดสโตร์ (ตำแหน่งจัดเก็บ) เช่น ของแห้ง' },
         branch: { type: 'STRING', description: 'เอาเฉพาะวัตถุดิบที่สาขานี้ใช้' },
         status: { type: 'STRING', description: '"ใช้งาน" หรือ "ปิดการใช้งาน"' },
-        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50, สูงสุด 200)' },
+        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
     },
   },
@@ -983,7 +996,7 @@ const TOOL_DECLARATIONS = [
       type: 'OBJECT',
       properties: {
         item: { type: 'STRING', description: 'รหัสหรือบางส่วนของชื่อวัตถุดิบ' },
-        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50, สูงสุด 200)' },
+        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
       required: ['item'],
     },
@@ -996,7 +1009,7 @@ const TOOL_DECLARATIONS = [
       properties: {
         branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
         search: { type: 'STRING', description: 'รหัส/ชื่อวัตถุดิบ หรือหมวดสโตร์' },
-        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50, สูงสุด 150)' },
+        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
     },
   },
@@ -1011,7 +1024,7 @@ const TOOL_DECLARATIONS = [
         end_date: { type: 'STRING', description: 'วันที่สั่งถึง YYYY-MM-DD' },
         search: { type: 'STRING', description: 'รหัสหรือชื่อสินค้า' },
         group_by: { type: 'STRING', description: '"branch" หรือ "item" = สรุปรวมแทนรายแถว (แนะนำเมื่อถามภาพรวม)' },
-        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50, สูงสุด 200)' },
+        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
     },
   },
@@ -1025,7 +1038,7 @@ const TOOL_DECLARATIONS = [
         month: { type: 'STRING', description: 'เดือน YYYY-MM' },
         search: { type: 'STRING', description: 'ชื่อสินค้า' },
         group_by: { type: 'STRING', description: '"branch" หรือ "item" = สรุปรวมแทนรายแถว' },
-        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50, สูงสุด 200)' },
+        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
     },
   },
@@ -1039,7 +1052,7 @@ const TOOL_DECLARATIONS = [
         end_date: { type: 'STRING', description: 'YYYY-MM-DD' },
         branch: { type: 'STRING', description: 'รหัสสาขา' },
         item: { type: 'STRING', description: 'รหัสวัตถุดิบ' },
-        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50, สูงสุด 200)' },
+        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
     },
   },
@@ -1057,7 +1070,7 @@ const TOOL_DECLARATIONS = [
         sheet: { type: 'STRING', description: 'คีย์ชีทจาก list_sheets เช่น qcrd, stock, requisition, extraOrders, recipe' },
         tab: { type: 'STRING', description: 'ชื่อแท็บจาก list_sheets เช่น menu, BOM, item, plan, PaymentSummary' },
         search: { type: 'STRING', description: 'กรองเฉพาะแถวที่มีคำนี้อยู่ในช่องใดช่องหนึ่ง' },
-        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50, สูงสุด 200)' },
+        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
       required: ['sheet', 'tab'],
     },
@@ -1088,8 +1101,10 @@ export default async function handler(req, res) {
       `แหล่งข้อมูล: (1) ยอดขายจริงจากฐานข้อมูล POS (2) Google Sheet ของทีม — ต้นทุนเมนู/สูตร BOM/วัตถุดิบ, ` +
       `สต๊อกคงเหลือ, แพลนสั่งของ, ใบเบิกสาขา, ค่าใช้จ่าย, พนักงาน ` +
       `ถ้าคำถามเกี่ยวกับข้อมูลในชีทที่ไม่มีเครื่องมือเฉพาะ ให้เรียก list_sheets ดูสารบัญก่อน แล้วใช้ read_sheet อ่านแท็บที่ต้องการ ` +
-      `เครื่องมือที่มี limit ให้ใส่ตัวกรอง (search/branch/ช่วงวันที่) หรือ group_by ก่อนเสมอ อย่าดึงทั้งชีทมาไล่เอง ` +
-      `ถ้าผลลัพธ์มีฟิลด์ truncated ให้บอกผู้ใช้ว่าแสดงไม่ครบและแนะนำให้ถามให้แคบลง\n\n` +
+      `ปกติให้ใส่ตัวกรอง (search/branch/ช่วงวันที่) หรือ group_by ก่อน จะได้คำตอบเร็วและตรงกว่า ` +
+      `แต่ถ้าผู้ใช้ขอ "ทั้งหมด/ทุกรายการ/ครบทุกตัว" หรือคำถามต้องใช้ข้อมูลทั้งชุดจริง ๆ ` +
+      `(เช่น หาผิดปกติทั้งชีท, รวมยอดทุกแถว) ให้ส่ง limit=0 เพื่อดึงทั้งหมด อย่าตอบว่าดึงไม่ได้ ` +
+      `ถ้าผลลัพธ์ยังมีฟิลด์ truncated แปลว่าชนเพดาน 5000 แถว ให้บอกผู้ใช้ตามตรงแล้วแนะนำให้แบ่งช่วงถาม\n\n` +
       `การแสดงกราฟ: ถ้าคำตอบเหมาะกับกราฟ (เปรียบเทียบ/จัดอันดับ/แนวโน้มตามเวลา/สัดส่วน) ` +
       `หรือผู้ใช้ขอ "กราฟ/ชาร์ต/รูป/ภาพ" ให้แทรกบล็อกนี้ (JSON ล้วน ห้ามมีคอมเมนต์):\n` +
       '```chart\n{"type":"bar","title":"ชื่อกราฟ","xKey":"label","series":[{"key":"value","name":"ยอดขาย (บาท)"}],"data":[{"label":"XSB","value":1166937}]}\n```\n' +
