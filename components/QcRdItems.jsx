@@ -182,9 +182,11 @@ export default function QcRdItems() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {toast && (
-              <span className={`inline-flex items-center gap-1 text-xs font-semibold ${toast.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {toast.ok ? <CheckCircle size={13} /> : <AlertCircle size={13} />}{toast.msg}
+            {/* สำเร็จ = ข้อความสั้น โชว์ตรงหัวได้ / ล้มเหลว = ไปโชว์ในแถบเตือนเต็มความกว้างด้านล่าง
+                เพราะข้อความบอกสาเหตุจาก GAS ยาวเกินกว่าจะอ่านรู้เรื่องในบรรทัดเดียว */}
+            {toast?.ok && (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
+                <CheckCircle size={13} />{toast.msg}
               </span>
             )}
             <button onClick={openNew}
@@ -228,9 +230,10 @@ export default function QcRdItems() {
           </select>
         </div>
 
-        {error && (
-          <div className="m-4 p-3 bg-rose-50 border border-rose-100 rounded-xl text-sm text-rose-700 flex items-center gap-2">
-            <AlertCircle size={16} /><span>{error}</span>
+        {(error || (toast && !toast.ok)) && (
+          <div className="m-4 p-3 bg-rose-50 border border-rose-100 rounded-xl text-sm text-rose-700 flex items-start gap-2">
+            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+            <span className="break-words">{error || toast.msg}</span>
           </div>
         )}
 
