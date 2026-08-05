@@ -64,15 +64,18 @@ const PAID_DATE_COL = 'PostTime';
 
 แล้วแก้ `PAID_TABLE` / `PAID_DATE_COL` ให้ตรง
 
-## ZKBio Time 9 (เครื่องสแกนนิ้ว)
+## ZKBio Time 9 (เครื่องสแกนหน้า/นิ้ว)
 
 server.js ต่อฐานข้อมูลของ ZKBio Time ได้อีกตัว (แยกจาก `NaraiPos`) เพื่อให้
-AI NARAI ตอบคำถามเวลาสแกนเข้า-ออกงานได้ ตั้งค่าใน `db.env.ps1`:
+AI NARAI ตอบคำถามเวลาสแกนเข้า-ออกงานได้
+
+ค่า default ตรงกับเครื่องที่ร้านแล้ว (instance `localhost\SQLEXPRESS`, database `ZKBio9`)
+**ปกติจึงไม่ต้องตั้ง env อะไรเพิ่ม** — ตั้งใน `db.env.ps1` เฉพาะเมื่อค่าต่างจากนี้:
 
 ```powershell
 $env:ZK_DB_SERVER   = 'localhost\SQLEXPRESS'   # instance ที่ ZKBio ใช้
-$env:ZK_DB_NAME     = 'biotime'                # ชื่อ DB จริง ดูจากตอนติดตั้ง ZKBio
-#$env:ZK_DB_USER     = 'SA'                    # ไม่ตั้ง = ใช้ DB_USER/DB_PASSWORD เดิม
+$env:ZK_DB_NAME     = 'ZKBio9'                 # ชื่อ DB ของ ZKBio Time
+#$env:ZK_DB_USER     = 'administrator'         # ไม่ตั้ง = ใช้ DB_USER/DB_PASSWORD เดิม
 #$env:ZK_DB_PASSWORD = '...'
 ```
 
