@@ -164,8 +164,16 @@ function getDataSheet_() {
   return sh;
 }
 
+// ตัวคูณหน่วยไฟฟ้ารายสาขา — มิเตอร์บางสาขาอ่านค่าไม่เท่าหน่วยไฟจริง ต้องคูณแปลงก่อน (สาขาอื่น ×1)
+// ต้องแก้ให้ตรงกันใน components/OtherExpense.jsx (ELECTRIC_UNIT_MULTIPLIERS) ด้วยทุกครั้ง
+var ELECTRIC_UNIT_MULTIPLIERS = { XUM: 40, ZPT: 1000, ZBW: 2.5, RCH: 1000, IPR: 45 };
+function unitMultiplier_(type, branch) {
+  if (String(type || '').trim().indexOf('ไฟ') !== 0) return 1;
+  return ELECTRIC_UNIT_MULTIPLIERS[String(branch || '').trim().toUpperCase()] || 1;
+}
+
 // สร้าง 1 แถวข้อมูล: คงช่องว่างไว้ถ้าไม่มีค่า (ไม่บังคับเป็น 0)
-// จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) ; ผลรวม = ค่า total ที่ส่งมา หรือ จำนวน×ราคา
+// จำนวน = (สิ้นสุด − เริ่มต้น) × ตัวคูณหน่วยของสาขา ; ผลรวม = ค่า total ที่ส่งมา หรือ จำนวน×ราคา
 function buildRow_(month, branch, it) {
   var hasS = it.start !== '' && it.start != null;
   var hasE = it.end !== '' && it.end != null;
@@ -173,7 +181,7 @@ function buildRow_(month, branch, it) {
   var start = hasS ? Number(it.start) : '';
   var end = hasE ? Number(it.end) : '';
   var price = hasP ? Number(it.price) : '';
-  var qty = (hasS && hasE) ? (Number(it.end) - Number(it.start)) : '';
+  var qty = (hasS && hasE) ? (Number(it.end) - Number(it.start)) * unitMultiplier_(it.type, branch) : '';
   var total;
   if (it.total !== '' && it.total != null) {
     total = Number(it.total);                       // นำเข้ายอดเงินรวมโดยตรง

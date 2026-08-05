@@ -17,6 +17,14 @@ import { apiCall } from '../lib/expenseApi';
 
 const EXPENSE_TYPES = ['ค่าเช่าพื้นที่', 'ไฟฟ้า', 'น้ำประปา', 'แก๊ส', 'tel'];
 
+// ตัวคูณหน่วยไฟฟ้ารายสาขา — มิเตอร์บางสาขาอ่านค่าไม่เท่าหน่วยไฟจริง ต้องคูณแปลงก่อน (สาขาอื่น ×1)
+// ต้องแก้ให้ตรงกันใน expense-apps-script.gs (ELECTRIC_UNIT_MULTIPLIERS) ด้วยทุกครั้ง
+const ELECTRIC_UNIT_MULTIPLIERS = { XUM: 40, ZPT: 1000, ZBW: 2.5, RCH: 1000, IPR: 45 };
+const unitMultiplier = (type, branch) =>
+  String(type || '').trim().startsWith('ไฟ')
+    ? (ELECTRIC_UNIT_MULTIPLIERS[String(branch || '').trim().toUpperCase()] || 1)
+    : 1;
+
 // รายชื่อสาขาสำรอง (ใช้ตอนยังต่อ GAS ไม่ได้) — เฟสจริงดึงจากชีท "ข้อมูลค่าใช้อื่น" คอลัมน์ B
 const FALLBACK_BRANCHES = [
   'SJP', 'CRM', 'XCM', 'SLR', 'SUM', 'XUM', 'SCS', 'SMP', 'XSB', 'XHH',
@@ -186,13 +194,14 @@ export default function OtherExpense() {
     const end = parseFloat(r.end) || 0;
     const price = parseFloat(r.price) || 0;
     // ยังไม่กรอกเลขสิ้นสุด (เช่น แถวที่เพิ่งยกยอดเลขเริ่มต้นมา) = ยังไม่รู้จำนวนที่ใช้ → 0 ไม่ใช่ค่าติดลบ
-    const qty = r.end === '' ? 0 : end - start;
+    const mult = unitMultiplier(fr.type, branch);
+    const qty = r.end === '' ? 0 : (end - start) * mult;
     const hasInput = r.start !== '' || r.end !== '' || r.price !== '';
     let total = qty * price;
     // แถวที่บันทึกแบบยอดเงินอย่างเดียว (import ย้อนหลัง ไม่มีเลขมิเตอร์) — โชว์ยอดที่บันทึกไว้
     if (!hasInput && saved && saved.total !== '' && saved.total != null) total = parseFloat(saved.total) || 0;
-    return { ...fr, raw: r, saved, qty, total, hasInput, carried: !saved && !!carried[fr.rowKey] };
-  }), [formRows, rows, savedMap, carried]);
+    return { ...fr, raw: r, saved, qty, total, hasInput, mult, carried: !saved && !!carried[fr.rowKey] };
+  }), [formRows, rows, savedMap, carried, branch]);
 
   const grandTotal = computed.reduce((s, r) => s + (r.total || 0), 0);
   const canSave = branch && month && computed.some(r => r.hasInput) && !saving;
@@ -424,7 +433,15 @@ export default function OtherExpense() {
                       <input type="number" inputMode="decimal" value={r.raw.end} onChange={e => setCell(r.rowKey, 'end', e.target.value)} placeholder="0"
                         className="w-28 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-slate-700">{fmt(r.qty)}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-slate-700 whitespace-nowrap">
+                      {r.mult !== 1 && (
+                        <span title={`สาขานี้หน่วยมิเตอร์ไฟฟ้าคูณ ${r.mult} — จำนวน = (สิ้นสุด−เริ่มต้น)×${r.mult}`}
+                          className="mr-1.5 px-1.5 py-0.5 bg-violet-50 text-violet-600 border border-violet-200 rounded-full text-[9px] font-bold font-sans align-middle">
+                          ×{r.mult}
+                        </span>
+                      )}
+                      {fmt(r.qty)}
+                    </td>
                     <td className="px-2 py-2">
                       <input type="number" inputMode="decimal" value={r.raw.price} onChange={e => setCell(r.rowKey, 'price', e.target.value)} placeholder="0"
                         className="w-24 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
