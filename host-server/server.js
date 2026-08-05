@@ -60,14 +60,14 @@ let poolPromise = sql.connect(dbConfig)
   .catch(err => { console.error('❌ ต่อ SQL Server ไม่ได้:', err.message); throw err; });
 
 // ── ZKBio Time 9 (เครื่องสแกนนิ้ว) — ฐานข้อมูลแยกอีกตัว มักอยู่บน named instance SQLEXPRESS ──
-//    ตั้งค่าผ่าน env:  ZK_DB_SERVER (default localhost\SQLEXPRESS), ZK_DB_NAME (default biotime),
+//    ตั้งค่าผ่าน env:  ZK_DB_SERVER (default localhost\SQLEXPRESS), ZK_DB_NAME (default ZKBio9),
 //    ZK_DB_USER / ZK_DB_PASSWORD (ถ้าไม่ตั้ง ใช้ user/รหัสเดียวกับ NaraiPos)
 //    named instance ต้องเปิด service "SQL Server Browser" บนเครื่องด้วย ไม่งั้นหา instance ไม่เจอ
 const ZK_SERVER_RAW = process.env.ZK_DB_SERVER || 'localhost\\SQLEXPRESS';
 const [zkHost, zkInstance] = ZK_SERVER_RAW.split('\\');
 const zkConfig = {
   server: zkHost,
-  database: process.env.ZK_DB_NAME || 'biotime',
+  database: process.env.ZK_DB_NAME || 'ZKBio9',
   user: process.env.ZK_DB_USER || process.env.DB_USER || 'SA',
   password: process.env.ZK_DB_PASSWORD || process.env.DB_PASSWORD || '',
   options: {
