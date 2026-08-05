@@ -64,6 +64,29 @@ const PAID_DATE_COL = 'PostTime';
 
 แล้วแก้ `PAID_TABLE` / `PAID_DATE_COL` ให้ตรง
 
+## ZKBio Time 9 (เครื่องสแกนนิ้ว)
+
+server.js ต่อฐานข้อมูลของ ZKBio Time ได้อีกตัว (แยกจาก `NaraiPos`) เพื่อให้
+AI NARAI ตอบคำถามเวลาสแกนเข้า-ออกงานได้ ตั้งค่าใน `db.env.ps1`:
+
+```powershell
+$env:ZK_DB_SERVER   = 'localhost\SQLEXPRESS'   # instance ที่ ZKBio ใช้
+$env:ZK_DB_NAME     = 'biotime'                # ชื่อ DB จริง ดูจากตอนติดตั้ง ZKBio
+#$env:ZK_DB_USER     = 'SA'                    # ไม่ตั้ง = ใช้ DB_USER/DB_PASSWORD เดิม
+#$env:ZK_DB_PASSWORD = '...'
+```
+
+ข้อควรรู้:
+
+- **named instance (`localhost\SQLEXPRESS`) ต้องเปิด service "SQL Server Browser"**
+  บนเครื่อง ไม่งั้น node หา instance ไม่เจอ (เปิดใน SQL Server Configuration Manager)
+- การต่อ ZKBio เป็นแบบ lazy — ถ้ายังไม่ตั้งค่าหรือต่อไม่ได้ endpoint `/zk/*` จะคืน error
+  แต่ API ยอดขายหลักทำงานปกติ
+- เช็กว่าต่อได้: เปิด `http://localhost:14365/zk/ping`
+- ถ้าชื่อตารางไม่ตรงกับ default (`iclock_transaction`, `personnel_employee`,
+  `personnel_department`) ให้ดูชื่อจริงจาก `/zk/tables` แล้วตั้ง env
+  `ZK_TRANS_TABLE` / `ZK_EMP_TABLE` / `ZK_DEPT_TABLE`
+
 ## endpoint ทั้งหมด
 
 | Method | Path | คำอธิบาย |
@@ -74,6 +97,10 @@ const PAID_DATE_COL = 'PostTime';
 | GET | `/columns?table=ชื่อ` | คอลัมน์ของตาราง (default Ctrans) |
 | GET | `/sample?table=ชื่อ` | ตัวอย่าง 1 แถว |
 | GET | `/ping` | health check |
+| GET | `/zk/transactions?start=…&end=…&emp=…` | log สแกนนิ้ว (ZKBio: iclock_transaction) |
+| GET | `/zk/employees` | พนักงานในเครื่องสแกน + แผนก |
+| GET | `/zk/ping` | เช็กการเชื่อมต่อฐาน ZKBio |
+| GET | `/zk/tables` `/zk/columns?table=…` `/zk/sample?table=…` | debug schema ฝั่ง ZKBio |
 
 ทุก endpoint คืน `{ data: [...] }` (ยกเว้น debug) โดยชื่อคอลัมน์แปลงเป็นตัวพิมพ์เล็กตัวแรก
 ให้ตรงกับที่ frontend ใช้

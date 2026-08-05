@@ -7,6 +7,10 @@
 //  endpoint ที่ Dashboard ใช้:
 //    GET /ctranbetweendate?start=YYYY-MM-DD&end=YYYY-MM-DD   → รายการสินค้า (dbo.Ctrans)
 //    GET /cpaidbetweendate?start=YYYY-MM-DD&end=YYYY-MM-DD   → รายบิล/การชำระ (ตารางบิล)
+//  endpoint ZKBio Time 9 (เครื่องสแกนนิ้ว — ฐานข้อมูลแยกบน SQLEXPRESS):
+//    GET /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD[&emp=รหัส] → log สแกนนิ้ว
+//    GET /zk/employees           → รายชื่อพนักงานในเครื่องสแกน + แผนก
+//    GET /zk/ping /zk/tables /zk/columns /zk/sample → debug ฐาน ZKBio
 //  endpoint ช่วย debug:
 //    GET /tables                 → รายชื่อตารางทั้งหมด
 //    GET /columns?table=ชื่อ      → คอลัมน์ของตาราง (default = Ctrans)
@@ -54,6 +58,49 @@ const dbConfig = {
 let poolPromise = sql.connect(dbConfig)
   .then(pool => { console.log('✅ ต่อ SQL Server สำเร็จ'); return pool; })
   .catch(err => { console.error('❌ ต่อ SQL Server ไม่ได้:', err.message); throw err; });
+
+// ── ZKBio Time 9 (เครื่องสแกนนิ้ว) — ฐานข้อมูลแยกอีกตัว มักอยู่บน named instance SQLEXPRESS ──
+//    ตั้งค่าผ่าน env:  ZK_DB_SERVER (default localhost\SQLEXPRESS), ZK_DB_NAME (default biotime),
+//    ZK_DB_USER / ZK_DB_PASSWORD (ถ้าไม่ตั้ง ใช้ user/รหัสเดียวกับ NaraiPos)
+//    named instance ต้องเปิด service "SQL Server Browser" บนเครื่องด้วย ไม่งั้นหา instance ไม่เจอ
+const ZK_SERVER_RAW = process.env.ZK_DB_SERVER || 'localhost\\SQLEXPRESS';
+const [zkHost, zkInstance] = ZK_SERVER_RAW.split('\\');
+const zkConfig = {
+  server: zkHost,
+  database: process.env.ZK_DB_NAME || 'biotime',
+  user: process.env.ZK_DB_USER || process.env.DB_USER || 'SA',
+  password: process.env.ZK_DB_PASSWORD || process.env.DB_PASSWORD || '',
+  options: {
+    encrypt: false,
+    trustServerCertificate: true,
+    enableArithAbort: true,
+    useUTC: true,
+    // มี instance name → ให้ SQL Browser หา port เอง (ห้ามตั้ง port ซ้ำ)
+    ...(zkInstance ? { instanceName: zkInstance } : {}),
+  },
+  pool: { max: 3, min: 0, idleTimeoutMillis: 30000 },
+};
+if (!zkInstance) zkConfig.port = Number(process.env.ZK_DB_PORT) || 1433;
+
+// ชื่อตารางของ ZKBio Time 9 (แก้ผ่าน env ได้ถ้ารุ่นที่ติดตั้งใช้ชื่อไม่ตรง — เช็กด้วย /zk/tables)
+const ZK_TRANS_TABLE = (process.env.ZK_TRANS_TABLE || 'iclock_transaction').replace(/[^A-Za-z0-9_]/g, '');
+const ZK_EMP_TABLE   = (process.env.ZK_EMP_TABLE   || 'personnel_employee').replace(/[^A-Za-z0-9_]/g, '');
+const ZK_DEPT_TABLE  = (process.env.ZK_DEPT_TABLE  || 'personnel_department').replace(/[^A-Za-z0-9_]/g, '');
+
+// ต่อ ZKBio แบบ lazy: ต่อครั้งแรกเมื่อมีคนเรียก /zk/* — ต่อไม่ได้ก็ไม่กระทบ API ยอดขายหลัก
+let zkPoolPromise = null;
+function getZkPool() {
+  if (!zkPoolPromise) {
+    zkPoolPromise = new sql.ConnectionPool(zkConfig).connect()
+      .then(pool => { console.log(`✅ ต่อ ZKBio DB สำเร็จ (${ZK_SERVER_RAW}/${zkConfig.database})`); return pool; })
+      .catch(err => {
+        zkPoolPromise = null; // ให้ request ถัดไปลองต่อใหม่ได้
+        console.error('❌ ต่อ ZKBio DB ไม่ได้:', err.message);
+        throw new Error(`ต่อฐานข้อมูล ZKBio (${ZK_SERVER_RAW}/${zkConfig.database}) ไม่ได้: ${err.message}`);
+      });
+  }
+  return zkPoolPromise;
+}
 
 // ── helpers ──────────────────────────────────────────────────
 // แปลงชื่อคอลัมน์ตัวพิมพ์ใหญ่ตัวแรก → ตัวเล็ก (PostTime → postTime) ให้ตรงกับ frontend
@@ -229,6 +276,108 @@ app.get('/sample', async (req, res) => {
   const table = (req.query.table || 'Ctrans').replace(/[^A-Za-z0-9_]/g, '');
   try {
     const pool = await poolPromise;
+    const result = await pool.request().query(`SELECT TOP 1 * FROM dbo.${table}`);
+    res.json((result.recordset[0] && mapRow(result.recordset[0])) || {});
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ════════════════ ZKBio Time 9 (เครื่องสแกนนิ้ว) ════════════════
+
+// ── /zk/ping : เช็กว่าต่อฐาน ZKBio ได้ไหม ──
+app.get('/zk/ping', async (req, res) => {
+  try {
+    const pool = await getZkPool();
+    await pool.request().query('SELECT 1 AS ok');
+    res.json({ ok: true, server: ZK_SERVER_RAW, database: zkConfig.database });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD&emp=รหัส : log สแกนนิ้วดิบ ──
+app.get('/zk/transactions', async (req, res) => {
+  const { start, end, emp } = req.query;
+  if (!start || !end) return res.status(400).json({ error: 'ต้องมี start และ end' });
+  try {
+    const pool = await getZkPool();
+    const dbReq = pool.request()
+      .input('start', sql.VarChar, start + ' 00:00:00')
+      .input('end',   sql.VarChar, end   + ' 23:59:59');
+    let empFilter = '';
+    if (emp != null && String(emp).trim() !== '') {
+      dbReq.input('emp', sql.VarChar, String(emp).trim());
+      empFilter = ' AND emp_code = @emp';
+    }
+    const result = await dbReq.query(`
+      SELECT TOP 20000
+        emp_code, punch_time, punch_state, verify_type,
+        terminal_sn, terminal_alias, area_alias
+      FROM dbo.${ZK_TRANS_TABLE}
+      WHERE punch_time >= @start AND punch_time <= @end${empFilter}
+      ORDER BY punch_time
+    `);
+    res.json({ data: result.recordset.map(mapRow) });
+  } catch (e) {
+    console.error('zk transactions error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── /zk/employees : รายชื่อพนักงานในเครื่องสแกน + แผนก ──
+app.get('/zk/employees', async (req, res) => {
+  try {
+    const pool = await getZkPool();
+    const result = await pool.request().query(`
+      SELECT
+        e.emp_code, e.first_name, e.last_name, e.hire_date,
+        d.dept_code, d.dept_name
+      FROM dbo.${ZK_EMP_TABLE} e
+      LEFT JOIN dbo.${ZK_DEPT_TABLE} d ON d.id = e.department_id
+      ORDER BY e.emp_code
+    `);
+    res.json({ data: result.recordset.map(mapRow) });
+  } catch (e) {
+    console.error('zk employees error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── /zk/tables /zk/columns /zk/sample : ช่วย debug หา schema จริงของ ZKBio ──
+app.get('/zk/tables', async (req, res) => {
+  try {
+    const pool = await getZkPool();
+    const result = await pool.request().query(
+      "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES " +
+      "WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"
+    );
+    res.json(result.recordset);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/zk/columns', async (req, res) => {
+  const table = (req.query.table || ZK_TRANS_TABLE).replace(/[^A-Za-z0-9_]/g, '');
+  try {
+    const pool = await getZkPool();
+    const result = await pool.request()
+      .input('t', sql.VarChar, table)
+      .query(
+        "SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS " +
+        "WHERE TABLE_NAME = @t ORDER BY ORDINAL_POSITION"
+      );
+    res.json(result.recordset);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/zk/sample', async (req, res) => {
+  const table = (req.query.table || ZK_TRANS_TABLE).replace(/[^A-Za-z0-9_]/g, '');
+  try {
+    const pool = await getZkPool();
     const result = await pool.request().query(`SELECT TOP 1 * FROM dbo.${table}`);
     res.json((result.recordset[0] && mapRow(result.recordset[0])) || {});
   } catch (e) {
