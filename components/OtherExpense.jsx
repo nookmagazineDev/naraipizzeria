@@ -7,6 +7,8 @@ import { apiCall } from '../lib/expenseApi';
  * NARAI OFFICE — ค่าใช้จ่ายอื่นๆ
  * เลือกสาขา + เดือน แล้วกรอกค่าใช้จ่ายแต่ละประเภท (เลขเริ่มต้น/สิ้นสุด + ราคา/หน่วย)
  * จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) · ผลรวม = จำนวน × ราคา/หน่วย
+ * แถวที่เดือนนี้ยังไม่มีข้อมูล จะยกยอดเลขสิ้นสุดของเดือนก่อน (สาขา/ประเภท/มิเตอร์เดียวกัน)
+ * มาเป็นเลขเริ่มต้นให้อัตโนมัติ พร้อมป้าย "ยกยอดจากเดือนก่อน"
  *
  * ข้อมูลผ่าน Google Apps Script (ผูกกับชีท 1YXOaA…) → proxy /api/expense-gas:
  *  - getExpenseRefs  : อ่านชีท "ข้อมูลค่าใช้อื่น" (A=ประเภท, B=สาขา, C=รหัส)
@@ -31,6 +33,14 @@ function thisMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+// เดือนก่อนหน้าในรูปแบบ YYYY-MM (เช่น 2026-01 → 2025-12)
+function prevMonthOf(m) {
+  const [y, mo] = String(m || '').split('-').map(Number);
+  if (!y || !mo) return '';
+  const d = new Date(y, mo - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 const refKey = (type, branch) => `${String(type).trim()}||${String(branch).trim()}`;
 
 const EMPTY = { start: '', end: '', price: '' };
@@ -40,6 +50,8 @@ export default function OtherExpense() {
   const [branch, setBranch] = useState('');
   // rows คีย์ด้วย rowKey (type||code) เพราะประเภทเดียวอาจมีหลายรหัส (หลายมิเตอร์)
   const [rows, setRows] = useState({});
+  // แถวที่เลขเริ่มต้นถูกยกยอดมาจากเลขสิ้นสุดของเดือนก่อนอัตโนมัติ (โชว์ป้ายบอกผู้ใช้)
+  const [carried, setCarried] = useState({});
 
   // refs จากชีท: branches + codesMap (type||branch -> [รหัส...] เก็บครบทุกมิเตอร์ ไม่ทับกัน)
   const [refs, setRefs] = useState({ branches: FALLBACK_BRANCHES, codesMap: {}, loaded: false, error: '' });
@@ -67,8 +79,11 @@ export default function OtherExpense() {
   }, []);
 
   const rowKeyOf = (type, code) => `${type}||${code}`;
-  const setCell = (rowKey, field, value) =>
+  const setCell = (rowKey, field, value) => {
     setRows(prev => ({ ...prev, [rowKey]: { ...(prev[rowKey] || EMPTY), [field]: value } }));
+    // ผู้ใช้แก้เลขเริ่มต้นเอง = ไม่ใช่ค่ายกยอดจากเดือนก่อนแล้ว เอาป้ายออก
+    if (field === 'start') setCarried(prev => (prev[rowKey] ? { ...prev, [rowKey]: false } : prev));
+  };
 
   // แตกแถวฟอร์มตามรหัส: ประเภทที่มีหลายรหัสจะได้หลายแถว (มิเตอร์ละแถว), ประเภทที่ไม่มีรหัสได้ 1 แถวว่าง
   const formRows = useMemo(() => {
@@ -123,16 +138,28 @@ export default function OtherExpense() {
     return m;
   }, [history.rows, month, branch]);
 
+  // ข้อมูลที่บันทึกแล้วของเดือนก่อนหน้า (สาขาเดียวกัน) — ใช้ยกยอดเลขสิ้นสุด → เลขเริ่มต้นเดือนนี้
+  const prevSavedMap = useMemo(() => {
+    const m = {};
+    const pm = prevMonthOf(month);
+    if (branch && pm) history.rows.forEach(r => {
+      if (r.month === pm && r.branch === branch) m[rowKeyOf(r.type, String(r.code || '').trim())] = r;
+    });
+    return m;
+  }, [history.rows, month, branch]);
+
   // เวลาที่แก้ไขล่าสุดของเดือน+สาขาที่เลือก
   const lastSavedAt = useMemo(() => {
     const times = Object.values(savedMap).map(r => r.savedAt).filter(Boolean).sort();
     return times.length ? times[times.length - 1] : '';
   }, [savedMap]);
 
-  // เลือกเดือน/สาขา → เติมตัวเลขที่เคยบันทึกลงฟอร์มให้แก้ไขต่อได้ (ไม่มีข้อมูล = ฟอร์มว่าง)
+  // เลือกเดือน/สาขา → เติมตัวเลขที่เคยบันทึกลงฟอร์มให้แก้ไขต่อได้
+  // แถวที่เดือนนี้ยังไม่มีข้อมูล → ยกยอด: เลขเริ่มต้น = เลขสิ้นสุดของเดือนก่อน (ถ้ามี)
   useEffect(() => {
-    if (!branch) { setRows({}); return; }
+    if (!branch) { setRows({}); setCarried({}); return; }
     const next = {};
+    const carry = {};
     Object.entries(savedMap).forEach(([key, r]) => {
       next[key] = {
         start: r.start !== '' && r.start != null ? String(r.start) : '',
@@ -140,7 +167,14 @@ export default function OtherExpense() {
         price: r.price !== '' && r.price != null ? String(r.price) : '',
       };
     });
+    Object.entries(prevSavedMap).forEach(([key, r]) => {
+      if (next[key]) return; // เดือนนี้มีข้อมูลบันทึกแล้ว ไม่ทับ
+      if (r.end === '' || r.end == null) return; // เดือนก่อนไม่มีเลขสิ้นสุด ก็ไม่มีอะไรให้ยก
+      next[key] = { ...EMPTY, start: String(r.end) };
+      carry[key] = true;
+    });
     setRows(next);
+    setCarried(carry);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branch, month, history.rows]);
 
@@ -151,13 +185,14 @@ export default function OtherExpense() {
     const start = parseFloat(r.start) || 0;
     const end = parseFloat(r.end) || 0;
     const price = parseFloat(r.price) || 0;
-    const qty = end - start;
+    // ยังไม่กรอกเลขสิ้นสุด (เช่น แถวที่เพิ่งยกยอดเลขเริ่มต้นมา) = ยังไม่รู้จำนวนที่ใช้ → 0 ไม่ใช่ค่าติดลบ
+    const qty = r.end === '' ? 0 : end - start;
     const hasInput = r.start !== '' || r.end !== '' || r.price !== '';
     let total = qty * price;
     // แถวที่บันทึกแบบยอดเงินอย่างเดียว (import ย้อนหลัง ไม่มีเลขมิเตอร์) — โชว์ยอดที่บันทึกไว้
     if (!hasInput && saved && saved.total !== '' && saved.total != null) total = parseFloat(saved.total) || 0;
-    return { ...fr, raw: r, saved, qty, total, hasInput };
-  }), [formRows, rows, savedMap]);
+    return { ...fr, raw: r, saved, qty, total, hasInput, carried: !saved && !!carried[fr.rowKey] };
+  }), [formRows, rows, savedMap, carried]);
 
   const grandTotal = computed.reduce((s, r) => s + (r.total || 0), 0);
   const canSave = branch && month && computed.some(r => r.hasInput) && !saving;
@@ -371,6 +406,12 @@ export default function OtherExpense() {
                         <span title={r.saved.savedAt ? `แก้ไขล่าสุด ${r.saved.savedAt}` : ''}
                           className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full text-[9px] font-bold align-middle">
                           <CheckCircle size={8} /> บันทึกแล้ว
+                        </span>
+                      )}
+                      {r.carried && (
+                        <span title="เลขเริ่มต้นดึงมาจากเลขสิ้นสุดของเดือนก่อนอัตโนมัติ"
+                          className="ml-1.5 inline-flex items-center px-1.5 py-0.5 bg-sky-50 text-sky-600 border border-sky-200 rounded-full text-[9px] font-bold align-middle">
+                          ยกยอดจากเดือนก่อน
                         </span>
                       )}
                     </td>
