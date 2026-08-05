@@ -1,4 +1,5 @@
 // AI NARAI — แชท AI (Gemini) ที่ดึงข้อมูลจริงจาก SQL Server ผ่าน host API
+// แหล่งข้อมูล: NaraiPos (ยอดขาย POS), ZKBio Time บน SQLEXPRESS (สแกนนิ้ว — endpoint /zk/*), Google Sheet
 // สถาปัตยกรรม: หน้าเว็บ → /api/ai-chat → Gemini (function calling) ⇄ เครื่องมือ read-only
 // เครื่องมือทุกตัวเรียก host API (Cloudflare tunnel → server.js → SQL Server) แล้ว aggregate
 // ฝั่งนี้ก่อนส่งให้ AI (กัน token บวม + AI ไม่มีสิทธิ์ยิง SQL ตรง)
@@ -81,6 +82,15 @@ async function fetchDetails(start, end, branch) {
   if (!r.ok) throw new Error(`host API HTTP ${r.status}`);
   const j = await r.json();
   return (Array.isArray(j) ? j : j.data || []);
+}
+
+// เรียก endpoint /zk/* (ฐานข้อมูล ZKBio Time — เครื่องสแกนนิ้ว) ผ่าน host API ตัวเดียวกัน
+// ต่อไม่ได้/ยังไม่ตั้งค่า → โยน error พร้อมข้อความจริงจาก host ให้ AI บอกผู้ใช้ตรง ๆ
+async function fetchZk(path) {
+  const r = await fetch(`${STORE_API}${path}`);
+  const j = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(j?.error || `host API HTTP ${r.status} (${path})`);
+  return Array.isArray(j) ? j : j?.data || [];
 }
 
 // ── เครื่องมือที่เปิดให้ AI เรียก (read-only ทั้งหมด) ──
@@ -393,6 +403,68 @@ const TOOL_HANDLERS = {
       active: emps.filter(e => e.status !== 'ลาออก').length,
       resigned: emps.filter(e => e.status === 'ลาออก').length,
       byBranch: Object.values(byBranch).sort((a, b) => b.active - a.active),
+    };
+  },
+
+  // ── ข้อมูลจากเครื่องสแกนนิ้ว ZKBio Time 9 (ผ่าน host API → SQLEXPRESS) ──
+
+  // เวลาเข้า-ออกงานจากการสแกนนิ้ว: สแกนแรก/สแกนสุดท้ายของแต่ละคนต่อวัน
+  async get_attendance({ start_date, end_date, employee, limit = 100 }) {
+    assertRange(start_date, end_date, 31);
+    const [punches, emps] = await Promise.all([
+      fetchZk(`/zk/transactions?start=${start_date}&end=${end_date}`),
+      fetchZk('/zk/employees').catch(() => []), // ดึงชื่อไม่ได้ก็ยังตอบด้วยรหัสพนักงานได้
+    ]);
+    const nameOf = {};
+    emps.forEach(e => { nameOf[txt(e.emp_code)] = `${txt(e.first_name)} ${txt(e.last_name)}`.trim(); });
+    let rows = punches;
+    if (employee) {
+      const kw = txt(employee).toLowerCase();
+      rows = rows.filter(p => {
+        const code = txt(p.emp_code);
+        return code.toLowerCase() === kw || (nameOf[code] || '').toLowerCase().includes(kw);
+      });
+      if (!rows.length) return { found: false, message: `ไม่พบการสแกนของ "${employee}" ในช่วง ${start_date} ถึง ${end_date}` };
+    }
+    const g = {};
+    rows.forEach(p => {
+      const code = txt(p.emp_code);
+      const t = txt(p.punch_time);
+      const date = t.slice(0, 10), hm = t.slice(11, 16);
+      const k = `${code}|${date}`;
+      if (!g[k]) g[k] = { empCode: code, name: nameOf[code] || '', date, firstIn: hm, lastOut: hm, punches: 0, terminal: txt(p.terminal_alias || p.area_alias) };
+      if (hm < g[k].firstIn) g[k].firstIn = hm;
+      if (hm > g[k].lastOut) g[k].lastOut = hm;
+      g[k].punches++;
+    });
+    const out = Object.values(g).sort((a, b) => a.date.localeCompare(b.date) || a.empCode.localeCompare(b.empCode));
+    const cap = rowCap(limit, 100);
+    return {
+      totalPunches: rows.length,
+      totalRows: out.length,
+      rows: out.slice(0, cap),
+      truncated: out.length > cap ? `แสดง ${cap} จาก ${out.length} แถว — ระบุ employee หรือช่วงวันที่แคบลง` : undefined,
+      note: 'firstIn/lastOut = เวลาสแกนแรก/สุดท้ายของวันจากเครื่องสแกนนิ้ว ZKBio Time · สแกนครั้งเดียว = firstIn เท่ากับ lastOut (อาจลืมสแกนออก)',
+    };
+  },
+
+  // รายชื่อพนักงานที่ลงทะเบียนในเครื่องสแกนนิ้ว + แผนก
+  async get_zk_employees({ search, limit = 50 }) {
+    const emps = await fetchZk('/zk/employees');
+    let list = emps.map(e => ({
+      empCode: txt(e.emp_code),
+      name: `${txt(e.first_name)} ${txt(e.last_name)}`.trim(),
+      department: txt(e.dept_name),
+      hireDate: txt(e.hire_date).slice(0, 10),
+    }));
+    const kw = txt(search).toLowerCase();
+    if (kw) list = list.filter(e => e.empCode.toLowerCase() === kw || e.name.toLowerCase().includes(kw) || e.department.toLowerCase().includes(kw));
+    const cap = rowCap(limit);
+    return {
+      totalEmployees: list.length,
+      employees: list.slice(0, cap),
+      truncated: list.length > cap ? `แสดง ${cap} จาก ${list.length} คน — ใส่ search เพื่อกรอง` : undefined,
+      note: 'รายชื่อจากฐานข้อมูลเครื่องสแกนนิ้ว ZKBio Time (คนละชุดกับทะเบียนพนักงานในชีท HR)',
     };
   },
 
@@ -1057,6 +1129,31 @@ const TOOL_DECLARATIONS = [
     },
   },
   {
+    name: 'get_attendance',
+    description: 'เวลาเข้า-ออกงานจากเครื่องสแกนนิ้ว (ZKBio Time): เวลาสแกนแรก/สุดท้ายของแต่ละคนต่อวัน จำนวนครั้งที่สแกน — ใช้เมื่อถาม "ใครมากี่โมง" "ใครมาสาย" "วันนี้ใครสแกนเข้างานบ้าง"',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
+        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (สูงสุด 31 วัน)' },
+        employee: { type: 'STRING', description: 'รหัสพนักงานหรือบางส่วนของชื่อ (ไม่ระบุ = ทุกคน)' },
+        limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 100) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
+      },
+      required: ['start_date', 'end_date'],
+    },
+  },
+  {
+    name: 'get_zk_employees',
+    description: 'รายชื่อพนักงานที่ลงทะเบียนในเครื่องสแกนนิ้ว ZKBio Time (รหัส ชื่อ แผนก วันเริ่มงาน) — ใช้หารหัส/ชื่อก่อนเจาะ get_attendance รายคน',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        search: { type: 'STRING', description: 'รหัส ชื่อ หรือแผนก' },
+        limit: { type: 'NUMBER', description: 'จำนวนสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด' },
+      },
+    },
+  },
+  {
     name: 'list_sheets',
     description: 'สารบัญ Google Sheet ทั้งหมดที่เข้าถึงได้ (ชื่อชีท แท็บ และคำอธิบายว่าแต่ละแท็บเก็บอะไร) — เรียกก่อนใช้ read_sheet เมื่อไม่มีเครื่องมือเฉพาะรองรับคำถาม',
     parameters: { type: 'OBJECT', properties: {} },
@@ -1100,6 +1197,8 @@ export default async function handler(req, res) {
       `เมื่อแสดงตัวเลขเงินให้ใส่ comma และหน่วยบาท ถ้าเหมาะสมให้จัดเป็นตาราง markdown\n\n` +
       `แหล่งข้อมูล: (1) ยอดขายจริงจากฐานข้อมูล POS (2) Google Sheet ของทีม — ต้นทุนเมนู/สูตร BOM/วัตถุดิบ, ` +
       `สต๊อกคงเหลือ, แพลนสั่งของ, ใบเบิกสาขา, ค่าใช้จ่าย, พนักงาน ` +
+      `(3) เครื่องสแกนนิ้ว ZKBio Time — เวลาสแกนเข้า-ออกงาน (get_attendance, get_zk_employees) ` +
+      `ถ้าเครื่องมือสแกนนิ้วตอบ error แปลว่าฝั่งเซิร์ฟเวอร์ร้านยังไม่ได้ตั้งค่าเชื่อม ZKBio ให้บอกผู้ใช้ตามข้อความ error ` +
       `ถ้าคำถามเกี่ยวกับข้อมูลในชีทที่ไม่มีเครื่องมือเฉพาะ ให้เรียก list_sheets ดูสารบัญก่อน แล้วใช้ read_sheet อ่านแท็บที่ต้องการ ` +
       `ปกติให้ใส่ตัวกรอง (search/branch/ช่วงวันที่) หรือ group_by ก่อน จะได้คำตอบเร็วและตรงกว่า ` +
       `แต่ถ้าผู้ใช้ขอ "ทั้งหมด/ทุกรายการ/ครบทุกตัว" หรือคำถามต้องใช้ข้อมูลทั้งชุดจริง ๆ ` +
