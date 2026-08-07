@@ -66,6 +66,7 @@ export default function Attendance() {
   const [preset, setPreset] = useState('today');     // '' = กำหนดวันที่เอง
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState('');   // แยกสาเหตุ เพื่อขึ้นวิธีแก้ให้ตรงจุด
   const [warning, setWarning] = useState('');        // เตือนตอนข้อมูลถูกตัดเพราะช่วงกว้างเกิน
   const [rows, setRows] = useState(null);            // null = ยังไม่เคยดึง
   const [loadedInfo, setLoadedInfo] = useState('');
@@ -82,13 +83,16 @@ export default function Attendance() {
     if (s > e) { setError('วันที่เริ่มต้นต้องไม่เกินวันที่สิ้นสุด'); return; }
     setLoading(true);
     setError('');
+    setErrorCode('');
     try {
       const params = new URLSearchParams({ start: s, end: e });
       if (b) params.set('branch', b);
       const res = await fetch(`/api/attendance?${params.toString()}`);
       const json = await res.json().catch(() => null);
       if (!res.ok || !json || json.status !== 'success') {
-        throw new Error((json && json.message) || `ดึงข้อมูลไม่สำเร็จ (${res.status})`);
+        const e = new Error((json && json.message) || `ดึงข้อมูลไม่สำเร็จ (${res.status})`);
+        e.code = json && json.code;
+        throw e;
       }
       setRows(json.data || []);
       setWarning(json.truncated ? (json.message || 'ข้อมูลถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
@@ -98,6 +102,7 @@ export default function Attendance() {
       setRows(null);
       setWarning('');
       setError(err.message || 'ดึงข้อมูลไม่สำเร็จ');
+      setErrorCode(err.code || '');
     } finally {
       setLoading(false);
     }
@@ -254,9 +259,18 @@ export default function Attendance() {
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
           <div>
             <div>{error}</div>
-            <div className="text-xs text-rose-500 mt-1">
-              ถ้าขึ้นว่าต่อฐานข้อมูล ZKBio ไม่ได้ ให้ตรวจว่าเซิร์ฟเวอร์ที่ร้านเปิด SQL Server (SQLEXPRESS) และตั้งค่า ZK_DB_* ไว้แล้ว
-            </div>
+            {/* คำใบ้ต้องตรงกับสาเหตุจริง — 404 (ยังไม่มี endpoint) คนละเรื่องกับต่อฐานข้อมูลไม่ได้ */}
+            {errorCode === 'ZK_ENDPOINT_MISSING' ? (
+              <div className="text-xs text-rose-500 mt-1">
+                วิธีแก้: ที่เครื่องเซิร์ฟเวอร์ของร้าน ให้เอา <span className="font-mono">host-server/server.js</span> ตัวล่าสุดจาก repo
+                ไปทับของเดิม แล้ว restart ด้วย <span className="font-mono">node server.js</span> (หรือรัน start-narai.ps1)
+                — เช็กว่าอัปเดตสำเร็จได้ที่ <span className="font-mono">/zk/ping</span> ของ host API
+              </div>
+            ) : (
+              <div className="text-xs text-rose-500 mt-1">
+                ถ้าขึ้นว่าต่อฐานข้อมูล ZKBio ไม่ได้ ให้ตรวจว่าเซิร์ฟเวอร์ที่ร้านเปิด SQL Server (SQLEXPRESS) และตั้งค่า ZK_DB_* ไว้แล้ว
+              </div>
+            )}
           </div>
         </div>
       )}

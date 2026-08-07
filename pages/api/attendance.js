@@ -29,7 +29,19 @@ function normalizeTime(v) {
 async function fetchZk(path) {
   const r = await fetch(`${STORE_API}${path}`, { headers: { 'ngrok-skip-browser-warning': 'true' } });
   const j = await r.json().catch(() => null);
-  if (!r.ok) throw new Error(j?.error || `host API HTTP ${r.status} (${path})`);
+  if (!r.ok) {
+    // 404 = host ตอบได้ แต่ไม่รู้จัก route /zk/* → server.js ที่เครื่องร้านเป็นรุ่นก่อน 5 ส.ค. 2026
+    // (คนละเรื่องกับ "ต่อฐานข้อมูล ZKBio ไม่ได้" ซึ่ง host จะตอบ 500 พร้อมสาเหตุจริง)
+    if (r.status === 404) {
+      const err = new Error(
+        `เซิร์ฟเวอร์ที่ร้านยังไม่มี endpoint ${path.split('?')[0]} — ` +
+        'ไฟล์ host-server/server.js ที่รันอยู่เป็นรุ่นเก่า ต้องอัปเดตไฟล์แล้ว restart (node server.js) ที่เครื่องร้าน'
+      );
+      err.code = 'ZK_ENDPOINT_MISSING';
+      throw err;
+    }
+    throw new Error(j?.error || `host API HTTP ${r.status} (${path})`);
+  }
   return Array.isArray(j) ? j : j?.data || [];
 }
 
@@ -99,6 +111,11 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error('attendance API error:', err.message);
-    return res.status(502).json({ status: 'error', message: err.message || 'ดึงข้อมูลการสแกนไม่สำเร็จ' });
+    // ส่ง code กลับไปด้วย เพื่อให้หน้าเว็บขึ้นวิธีแก้ให้ตรงกับสาเหตุ (ไม่ใช่คำใบ้กลางๆ ทุกกรณี)
+    return res.status(502).json({
+      status: 'error',
+      code: err.code || 'ZK_ERROR',
+      message: err.message || 'ดึงข้อมูลการสแกนไม่สำเร็จ',
+    });
   }
 }
