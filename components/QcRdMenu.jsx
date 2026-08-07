@@ -12,6 +12,8 @@ import { apiCall } from '../lib/qcrdApi';
 const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v)) ? '—'
   : Number(v).toLocaleString('th-TH', { minimumFractionDigits: d, maximumFractionDigits: d });
 
+const roundQty = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
+
 const PAGE_SIZE = 50;
 const NEW_GROUP = '__new__'; // ค่าใน dropdown หมวดหมู่ = สร้างหมวดใหม่
 // หน่วยของ "ปริมาณที่ได้" ที่ใช้บ่อย (พิมพ์หน่วยอื่นเองได้)
@@ -116,19 +118,55 @@ export default function QcRdMenu() {
   const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000 });
 
   // ───── ดึงวัตถุดิบจากเมนูอื่นเข้ามาในสูตรที่กำลังแก้ (ทำเมนูเซ็ต/เมนูรวม) ─────
-  const importFromMenu = (src) => {
-    const rows = (bom[src.code]?.items || []).map(r => ({
-      itemCode: r.itemCode, itemName: r.itemName, qty: r.qty ?? '', converter: r.converter ?? 1000,
-      srcCode: src.code, srcName: src.name,
-    }));
-    if (!rows.length) { setFormMsg({ ok: false, msg: `"${src.name}" ยังไม่มีสูตรให้ดึง` }); return; }
-    setEditMenu(m => {
-      const base = m.items.filter(r => r.itemCode);              // ทิ้งแถวว่างที่ยังไม่ได้เลือกวัตถุดิบ
-      const sources = m.sources.some(s => s.code === src.code) ? m.sources : [...m.sources, { code: src.code, name: src.name }];
-      return { ...m, items: [...base, ...rows], sources };
+  // factor = สัดส่วนของสูตรต้นทาง (1 = ทั้งสูตร, 0.2 = 20% ของสูตร, 2 = 2 เท่า)
+  // เก็บยอดใช้เดิมไว้ที่ srcBase ของแต่ละแถว เพื่อคำนวณใหม่ได้เมื่อแก้สัดส่วนทีหลัง
+  const importFromMenu = (src, factorInput = 1) => {
+    const factor = parseFloat(factorInput);
+    if (!(factor > 0)) { setFormMsg({ ok: false, msg: 'สัดส่วนต้องมากกว่า 0' }); return; }
+    const srcRows = bom[src.code]?.items || [];
+    if (!srcRows.length) { setFormMsg({ ok: false, msg: `"${src.name}" ยังไม่มีสูตรให้ดึง` }); return; }
+
+    // ดึงเมนูเดิมซ้ำ = แก้สัดส่วนของชุดที่ดึงไว้แล้ว (ไม่ซ้อนเข้ามาอีกชุด)
+    const already = editMenu?.sources.find(s => s.code === src.code);
+    if (already) {
+      if (already.locked) {
+        setFormMsg({ ok: false, msg: `"${src.name}" ถูกรวมรายการซ้ำไปแล้ว ถ้าจะปรับสัดส่วนให้ลบชุดนี้ออกก่อนแล้วดึงใหม่` });
+        return;
+      }
+      setSourceFactor(src.code, String(factor));
+      setFormMsg({ ok: true, msg: `ปรับสัดส่วนของ "${src.name}" เป็น ×${factor} แล้ว` });
+      return;
+    }
+
+    const rows = srcRows.map(r => {
+      const base = parseFloat(r.qty) || 0;
+      return {
+        itemCode: r.itemCode, itemName: r.itemName, qty: roundQty(base * factor),
+        converter: r.converter ?? 1000, srcCode: src.code, srcName: src.name, srcBase: base,
+      };
     });
-    setFormMsg({ ok: true, msg: `ดึงวัตถุดิบจาก "${src.name}" มา ${rows.length} รายการ` });
+    setEditMenu(m => ({
+      ...m,
+      items: [...m.items.filter(r => r.itemCode), ...rows],   // ทิ้งแถวว่างที่ยังไม่ได้เลือกวัตถุดิบ
+      sources: [...m.sources, { code: src.code, name: src.name, factor: String(factor) }],
+    }));
+    setFormMsg({
+      ok: true,
+      msg: `ดึงวัตถุดิบจาก "${src.name}" มา ${rows.length} รายการ${factor !== 1 ? ` (×${factor} = ${Math.round(factor * 100)}% ของสูตร)` : ''}`,
+    });
   };
+
+  // แก้สัดส่วนของเมนูที่ดึงมา → คิดยอดใช้ใหม่จากสูตรเดิม (srcBase × สัดส่วน)
+  const setSourceFactor = (code, value) => setEditMenu(m => {
+    const f = parseFloat(value);
+    return {
+      ...m,
+      sources: m.sources.map(s => s.code === code ? { ...s, factor: value } : s),
+      items: f > 0
+        ? m.items.map(r => (r.srcCode === code && r.srcBase !== undefined) ? { ...r, qty: roundQty(r.srcBase * f) } : r)
+        : m.items,   // ระหว่างพิมพ์ (ว่าง/0/"0.") ยังไม่ต้องคิดใหม่ รอให้ใส่ค่าที่ใช้ได้ก่อน
+    };
+  });
 
   // ถอดวัตถุดิบที่ดึงมาจากเมนูนั้นออกทั้งชุด
   const removeSource = (code) => setEditMenu(m => {
@@ -157,13 +195,16 @@ export default function QcRdMenu() {
         if (!r.itemCode) { out.push(r); return; }
         if (pos[r.itemCode] === undefined) { pos[r.itemCode] = out.length; out.push({ ...r }); return; }
         const t = out[pos[r.itemCode]];
-        t.qty = Math.round(((parseFloat(t.qty) || 0) + (parseFloat(r.qty) || 0)) * 10000) / 10000;
+        t.qty = roundQty((parseFloat(t.qty) || 0) + (parseFloat(r.qty) || 0));
         const names = [...new Set([t.srcName, r.srcName].filter(Boolean))];
         if (names.length) t.srcName = names.join(' + ');
       });
-      return { ...m, items: out };
+      // ยอดใช้ถูกยุบรวมแล้ว ย้อนไปคิดจากสัดส่วนของแต่ละเมนูไม่ได้อีก — ตัดสายจากต้นทางทั้งหมด
+      // (ป้ายบอกที่มายังอยู่ ถ้าจะแก้สัดส่วนให้ลบชุดนั้นออกแล้วดึงใหม่)
+      out.forEach(r => { delete r.srcCode; delete r.srcBase; });
+      return { ...m, items: out, sources: m.sources.map(s => ({ ...s, locked: true })) };
     });
-    setFormMsg({ ok: true, msg: `รวมวัตถุดิบซ้ำ ${dupCount} รายการเข้าด้วยกันแล้ว` });
+    setFormMsg({ ok: true, msg: `รวมวัตถุดิบซ้ำ ${dupCount} รายการเข้าด้วยกันแล้ว (ปรับสัดส่วนต่อไม่ได้แล้ว)` });
   };
 
   const priceMap = useMemo(() => {
@@ -539,12 +580,27 @@ export default function QcRdMenu() {
                 </div>
                 <MenuPicker menus={menus} bom={bom} excludeCode={editMenu.code.trim()} onPick={importFromMenu} />
                 {editMenu.sources.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-1.5 items-center">
+                    <span className="text-[11px] font-bold text-slate-500">เมนูที่ดึงมา:</span>
                     {editMenu.sources.map(s => (
-                      <span key={s.code} className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-sky-200 text-sky-700 rounded-full text-[11px] font-medium">
+                      <span key={s.code}
+                        title={s.locked
+                          ? 'รวมรายการซ้ำไปแล้ว ปรับสัดส่วนต่อไม่ได้ — ถ้าจะแก้ให้ลบชุดนี้ออกแล้วดึงใหม่'
+                          : 'แก้สัดส่วนแล้วยอดใช้ของวัตถุดิบชุดนี้จะคิดใหม่จากสูตรเดิมทันที'}
+                        className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 bg-white border border-sky-200 text-sky-700 rounded-full text-[11px] font-medium">
                         {s.name}
-                        <button onClick={() => removeSource(s.code)} title="เอาวัตถุดิบชุดนี้ออก"
-                          className="text-sky-300 hover:text-rose-500"><X size={11} /></button>
+                        <span className="text-slate-400">×</span>
+                        {s.locked ? (
+                          <span className="font-mono text-slate-500 pr-1">{s.factor} <span className="text-slate-400 font-sans">(รวมแล้ว)</span></span>
+                        ) : (
+                          <>
+                            <input type="number" min="0" step="any" value={s.factor}
+                              onChange={e => setSourceFactor(s.code, e.target.value)}
+                              className="w-12 px-1 py-0.5 border border-sky-200 rounded text-[11px] font-mono text-right bg-sky-50/60 focus:outline-none focus:ring-1 focus:ring-sky-400" />
+                            <button onClick={() => removeSource(s.code)} title="เอาวัตถุดิบชุดนี้ออก"
+                              className="text-sky-300 hover:text-rose-500"><X size={11} /></button>
+                          </>
+                        )}
                       </span>
                     ))}
                   </div>
@@ -648,8 +704,10 @@ function IngredientRow({ row, items, onChange, onRemove }) {
                 <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded-full text-[10px] font-bold align-middle">ปิดใช้งาน</span>
               )}
               {row.srcName && (
-                <span className="ml-1.5 inline-block px-1.5 py-0.5 bg-sky-50 text-sky-600 border border-sky-100 rounded-full text-[10px] font-medium align-middle">
+                <span title={row.srcBase !== undefined ? `สูตรเดิมใช้ ${row.srcBase}` : 'ยอดรวมจากหลายเมนู'}
+                  className="ml-1.5 inline-block px-1.5 py-0.5 bg-sky-50 text-sky-600 border border-sky-100 rounded-full text-[10px] font-medium align-middle">
                   จาก {row.srcName}
+                  {row.srcBase > 0 && parseFloat(row.qty) !== row.srcBase && ` (สูตรเดิม ${row.srcBase})`}
                 </span>
               )}
             </span>
@@ -686,9 +744,11 @@ function IngredientRow({ row, items, onChange, onRemove }) {
 }
 
 // ค้นหาเมนูที่มีสูตรอยู่แล้ว เพื่อดึงวัตถุดิบทั้งชุดเข้ามาในสูตรที่กำลังแก้
+// factor = ดึงมากี่ส่วนของสูตรนั้น (1 = ทั้งสูตร, 0.2 = 20%)
 function MenuPicker({ menus, bom, excludeCode, onPick }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  const [factor, setFactor] = useState('1');
 
   const suggestions = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -699,26 +759,40 @@ function MenuPicker({ menus, bom, excludeCode, onPick }) {
       .slice(0, 15);
   }, [menus, bom, query, excludeCode]);
 
+  const f = parseFloat(factor);
+  const pct = f > 0 ? Math.round(f * 100) : 0;
+
   return (
-    <div className="relative">
-      <div className="relative">
-        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input value={query} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
-          onChange={e => { setQuery(e.target.value); setOpen(true); }}
-          placeholder="พิมพ์ค้นหาเมนูที่ต้องการดึงสูตร (รหัส/ชื่อ/หมวดหมู่)…"
-          className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500" />
-      </div>
-      {open && suggestions.length > 0 && (
-        <div className="absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-auto">
-          {suggestions.map(m => (
-            <button key={m.code} onMouseDown={() => { onPick(m); setQuery(''); setOpen(false); }}
-              className="block w-full text-left px-3 py-2 text-sm hover:bg-sky-50">
-              <span className="font-mono text-xs text-slate-400 mr-1.5">{m.code}</span>{m.name}
-              <span className="float-right text-xs text-slate-400">{bom[m.code].items.length} วัตถุดิบ</span>
-            </button>
-          ))}
+    <div>
+      <div className="flex items-start gap-2">
+        <div className="relative flex-1 min-w-0">
+          <Search size={15} className="absolute left-3 top-[18px] -translate-y-1/2 text-slate-400" />
+          <input value={query} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+            onChange={e => { setQuery(e.target.value); setOpen(true); }}
+            placeholder="พิมพ์ค้นหาเมนูที่ต้องการดึงสูตร (รหัส/ชื่อ/หมวดหมู่)…"
+            className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500" />
+          {open && suggestions.length > 0 && (
+            <div className="absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-auto">
+              {suggestions.map(m => (
+                <button key={m.code} onMouseDown={() => { onPick(m, factor); setQuery(''); setOpen(false); }}
+                  className="block w-full text-left px-3 py-2 text-sm hover:bg-sky-50">
+                  <span className="font-mono text-xs text-slate-400 mr-1.5">{m.code}</span>{m.name}
+                  <span className="float-right text-xs text-slate-400">{bom[m.code].items.length} วัตถุดิบ</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+        <div className="flex-shrink-0">
+          <input type="number" min="0" step="any" value={factor} onChange={e => setFactor(e.target.value)}
+            title="ดึงมากี่ส่วนของสูตรนั้น: 1 = ทั้งสูตร, 0.2 = 20% ของสูตร, 2 = 2 เท่า"
+            className="w-20 px-2 py-2 border border-slate-200 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-sky-500" />
+        </div>
+      </div>
+      <p className="text-[11px] text-slate-500 mt-1">
+        ช่องขวา = สัดส่วนของสูตรที่จะดึงมา · 1 = ทั้งสูตร · 0.2 = 20% ของสูตร · 2 = 2 เท่า
+        {f > 0 && f !== 1 && <span className="text-sky-600 font-semibold"> (ตอนนี้ {pct}% ของสูตร)</span>}
+      </p>
     </div>
   );
 }
