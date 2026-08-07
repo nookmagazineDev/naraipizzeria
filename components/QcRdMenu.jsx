@@ -12,6 +12,10 @@ import { apiCall } from '../lib/qcrdApi';
 const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v)) ? '—'
   : Number(v).toLocaleString('th-TH', { minimumFractionDigits: d, maximumFractionDigits: d });
 
+// ปริมาณ: โชว์ทศนิยมเท่าที่มีจริง (5.2 → "5.2", 5 → "5") ไม่ปัดทิ้งเหมือน fmt(v, 0)
+const fmtQty = (v) => (v === null || v === undefined || v === '' || isNaN(v)) ? '—'
+  : Number(v).toLocaleString('th-TH', { maximumFractionDigits: 4 });
+
 const roundQty = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
 
 const PAGE_SIZE = 50;
@@ -427,7 +431,7 @@ export default function QcRdMenu() {
                 <p className="text-xs text-slate-500 mt-0.5">
                   {viewMenu.groupName ? `${viewMenu.groupName} · ` : ''}ราคาขาย {fmt(viewMenu.price, 0)} บาท · ต้นทุนรวม {fmt(viewMenu.cost)} บาท
                   {viewMenu.yieldQty > 0 && (
-                    <span> · ได้ {fmt(viewMenu.yieldQty, 0)} {viewMenu.yieldUnit || 'หน่วย'}
+                    <span> · ได้ {fmtQty(viewMenu.yieldQty)} {viewMenu.yieldUnit || 'หน่วย'}
                       {viewMenu.cost > 0 && ` (ต้นทุน ${fmt(viewMenu.cost / viewMenu.yieldQty)} บาท/${viewMenu.yieldUnit || 'หน่วย'})`}
                     </span>
                   )}
@@ -643,7 +647,7 @@ export default function QcRdMenu() {
                 {perYield > 0 && (
                   <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-indigo-100">
                     <span className="text-slate-600">
-                      ต้นทุนต่อ 1 {editMenu.yieldUnit.trim() || 'หน่วย'} (จาก {fmt(perYield, 0)} {editMenu.yieldUnit.trim() || 'หน่วย'}ต่อสูตร)
+                      ต้นทุนต่อ 1 {editMenu.yieldUnit.trim() || 'หน่วย'} (จาก {fmtQty(perYield)} {editMenu.yieldUnit.trim() || 'หน่วย'}ต่อสูตร)
                       {parseFloat(editMenu.price) > 0 && (
                         <span className="text-slate-400"> · ราคาขาย {fmt(editMenu.price, 0)} บาท</span>
                       )}
