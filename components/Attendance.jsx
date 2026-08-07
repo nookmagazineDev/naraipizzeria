@@ -259,11 +259,13 @@ export default function Attendance() {
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
           <div>
             <div>{error}</div>
-            {/* ข้อความจาก API บอกอยู่แล้วว่าลอง upstream ตัวไหนไปบ้างและพลาดเพราะอะไร */}
+            {/* คำใบ้ให้ตรงกับสาเหตุ: ยังไม่ตั้ง env กับต่อ DB ไม่ได้ แก้คนละจุดกัน */}
             <div className="text-xs text-rose-500 mt-1">
-              {errorCode === 'ZK_UPSTREAM_FAILED'
-                ? 'ตรวจว่าเครื่องออฟฟิศ (203.154.185.48:14322) เปิดอยู่ และ ZKBio Time ยังส่งข้อมูลเข้าฐานตามปกติ'
-                : 'ถ้าขึ้นว่าต่อฐานข้อมูล ZKBio ไม่ได้ ให้ตรวจว่าเครื่องที่รัน ZKBio เปิด SQL Server และตั้งค่า ZK_DB_* ไว้แล้ว'}
+              {errorCode === 'ZK_NOT_CONFIGURED'
+                ? 'ตั้ง environment variable ZK_DB_USER และ ZK_DB_PASSWORD บน Vercel แล้ว redeploy หนึ่งครั้ง'
+                : errorCode === 'ZK_CONNECT_FAILED'
+                  ? 'ตรวจว่าเครื่องที่รัน SQL Server ของ ZKBio เปิดอยู่ และเปิดพอร์ตให้เข้าถึงจากภายนอกได้'
+                  : 'ลองใหม่อีกครั้ง หรือแคบช่วงวันที่ลง'}
             </div>
           </div>
         </div>
