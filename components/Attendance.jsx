@@ -26,42 +26,95 @@ const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const num2 = (v) => (v != null ? v.toFixed(2) : '-');
 
+// ช่วงวันที่สำเร็จรูป — คิดจาก "วันนี้" ตามเวลาเครื่องผู้ใช้
+// สัปดาห์นี้ = จันทร์ถึงวันนี้ · เดือนนี้ = วันที่ 1 ถึงวันนี้ · เดือนที่แล้ว = ทั้งเดือน
+function presetRange(key, now = new Date()) {
+  const t = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  switch (key) {
+    case 'today':
+      return { start: fmtDate(t), end: fmtDate(t) };
+    case 'thisWeek': {
+      const dow = (t.getDay() + 6) % 7; // 0 = จันทร์
+      const mon = new Date(t); mon.setDate(t.getDate() - dow);
+      return { start: fmtDate(mon), end: fmtDate(t) };
+    }
+    case 'thisMonth':
+      return { start: fmtDate(new Date(t.getFullYear(), t.getMonth(), 1)), end: fmtDate(t) };
+    case 'lastMonth': {
+      const first = new Date(t.getFullYear(), t.getMonth() - 1, 1);
+      const last = new Date(t.getFullYear(), t.getMonth(), 0); // วันสุดท้ายของเดือนที่แล้ว
+      return { start: fmtDate(first), end: fmtDate(last) };
+    }
+    default:
+      return { start: fmtDate(t), end: fmtDate(t) };
+  }
+}
+
+const PRESETS = [
+  { key: 'today', label: 'วันนี้' },
+  { key: 'thisWeek', label: 'สัปดาห์นี้' },
+  { key: 'thisMonth', label: 'เดือนนี้' },
+  { key: 'lastMonth', label: 'เดือนที่แล้ว' },
+];
+
 export default function Attendance() {
   const today = fmtDate(new Date());
 
   const [branch, setBranch] = useState('');          // '' = ทุกสาขา
   const [startDate, setStartDate] = useState(today);
   const [endDate, setEndDate] = useState(today);
+  const [preset, setPreset] = useState('today');     // '' = กำหนดวันที่เอง
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [warning, setWarning] = useState('');        // เตือนตอนข้อมูลถูกตัดเพราะช่วงกว้างเกิน
   const [rows, setRows] = useState(null);            // null = ยังไม่เคยดึง
   const [loadedInfo, setLoadedInfo] = useState('');
   const [search, setSearch] = useState('');
   const [view, setView] = useState('daily');         // 'daily' = สรุปรายวัน | 'raw' = ทุกครั้งที่สแกน
 
-  const load = async () => {
-    if (!startDate || !endDate) { setError('กรุณาเลือกช่วงวันที่'); return; }
-    if (startDate > endDate) { setError('วันที่เริ่มต้นต้องไม่เกินวันที่สิ้นสุด'); return; }
+  // รับวันที่/สาขามาเป็นพารามิเตอร์ได้ เพื่อให้ปุ่มช่วงสำเร็จรูปกดแล้วดึงได้เลย
+  // (ไม่ต้องรอ state รอบถัดไป)
+  const load = async (opts = {}) => {
+    const s = opts.start || startDate;
+    const e = opts.end || endDate;
+    const b = opts.branch !== undefined ? opts.branch : branch;
+    if (!s || !e) { setError('กรุณาเลือกช่วงวันที่'); return; }
+    if (s > e) { setError('วันที่เริ่มต้นต้องไม่เกินวันที่สิ้นสุด'); return; }
     setLoading(true);
     setError('');
     try {
-      const params = new URLSearchParams({ start: startDate, end: endDate });
-      if (branch) params.set('branch', branch);
+      const params = new URLSearchParams({ start: s, end: e });
+      if (b) params.set('branch', b);
       const res = await fetch(`/api/attendance?${params.toString()}`);
       const json = await res.json().catch(() => null);
       if (!res.ok || !json || json.status !== 'success') {
         throw new Error((json && json.message) || `ดึงข้อมูลไม่สำเร็จ (${res.status})`);
       }
       setRows(json.data || []);
-      const range = startDate === endDate ? startDate : `${startDate} ถึง ${endDate}`;
-      setLoadedInfo(`${range} · ${branch || 'ทุกสาขา'} · ${json.count || 0} ครั้ง`);
+      setWarning(json.truncated ? (json.message || 'ข้อมูลถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
+      const range = s === e ? s : `${s} ถึง ${e}`;
+      setLoadedInfo(`${range} · ${b || 'ทุกสาขา'} · ${json.count || 0} ครั้ง`);
     } catch (err) {
       setRows(null);
+      setWarning('');
       setError(err.message || 'ดึงข้อมูลไม่สำเร็จ');
     } finally {
       setLoading(false);
     }
   };
+
+  // กดปุ่มช่วงสำเร็จรูป = ตั้งวันที่ให้ แล้วดึงข้อมูลทันที
+  const applyPreset = (key) => {
+    const { start, end } = presetRange(key);
+    setPreset(key);
+    setStartDate(start);
+    setEndDate(end);
+    load({ start, end });
+  };
+
+  // แก้วันที่เองเมื่อไหร่ = หลุดจากช่วงสำเร็จรูป (ปุ่มเลิกไฮไลต์)
+  const setStart = (v) => { setStartDate(v); setPreset(''); };
+  const setEnd = (v) => { setEndDate(v); setPreset(''); };
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -129,52 +182,71 @@ export default function Attendance() {
       </div>
 
       {/* ตัวกรอง */}
-      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-xl">
-          <Building2 size={16} className="text-slate-400" />
-          <select
-            value={branch}
-            onChange={(e) => setBranch(e.target.value)}
-            className="text-sm text-slate-700 bg-transparent focus:outline-none cursor-pointer"
-          >
-            <option value="">ทุกสาขา</option>
-            {BRANCHES.map((b) => <option key={b} value={b}>{b}</option>)}
-          </select>
+      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm space-y-3">
+        {/* ช่วงวันที่สำเร็จรูป — กดแล้วดึงข้อมูลให้เลย */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold text-slate-500">ช่วงเวลา</span>
+          {PRESETS.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => applyPreset(p.key)}
+              disabled={loading}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 ${
+                preset === p.key
+                  ? 'bg-amber-500 text-white shadow-sm'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+          <span className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold ${preset === '' ? 'bg-slate-800 text-white' : 'text-slate-400'}`}>
+            กำหนดเอง
+          </span>
         </div>
-        <input
-          type="date" value={startDate} max={endDate}
-          onChange={(e) => setStartDate(e.target.value)}
-          className="px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-amber-500 outline-none"
-        />
-        <span className="text-slate-400 text-sm">ถึง</span>
-        <input
-          type="date" value={endDate} min={startDate} max={today}
-          onChange={(e) => setEndDate(e.target.value)}
-          className="px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-amber-500 outline-none"
-        />
-        <button
-          onClick={() => { setStartDate(today); setEndDate(today); }}
-          className="px-3 py-2 rounded-xl text-sm border border-slate-200 text-slate-600 hover:bg-slate-50"
-        >
-          วันนี้
-        </button>
-        <button
-          onClick={load} disabled={loading}
-          className="inline-flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
-        >
-          {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-          {loading ? 'กำลังดึงข้อมูล…' : 'ดึงข้อมูล'}
-        </button>
-        {rows !== null && (
+
+        {/* สาขา + วันที่ + ปุ่มดึงข้อมูล */}
+        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100">
+          <div className="flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-xl mt-3">
+            <Building2 size={16} className="text-slate-400" />
+            <select
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              className="text-sm text-slate-700 bg-transparent focus:outline-none cursor-pointer"
+            >
+              <option value="">ทุกสาขา</option>
+              {BRANCHES.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+          <input
+            type="date" value={startDate} max={endDate}
+            onChange={(e) => setStart(e.target.value)}
+            className="px-3 py-2 mt-3 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+          />
+          <span className="text-slate-400 text-sm mt-3">ถึง</span>
+          <input
+            type="date" value={endDate} min={startDate} max={today}
+            onChange={(e) => setEnd(e.target.value)}
+            className="px-3 py-2 mt-3 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+          />
           <button
-            onClick={load} disabled={loading}
-            title="โหลดใหม่"
-            className="p-2 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+            onClick={() => load()} disabled={loading}
+            className="inline-flex items-center gap-2 px-5 py-2 mt-3 rounded-xl text-sm font-semibold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
           >
-            <RefreshCw size={16} />
+            {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+            {loading ? 'กำลังดึงข้อมูล…' : 'ดึงข้อมูล'}
           </button>
-        )}
-        {!loading && loadedInfo && <span className="text-xs text-slate-400">ข้อมูล: {loadedInfo}</span>}
+          {rows !== null && (
+            <button
+              onClick={() => load()} disabled={loading}
+              title="โหลดใหม่"
+              className="p-2 mt-3 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <RefreshCw size={16} />
+            </button>
+          )}
+          {!loading && loadedInfo && <span className="text-xs text-slate-400 mt-3">ข้อมูล: {loadedInfo}</span>}
+        </div>
       </div>
 
       {error && (
@@ -186,6 +258,13 @@ export default function Attendance() {
               ถ้าขึ้นว่าต่อฐานข้อมูล ZKBio ไม่ได้ ให้ตรวจว่าเซิร์ฟเวอร์ที่ร้านเปิด SQL Server (SQLEXPRESS) และตั้งค่า ZK_DB_* ไว้แล้ว
             </div>
           </div>
+        </div>
+      )}
+
+      {warning && (
+        <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-sm flex items-start gap-2">
+          <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
+          <span>{warning}</span>
         </div>
       )}
 
@@ -319,7 +398,8 @@ export default function Attendance() {
 
       {rows === null && !loading && !error && (
         <div className="bg-white border border-slate-100 rounded-2xl py-16 text-center text-sm text-slate-400 shadow-sm">
-          เลือกสาขาและช่วงวันที่ แล้วกด &quot;ดึงข้อมูล&quot; เพื่อดูเวลาสแกนหน้าเข้า-ออกงาน
+          กดปุ่มช่วงเวลา (วันนี้ / สัปดาห์นี้ / เดือนนี้ / เดือนที่แล้ว) หรือกำหนดวันที่เอง
+          แล้วกด &quot;ดึงข้อมูล&quot; เพื่อดูเวลาสแกนหน้าเข้า-ออกงาน
         </div>
       )}
     </div>

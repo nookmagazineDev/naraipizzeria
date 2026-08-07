@@ -14,6 +14,10 @@ const PUNCH_LABEL = { '0': 'เข้างาน', '1': 'ออกงาน', '
 
 const txt = (v) => (v == null ? '' : String(v).trim());
 
+// เพดานแถวที่ /zk/transactions ของ host ใช้ (20000 = host รุ่นเก่า, 100000 = รุ่นปัจจุบัน)
+// ได้จำนวนแถวเท่ากับเพดานพอดี = ข้อมูลถูกตัด ต้องบอกผู้ใช้ให้แคบช่วงวันที่/เลือกสาขา
+const ZK_ROW_CAPS = [20000, 100000];
+
 // host API คืน punch_time เป็น 'YYYY-MM-DD HH:mm:ss' อยู่แล้ว แต่เผื่อรุ่นที่คืนเป็น ISO ('...T...Z')
 // ตัดเอาเฉพาะส่วนวัน-เวลา ไม่แปลง timezone (ค่าที่เก็บใน DB คือเวลาหน้าเครื่องสแกนอยู่แล้ว)
 function normalizeTime(v) {
@@ -84,7 +88,15 @@ export default async function handler(req, res) {
 
     data.sort((a, b) => b.time.localeCompare(a.time)); // ล่าสุดก่อน (เหมือนหน้าสแกนของ Narai-branch)
 
-    return res.status(200).json({ status: 'success', branch, start, end, count: data.length, data });
+    const truncated = ZK_ROW_CAPS.includes(punches.length);
+    return res.status(200).json({
+      status: 'success',
+      branch, start, end,
+      count: data.length,
+      truncated,
+      ...(truncated ? { message: `ข้อมูลถูกตัดที่ ${punches.length.toLocaleString()} รายการ — ช่วงวันที่กว้างเกินไป กรุณาแคบช่วงลงหรือเลือกสาขา` } : {}),
+      data,
+    });
   } catch (err) {
     console.error('attendance API error:', err.message);
     return res.status(502).json({ status: 'error', message: err.message || 'ดึงข้อมูลการสแกนไม่สำเร็จ' });
