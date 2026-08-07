@@ -259,18 +259,12 @@ export default function Attendance() {
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
           <div>
             <div>{error}</div>
-            {/* คำใบ้ต้องตรงกับสาเหตุจริง — 404 (ยังไม่มี endpoint) คนละเรื่องกับต่อฐานข้อมูลไม่ได้ */}
-            {errorCode === 'ZK_ENDPOINT_MISSING' ? (
-              <div className="text-xs text-rose-500 mt-1">
-                วิธีแก้: ที่เครื่องเซิร์ฟเวอร์ของร้าน ให้เอา <span className="font-mono">host-server/server.js</span> ตัวล่าสุดจาก repo
-                ไปทับของเดิม แล้ว restart ด้วย <span className="font-mono">node server.js</span> (หรือรัน start-narai.ps1)
-                — เช็กว่าอัปเดตสำเร็จได้ที่ <span className="font-mono">/zk/ping</span> ของ host API
-              </div>
-            ) : (
-              <div className="text-xs text-rose-500 mt-1">
-                ถ้าขึ้นว่าต่อฐานข้อมูล ZKBio ไม่ได้ ให้ตรวจว่าเซิร์ฟเวอร์ที่ร้านเปิด SQL Server (SQLEXPRESS) และตั้งค่า ZK_DB_* ไว้แล้ว
-              </div>
-            )}
+            {/* ข้อความจาก API บอกอยู่แล้วว่าลอง upstream ตัวไหนไปบ้างและพลาดเพราะอะไร */}
+            <div className="text-xs text-rose-500 mt-1">
+              {errorCode === 'ZK_UPSTREAM_FAILED'
+                ? 'ตรวจว่าเครื่องออฟฟิศ (storenarai.dyndns.tv:8787) เปิดอยู่ และ ZKBio Time ยังส่งข้อมูลเข้าฐานตามปกติ'
+                : 'ถ้าขึ้นว่าต่อฐานข้อมูล ZKBio ไม่ได้ ให้ตรวจว่าเครื่องที่รัน ZKBio เปิด SQL Server และตั้งค่า ZK_DB_* ไว้แล้ว'}
+            </div>
           </div>
         </div>
       )}

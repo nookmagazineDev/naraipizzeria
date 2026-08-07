@@ -1,24 +1,32 @@
-// ประวัติสแกนหน้า/สแกนนิ้ว (ZKBio Time 9) — ทำงานแบบเดียวกับ endpoint /attendance ของโปรเจค Narai-branch
-// เส้นทาง: หน้าเว็บ → /api/attendance → host API (/zk/transactions + /zk/employees) → SQL Server (ZKBio9)
+// ประวัติสแกนหน้า/สแกนนิ้ว (ZKBio Time 9) — ข้อมูลชุดเดียวกับหน้า "สแกนเข้า-ออก" ของโปรเจค Narai-branch
 //
 //   GET /api/attendance?start=YYYY-MM-DD&end=YYYY-MM-DD[&branch=รหัสสาขา][&emp=รหัสพนักงาน]
-//   → { status:'success', branch, start, end, count, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
+//   → { status:'success', source, branch, start, end, count, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
 //
-// รวมชื่อพนักงานจาก /zk/employees ให้แล้ว (ดึงชื่อไม่ได้ก็ยังคืนรายการสแกนโดยแสดงเฉพาะรหัส)
+// มี upstream 2 ทาง ลองไล่ตามลำดับ:
+//   1) office-server (storenarai.dyndns.tv:8787) — endpoint /attendance ตัวที่ Narai-branch ใช้อยู่จริง
+//      ต่อ ZKBio9 อยู่แล้วและรันอยู่ตลอด จึงเป็นทางหลัก (โปรเจคนี้ก็เรียกเครื่องนี้อยู่แล้วใน usagemenu/usagebytable)
+//   2) host API ของร้าน (api.khanoykorshabu.com) — endpoint /zk/* ใน host-server/server.js ของ repo นี้
+//      ใช้เป็นทางสำรอง เผื่อวันหน้าเครื่องออฟฟิศปิด แต่เครื่องร้านอัปเดต server.js แล้ว
+//
+// สองทางนี้คืนคนละรูปแบบ จึงแปลงให้เป็นรูปเดียวกันก่อนส่งออก
 
+const OFFICE_API = process.env.USAGE_API_BASE || 'http://storenarai.dyndns.tv:8787';
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 
 // ป้ายกำกับตามมาตรฐาน ZKTeco — แต่ละเครื่องตั้งค่าปุ่มไม่เหมือนกัน หน้าเว็บจึงคิด "เข้า/ออก"
 // จากลำดับเวลาสแกนของวันด้วย ไม่ได้อิง punch_state อย่างเดียว (ดู lib/attendance.js)
 const PUNCH_LABEL = { '0': 'เข้างาน', '1': 'ออกงาน', '2': 'พักออก', '3': 'พักเข้า', '4': 'OT เข้า', '5': 'OT ออก' };
 
+// เพดานแถวของ upstream (office-server = 20000, host API รุ่นปัจจุบัน = 100000)
+// ได้จำนวนแถวเท่ากับเพดานพอดี = ข้อมูลถูกตัด ต้องบอกผู้ใช้ให้แคบช่วงวันที่/เลือกสาขา
+const ROW_CAPS = [20000, 100000];
+
+const UPSTREAM_TIMEOUT_MS = 25000;
+
 const txt = (v) => (v == null ? '' : String(v).trim());
 
-// เพดานแถวที่ /zk/transactions ของ host ใช้ (20000 = host รุ่นเก่า, 100000 = รุ่นปัจจุบัน)
-// ได้จำนวนแถวเท่ากับเพดานพอดี = ข้อมูลถูกตัด ต้องบอกผู้ใช้ให้แคบช่วงวันที่/เลือกสาขา
-const ZK_ROW_CAPS = [20000, 100000];
-
-// host API คืน punch_time เป็น 'YYYY-MM-DD HH:mm:ss' อยู่แล้ว แต่เผื่อรุ่นที่คืนเป็น ISO ('...T...Z')
+// upstream คืนเวลาเป็น 'YYYY-MM-DD HH:mm:ss' อยู่แล้ว แต่เผื่อรุ่นที่คืนเป็น ISO ('...T...Z')
 // ตัดเอาเฉพาะส่วนวัน-เวลา ไม่แปลง timezone (ค่าที่เก็บใน DB คือเวลาหน้าเครื่องสแกนอยู่แล้ว)
 function normalizeTime(v) {
   const s = txt(v);
@@ -26,23 +34,96 @@ function normalizeTime(v) {
   return m ? `${m[1]} ${m[2]}` : s;
 }
 
-async function fetchZk(path) {
-  const r = await fetch(`${STORE_API}${path}`, { headers: { 'ngrok-skip-browser-warning': 'true' } });
-  const j = await r.json().catch(() => null);
-  if (!r.ok) {
-    // 404 = host ตอบได้ แต่ไม่รู้จัก route /zk/* → server.js ที่เครื่องร้านเป็นรุ่นก่อน 5 ส.ค. 2026
-    // (คนละเรื่องกับ "ต่อฐานข้อมูล ZKBio ไม่ได้" ซึ่ง host จะตอบ 500 พร้อมสาเหตุจริง)
-    if (r.status === 404) {
-      const err = new Error(
-        `เซิร์ฟเวอร์ที่ร้านยังไม่มี endpoint ${path.split('?')[0]} — ` +
-        'ไฟล์ host-server/server.js ที่รันอยู่เป็นรุ่นเก่า ต้องอัปเดตไฟล์แล้ว restart (node server.js) ที่เครื่องร้าน'
-      );
-      err.code = 'ZK_ENDPOINT_MISSING';
-      throw err;
-    }
-    throw new Error(j?.error || `host API HTTP ${r.status} (${path})`);
+// เครื่องออฟฟิศ/เครื่องร้านปิดอยู่ หรือ dyndns เพิ่งเปลี่ยน IP -> fetch ค้างจนฟังก์ชันหมดเวลา
+// ตัดเองที่ UPSTREAM_TIMEOUT_MS เพื่อให้ยังเหลือเวลาไปลอง upstream ตัวถัดไป
+async function fetchJson(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'ngrok-skip-browser-warning': 'true' },
+    });
+    const j = await r.json().catch(() => null);
+    return { ok: r.ok, status: r.status, json: j };
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error(`${new URL(url).host} ไม่ตอบภายใน ${UPSTREAM_TIMEOUT_MS / 1000} วินาที`);
+    throw new Error(`ต่อ ${new URL(url).host} ไม่ได้: ${e.message}`);
+  } finally {
+    clearTimeout(timer);
   }
-  return Array.isArray(j) ? j : j?.data || [];
+}
+
+// ── ทางที่ 1: office-server /attendance (รูปแบบเดียวกับที่หน้าเว็บต้องใช้อยู่แล้ว) ──
+async function fromOfficeServer({ start, end, branch, emp }) {
+  const params = new URLSearchParams({ start, end });
+  if (branch) params.set('branch', branch);
+  if (emp) params.set('emp', emp);
+  const { ok, status, json } = await fetchJson(`${OFFICE_API}/attendance?${params.toString()}`);
+  if (!ok || !json || json.status !== 'success') {
+    const why = (json && json.message) || `HTTP ${status}`;
+    throw new Error(status === 404 ? 'office-server ยังไม่มี endpoint /attendance' : why);
+  }
+  const rows = Array.isArray(json.data) ? json.data : [];
+  return rows.map((r) => {
+    const time = normalizeTime(r.time);
+    const state = txt(r.state);
+    return {
+      empCode: txt(r.empCode),
+      name: txt(r.name),
+      time,
+      date: txt(r.date) || time.slice(0, 10),
+      state,
+      stateLabel: txt(r.stateLabel) || PUNCH_LABEL[state] || '',
+      area: txt(r.area),
+      terminal: txt(r.terminal),
+    };
+  });
+}
+
+// ── ทางที่ 2: host API /zk/* (ข้อมูลดิบจากตาราง iclock_transaction + ชื่อจาก personnel_employee) ──
+async function fromStoreHost({ start, end, branch, emp }) {
+  const qs = `start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}` +
+    (emp ? `&emp=${encodeURIComponent(emp)}` : '') +
+    (branch ? `&area=${encodeURIComponent(branch)}` : '');
+
+  const zk = async (path) => {
+    const { ok, status, json } = await fetchJson(`${STORE_API}${path}`);
+    if (!ok) {
+      // 404 = host ตอบได้ แต่ไม่รู้จัก route /zk/* → server.js ที่เครื่องร้านเป็นรุ่นเก่า
+      // (คนละเรื่องกับ "ต่อฐานข้อมูล ZKBio ไม่ได้" ซึ่ง host จะตอบ 500 พร้อมสาเหตุจริง)
+      if (status === 404) throw new Error(`เครื่องร้านยังไม่มี endpoint ${path.split('?')[0]} (server.js เป็นรุ่นเก่า)`);
+      throw new Error((json && json.error) || `host API HTTP ${status}`);
+    }
+    return Array.isArray(json) ? json : (json && json.data) || [];
+  };
+
+  const [punches, emps] = await Promise.all([
+    zk(`/zk/transactions?${qs}`),
+    zk('/zk/employees').catch(() => []), // ชื่อพนักงานเป็นของแถม ดึงไม่ได้ก็ยังใช้งานได้
+  ]);
+
+  const nameOf = {};
+  emps.forEach((e) => {
+    const code = txt(e.emp_code);
+    if (code) nameOf[code] = `${txt(e.first_name)} ${txt(e.last_name)}`.trim();
+  });
+
+  return punches.map((p) => {
+    const time = normalizeTime(p.punch_time);
+    const code = txt(p.emp_code);
+    const state = txt(p.punch_state);
+    return {
+      empCode: code,
+      name: nameOf[code] || '',
+      time,
+      date: time.slice(0, 10),
+      state,
+      stateLabel: PUNCH_LABEL[state] || '',
+      area: txt(p.area_alias),
+      terminal: txt(p.terminal_alias),
+    };
+  });
 }
 
 export default async function handler(req, res) {
@@ -61,61 +142,45 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: 'error', message: 'วันที่เริ่มต้นต้องไม่เกินวันที่สิ้นสุด' });
   }
 
-  try {
-    // ส่ง area ให้ host กรองที่ SQL (ลดข้อมูลที่ส่งกลับ) — host รุ่นเก่าที่ยังไม่รู้จัก area
-    // จะคืนทุกสาขามา จึงกรองซ้ำอีกชั้นด้านล่างด้วย
-    const qs = `start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}` +
-      (emp ? `&emp=${encodeURIComponent(emp)}` : '') +
-      (branch ? `&area=${encodeURIComponent(branch)}` : '');
-    const [punches, emps] = await Promise.all([
-      fetchZk(`/zk/transactions?${qs}`),
-      fetchZk('/zk/employees').catch(() => []), // ชื่อพนักงานเป็นของแถม ดึงไม่ได้ก็ยังใช้งานได้
-    ]);
+  const args = { start, end, branch, emp };
+  const attempts = [
+    { source: 'office-server', run: () => fromOfficeServer(args) },
+    { source: 'store-host', run: () => fromStoreHost(args) },
+  ];
 
-    const nameOf = {};
-    emps.forEach((e) => {
-      const code = txt(e.emp_code);
-      if (code) nameOf[code] = `${txt(e.first_name)} ${txt(e.last_name)}`.trim();
-    });
+  const failures = [];
+  for (const { source, run } of attempts) {
+    let data;
+    try {
+      data = await run();
+    } catch (err) {
+      console.error(`attendance via ${source} ไม่สำเร็จ:`, err.message);
+      failures.push(`${source}: ${err.message}`);
+      continue;
+    }
 
-    let data = punches.map((p) => {
-      const time = normalizeTime(p.punch_time);
-      const code = txt(p.emp_code);
-      const state = txt(p.punch_state);
-      return {
-        empCode: code,
-        name: nameOf[code] || '',
-        time,
-        date: time.slice(0, 10),
-        state,
-        stateLabel: PUNCH_LABEL[state] || '',
-        area: txt(p.area_alias),
-        terminal: txt(p.terminal_alias),
-      };
-    });
-
-    // กรองสาขาซ้ำฝั่งนี้: ZKBio เก็บรหัสสาขาไว้ที่ area_alias (เช่น SUM/XCM/ZBW ตรงกับรหัสที่เว็บใช้)
-    // เทียบแบบตรงตัวเหมือนที่ Narai-branch ทำ — ไม่เดาจากชื่อเครื่อง เพราะเครื่องคนละสาขาตั้งชื่อซ้ำกันได้
+    const rawCount = data.length;
+    // กรองสาขาซ้ำฝั่งนี้ เผื่อ upstream ไม่ได้กรองให้ (host API รุ่นเก่ายังไม่รู้จัก area)
+    // ZKBio เก็บรหัสสาขาไว้ที่ area_alias — เทียบตรงตัวเหมือนที่ Narai-branch ทำ
     if (branch) data = data.filter((r) => r.area.toUpperCase() === branch);
+    data.sort((a, b) => b.time.localeCompare(a.time)); // ล่าสุดก่อน
 
-    data.sort((a, b) => b.time.localeCompare(a.time)); // ล่าสุดก่อน (เหมือนหน้าสแกนของ Narai-branch)
-
-    const truncated = ZK_ROW_CAPS.includes(punches.length);
+    const truncated = ROW_CAPS.includes(rawCount);
     return res.status(200).json({
       status: 'success',
+      source,
       branch, start, end,
       count: data.length,
       truncated,
-      ...(truncated ? { message: `ข้อมูลถูกตัดที่ ${punches.length.toLocaleString()} รายการ — ช่วงวันที่กว้างเกินไป กรุณาแคบช่วงลงหรือเลือกสาขา` } : {}),
+      ...(truncated ? { message: `ข้อมูลถูกตัดที่ ${rawCount.toLocaleString()} รายการ — ช่วงวันที่กว้างเกินไป กรุณาแคบช่วงลงหรือเลือกสาขา` } : {}),
       data,
     });
-  } catch (err) {
-    console.error('attendance API error:', err.message);
-    // ส่ง code กลับไปด้วย เพื่อให้หน้าเว็บขึ้นวิธีแก้ให้ตรงกับสาเหตุ (ไม่ใช่คำใบ้กลางๆ ทุกกรณี)
-    return res.status(502).json({
-      status: 'error',
-      code: err.code || 'ZK_ERROR',
-      message: err.message || 'ดึงข้อมูลการสแกนไม่สำเร็จ',
-    });
   }
+
+  // ทั้งสองทางไม่ผ่าน — บอกให้ครบว่าลองอะไรไปแล้วบ้าง จะได้ไล่ถูกจุด
+  return res.status(502).json({
+    status: 'error',
+    code: 'ZK_UPSTREAM_FAILED',
+    message: `ดึงข้อมูลการสแกนไม่สำเร็จ — ${failures.join(' · ')}`,
+  });
 }
