@@ -110,6 +110,18 @@ async function fetchSheet(name) {
 
 const num = v => { const n = parseFloat(String(v).replace(/,/g, '')); return isNaN(n) ? null : n; };
 
+// ตำแหน่งคอลัมน์ "ปริมาณที่ได้ / หน่วยที่ได้" ในชีท menu (0-indexed)
+// มองหาจากหัวตารางตั้งแต่คอลัมน์ G เป็นต้นไป (กันชนกับ D=UnitPrice) ไม่เจอใช้ G/H ตามค่าเริ่มต้น
+// ต้องตรงกับฝั่งเขียนใน qcrd-apps-script.gs (yieldCols_)
+const YIELD_COL = 6, YIELD_UNIT_COL = 7;
+export function findYieldCols(header = []) {
+  const at = (re, dflt) => {
+    const i = header.findIndex((h, idx) => idx >= YIELD_COL && re.test((h || '').trim()));
+    return i >= 0 ? i : dflt;
+  };
+  return [at(/ปริมาณ|yield/i, YIELD_COL), at(/หน่วย|unit/i, YIELD_UNIT_COL)];
+}
+
 export default async function handler(req, res) {
   const { sheet } = req.query;
   try {
@@ -121,6 +133,9 @@ export default async function handler(req, res) {
         const c = (r[0] || '').trim();
         if (c) groupName[c] = (r[1] || '').trim();
       });
+      // ปริมาณที่ได้ต่อ 1 สูตร อยู่คอลัมน์เสริมท้ายชีท (ค่าเริ่มต้น G=ปริมาณ H=หน่วย)
+      // หาโดยดูหัวตารางก่อน เผื่อชีทมีคอลัมน์เสริมอยู่แล้วในตำแหน่งอื่น
+      const [yieldCol, yieldUnitCol] = findYieldCols(rows[0] || []);
       const data = rows.slice(1)
         .filter(r => (r[0] || '').trim())
         .map(r => {
@@ -134,6 +149,8 @@ export default async function handler(req, res) {
             cost: num(r[4]),
             // F = สถานะเมนู (ว่าง = ใช้งาน)
             status: (r[5] || '').trim() || 'ใช้งาน',
+            yieldQty: num(r[yieldCol]),
+            yieldUnit: (r[yieldUnitCol] || '').trim(),
           };
         });
       return res.status(200).json({ status: 'success', data });
