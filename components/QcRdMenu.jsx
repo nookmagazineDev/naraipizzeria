@@ -14,6 +14,8 @@ const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v)) ? '—'
 
 const PAGE_SIZE = 50;
 const NEW_GROUP = '__new__'; // ค่าใน dropdown หมวดหมู่ = สร้างหมวดใหม่
+// หน่วยของ "ปริมาณที่ได้" ที่ใช้บ่อย (พิมพ์หน่วยอื่นเองได้)
+const YIELD_UNITS = ['ชิ้น', 'ถาด', 'จาน', 'ที่', 'ชุด', 'แก้ว', 'ถ้วย', 'ถุง', 'กรัม', 'กก.', 'มล.', 'ลิตร'];
 
 export default function QcRdMenu() {
   const [menus, setMenus] = useState([]);
@@ -95,7 +97,10 @@ export default function QcRdMenu() {
 
   const openAdd = () => {
     setFormMsg(null);
-    setEditMenu({ code: '', name: '', price: '', group: '', newGroupName: '', isNew: true, items: [emptyIng()], sources: [] });
+    setEditMenu({
+      code: '', name: '', price: '', group: '', newGroupName: '',
+      yieldQty: '', yieldUnit: '', isNew: true, items: [emptyIng()], sources: [],
+    });
   };
   const openEdit = (m) => {
     const rows = (bom[m.code]?.items || []).map(r => ({
@@ -104,6 +109,7 @@ export default function QcRdMenu() {
     setFormMsg(null);
     setEditMenu({
       code: m.code, name: m.name, price: m.price ?? '', group: m.group || '', newGroupName: '',
+      yieldQty: m.yieldQty ?? '', yieldUnit: m.yieldUnit || '',
       isNew: false, items: rows.length ? rows : [emptyIng()], sources: [],
     });
   };
@@ -166,6 +172,9 @@ export default function QcRdMenu() {
     return map;
   }, [items]);
 
+  // ปริมาณที่ได้ต่อ 1 สูตรในฟอร์ม (ใช้หารต้นทุนให้เป็นต่อหน่วย)
+  const perYield = parseFloat(editMenu?.yieldQty) || 0;
+
   const estCost = (rows) => rows.reduce((s, r) => {
     const p = priceMap[r.itemCode] || 0;
     const conv = parseFloat(r.converter) || 1000;
@@ -192,6 +201,8 @@ export default function QcRdMenu() {
         code: editMenu.code.trim(), name: editMenu.name.trim(), price: editMenu.price,
         group: isNewGroup ? '' : editMenu.group,
         newGroupName: isNewGroup ? editMenu.newGroupName.trim() : '',
+        yieldQty: String(editMenu.yieldQty ?? '').trim(),
+        yieldUnit: String(editMenu.yieldUnit || '').trim(),
         items: rows.map(r => ({ itemCode: r.itemCode, itemName: r.itemName, qty: parseFloat(r.qty) || 0, converter: parseFloat(r.converter) || 1000 })),
       });
       setToast({ ok: true, msg: `บันทึก "${editMenu.name}" สำเร็จ (${res.data?.bomRows ?? rows.length} วัตถุดิบ)` });
@@ -374,6 +385,11 @@ export default function QcRdMenu() {
                 <h3 className="font-bold text-slate-800">สูตร: {viewMenu.name} <span className="font-mono text-xs text-slate-400 ml-1">{viewMenu.code}</span></h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {viewMenu.groupName ? `${viewMenu.groupName} · ` : ''}ราคาขาย {fmt(viewMenu.price, 0)} บาท · ต้นทุนรวม {fmt(viewMenu.cost)} บาท
+                  {viewMenu.yieldQty > 0 && (
+                    <span> · ได้ {fmt(viewMenu.yieldQty, 0)} {viewMenu.yieldUnit || 'หน่วย'}
+                      {viewMenu.cost > 0 && ` (ต้นทุน ${fmt(viewMenu.cost / viewMenu.yieldQty)} บาท/${viewMenu.yieldUnit || 'หน่วย'})`}
+                    </span>
+                  )}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -479,6 +495,23 @@ export default function QcRdMenu() {
                   <input type="number" value={editMenu.price} onChange={e => setEditMenu(m => ({ ...m, price: e.target.value }))}
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                 </div>
+                <div className="sm:col-span-2">
+                  <label className="text-xs font-bold text-slate-500" title="1 สูตรตามรายการวัตถุดิบข้างล่างนี้ ทำได้ปริมาณเท่าไร">
+                    ปริมาณที่ได้ต่อ 1 สูตร
+                  </label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <input type="number" min="0" step="any" value={editMenu.yieldQty} placeholder="เช่น 10"
+                      onChange={e => setEditMenu(m => ({ ...m, yieldQty: e.target.value }))}
+                      className="w-24 border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    <input list="qcrd-yield-units" value={editMenu.yieldUnit} placeholder="หน่วย เช่น ชิ้น"
+                      onChange={e => setEditMenu(m => ({ ...m, yieldUnit: e.target.value }))}
+                      className="flex-1 min-w-0 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                    <datalist id="qcrd-yield-units">
+                      {YIELD_UNITS.map(u => <option key={u} value={u} />)}
+                    </datalist>
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1">เว้นว่างได้ ถ้ากรอกไว้ระบบจะคำนวณต้นทุนต่อหน่วยให้</p>
+                </div>
               </div>
 
               {editMenu.group === NEW_GROUP && (
@@ -546,9 +579,22 @@ export default function QcRdMenu() {
                 </div>
               </div>
 
-              <div className="p-3 bg-indigo-50/60 rounded-xl text-sm flex items-center justify-between">
-                <span className="text-slate-600 flex items-center gap-1.5"><Info size={14} /> ต้นทุนโดยประมาณ (คำนวณจากราคาวัตถุดิบปัจจุบัน)</span>
-                <span className="font-mono font-bold text-indigo-700">฿{fmt(estCost(editMenu.items))}</span>
+              <div className="p-3 bg-indigo-50/60 rounded-xl text-sm space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-600 flex items-center gap-1.5"><Info size={14} /> ต้นทุนทั้งสูตรโดยประมาณ (คำนวณจากราคาวัตถุดิบปัจจุบัน)</span>
+                  <span className="font-mono font-bold text-indigo-700">฿{fmt(estCost(editMenu.items))}</span>
+                </div>
+                {perYield > 0 && (
+                  <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-indigo-100">
+                    <span className="text-slate-600">
+                      ต้นทุนต่อ 1 {editMenu.yieldUnit.trim() || 'หน่วย'} (จาก {fmt(perYield, 0)} {editMenu.yieldUnit.trim() || 'หน่วย'}ต่อสูตร)
+                      {parseFloat(editMenu.price) > 0 && (
+                        <span className="text-slate-400"> · ราคาขาย {fmt(editMenu.price, 0)} บาท</span>
+                      )}
+                    </span>
+                    <span className="font-mono font-bold text-indigo-700">฿{fmt(estCost(editMenu.items) / perYield)}</span>
+                  </div>
+                )}
               </div>
             </div>
 

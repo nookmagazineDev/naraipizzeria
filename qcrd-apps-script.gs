@@ -8,6 +8,7 @@
  *
  * แท็บที่ใช้:
  *   menu : A=Code B=NameThai C=MenuCode D=UnitPrice E=cost Menu F=สถานะ(ใช้งาน/ปิดการใช้งาน)
+ *          G=ปริมาณที่ได้ H=หน่วยที่ได้ (คอลัมน์เสริม สคริปต์เติมหัวตารางให้เองครั้งแรกที่บันทึก)
  *   BOM  : A=เลขPOS B=ชื่อเมนู C=ลำดับ D=รหัสวัตถุดิบ E=ชื่อวัตถุดิบ F=ยอดใช้ G=1 H=ตัวแปลงหน่วย
  *          I=รหัสวัตถุดิบ(ตัด 0 นำหน้า) J=ราคาวัตถุดิบ K=ต้นทุน/หน่วยเล็ก L=(ว่าง) M=ต้นทุน/หน่วยเล็ก N=ต้นทุนรวมของแถว
  *   item : A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ(ใช้งาน/ปิดการใช้งาน) F,G,H=รหัสไอเทมทดแทน 1-3
@@ -54,9 +55,10 @@ function doPost(e) {
 }
 
 // เพิ่ม/แก้ไขเมนู: upsert แถวในชีท menu + แทนที่สูตรทั้งหมดของเมนูนั้นในชีท BOM
-// payload: { code, name, price, group, newGroupName, items: [{ itemCode, itemName, qty, converter }] }
+// payload: { code, name, price, group, newGroupName, yieldQty, yieldUnit, items: [{ itemCode, itemName, qty, converter }] }
 //   group        = รหัสหมวด (คอลัมน์ C) — ส่ง '' เพื่อล้างหมวด, ไม่ส่งเลย = คงหมวดเดิม
 //   newGroupName = ชื่อหมวดใหม่ ถ้าส่งมาจะสร้าง/หาในชีท menucodegroup แล้วใช้รหัสนั้นแทน group
+//   yieldQty/yieldUnit = ปริมาณที่ได้ต่อ 1 สูตร + หน่วย (เช่น 10 ชิ้น) — ไม่ส่ง = คงค่าเดิม
 function saveMenu_(ss, data) {
   var code = String(data.code || '').trim();
   var name = String(data.name || '').trim();
@@ -113,6 +115,18 @@ function saveMenu_(ss, data) {
     if (bomRows.length) menuSh.getRange(found, 5).setValue(costCell);
   } else {
     menuSh.appendRow([code, name, groupCode || '', price, costCell]);
+    found = menuSh.getLastRow();
+  }
+  // ปริมาณที่ได้ต่อ 1 สูตร (คอลัมน์เสริม) — เขียนเฉพาะที่ส่งมา, ส่ง '' = ล้างค่า
+  if (data.yieldQty !== undefined || data.yieldUnit !== undefined) {
+    var yc = yieldCols_(menuSh);
+    if (data.yieldQty !== undefined) {
+      var yq = String(data.yieldQty).trim();
+      menuSh.getRange(found, yc.qty).setValue(yq === '' || isNaN(Number(yq)) ? '' : Number(yq));
+    }
+    if (data.yieldUnit !== undefined) {
+      menuSh.getRange(found, yc.unit).setValue(String(data.yieldUnit || '').trim());
+    }
   }
 
   // แทนที่แถว BOM เดิมของเมนูนี้ (ลบจากล่างขึ้นบน แล้วต่อท้ายใหม่)
@@ -127,6 +141,23 @@ function saveMenu_(ss, data) {
   }
 
   return { status: 'success', data: { code: code, bomRows: bomRows.length, totalCost: costCell, group: groupCode } };
+}
+
+// หาคอลัมน์ "ปริมาณที่ได้ / หน่วยที่ได้" ในชีท menu (1-indexed)
+// ดูจากหัวตารางตั้งแต่คอลัมน์ G เป็นต้นไป (กันชนกับ D=UnitPrice) ไม่เจอ = ใช้ G/H แล้วเติมหัวตารางให้
+// ต้องตรงกับฝั่งอ่านใน pages/api/qcrd.js (findYieldCols)
+function yieldCols_(menuSh) {
+  var lastCol = Math.max(menuSh.getLastColumn(), 8);
+  var header = menuSh.getRange(1, 1, 1, lastCol).getValues()[0];
+  var qtyCol = 0, unitCol = 0;
+  for (var i = 6; i < header.length; i++) {   // i = 0-indexed, เริ่มที่คอลัมน์ G
+    var h = String(header[i] || '').trim();
+    if (!qtyCol && /ปริมาณ|yield/i.test(h)) qtyCol = i + 1;
+    if (!unitCol && /หน่วย|unit/i.test(h)) unitCol = i + 1;
+  }
+  if (!qtyCol) { qtyCol = 7; menuSh.getRange(1, 7).setValue('ปริมาณที่ได้'); }
+  if (!unitCol) { unitCol = 8; menuSh.getRange(1, 8).setValue('หน่วยที่ได้'); }
+  return { qty: qtyCol, unit: unitCol };
 }
 
 // หมวดหมู่เมนู (ชีท menucodegroup: A=รหัสหมวด B=ชื่อหมวด)
