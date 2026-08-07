@@ -1,22 +1,26 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft } from 'lucide-react';
+import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save } from 'lucide-react';
 import { apiCall } from '../lib/qcrdApi';
 
 /*
  * QC/RD — เมนู: รายชื่อเมนูจากชีท menu + สูตร (BOM) ของแต่ละเมนู
  * กดแถวเพื่อดูสูตร · ปุ่ม "เพิ่มเมนู" / "แก้ไข" เปิดฟอร์มจัดการวัตถุดิบในสูตร
- * บันทึกผ่าน Apps Script (action: saveMenu) — ต้อง deploy qcrd-apps-script.gs ก่อน
+ * ในฟอร์มเลือกหมวดหมู่ได้ (ชีท menucodegroup) และ "ดึงสูตรจากเมนูอื่น" เพื่อรวมวัตถุดิบของเมนูนั้นเข้ามา
+ * บันทึกผ่าน Apps Script (action: saveMenu / saveMenuGroup) — ต้อง deploy qcrd-apps-script.gs ก่อน
  */
 
 const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v)) ? '—'
   : Number(v).toLocaleString('th-TH', { minimumFractionDigits: d, maximumFractionDigits: d });
 
 const PAGE_SIZE = 50;
+const NEW_GROUP = '__new__'; // ค่าใน dropdown หมวดหมู่ = สร้างหมวดใหม่
 
 export default function QcRdMenu() {
   const [menus, setMenus] = useState([]);
   const [bom, setBom] = useState({});
   const [items, setItems] = useState([]); // สำหรับ picker วัตถุดิบ
+  const [groups, setGroups] = useState([]); // หมวดหมู่เมนูจากชีท menucodegroup
+  const [groupModal, setGroupModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -25,9 +29,10 @@ export default function QcRdMenu() {
   const [page, setPage] = useState(1);
   const [togglingCode, setTogglingCode] = useState(null);
   const [viewCode, setViewCode] = useState(null);   // เมนูที่กำลังดูสูตร
-  const [editMenu, setEditMenu] = useState(null);   // { code, name, price, items[], isNew }
+  const [editMenu, setEditMenu] = useState(null);   // { code, name, price, group, newGroupName, items[], sources[], isNew }
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const [formMsg, setFormMsg] = useState(null);     // ข้อความในฟอร์ม (ผลการดึงสูตร/รวมรายการซ้ำ)
 
   const loadAll = () => {
     setLoading(true);
@@ -35,10 +40,12 @@ export default function QcRdMenu() {
       fetch('/api/qcrd?sheet=menu').then(r => r.json()),
       fetch('/api/qcrd?sheet=bom').then(r => r.json()),
       fetch('/api/qcrd?sheet=item').then(r => r.json()),
-    ]).then(([m, b, it]) => {
+      fetch('/api/qcrd?sheet=menugroup').then(r => r.json()),
+    ]).then(([m, b, it, g]) => {
       if (m.status === 'success') setMenus(m.data || []); else setError(m.message || 'โหลดชีท menu ไม่สำเร็จ');
       if (b.status === 'success') setBom(b.data || {});
       if (it.status === 'success') setItems(it.data || []);
+      if (g.status === 'success') setGroups(g.data || []);
     }).catch(err => setError(err.message)).finally(() => setLoading(false));
   };
   useEffect(loadAll, []);
@@ -74,19 +81,84 @@ export default function QcRdMenu() {
     () => [...new Set(menus.map(m => m.groupName).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
     [menus]);
 
+  // ตัวเลือกหมวดหมู่ในฟอร์ม: จากชีท menucodegroup + รหัสหมวดที่เมนูใช้อยู่แต่ยังไม่มีชื่อในชีท
+  const groupList = useMemo(() => {
+    const map = new Map(groups.map(g => [g.code, g.name]));
+    menus.forEach(m => { if (m.group && !map.has(m.group)) map.set(m.group, m.groupName || `หมวด ${m.group}`); });
+    return [...map].map(([code, name]) => ({ code, name })).sort((a, b) => a.name.localeCompare(b.name, 'th'));
+  }, [groups, menus]);
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
   const pageRows = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
   useEffect(() => { setPage(1); }, [search]);
 
-  const openAdd = () => setEditMenu({ code: '', name: '', price: '', isNew: true, items: [emptyIng()] });
+  const openAdd = () => {
+    setFormMsg(null);
+    setEditMenu({ code: '', name: '', price: '', group: '', newGroupName: '', isNew: true, items: [emptyIng()], sources: [] });
+  };
   const openEdit = (m) => {
     const rows = (bom[m.code]?.items || []).map(r => ({
       itemCode: r.itemCode, itemName: r.itemName, qty: r.qty ?? '', converter: r.converter ?? 1000,
     }));
-    setEditMenu({ code: m.code, name: m.name, price: m.price ?? '', isNew: false, items: rows.length ? rows : [emptyIng()] });
+    setFormMsg(null);
+    setEditMenu({
+      code: m.code, name: m.name, price: m.price ?? '', group: m.group || '', newGroupName: '',
+      isNew: false, items: rows.length ? rows : [emptyIng()], sources: [],
+    });
   };
   const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000 });
+
+  // ───── ดึงวัตถุดิบจากเมนูอื่นเข้ามาในสูตรที่กำลังแก้ (ทำเมนูเซ็ต/เมนูรวม) ─────
+  const importFromMenu = (src) => {
+    const rows = (bom[src.code]?.items || []).map(r => ({
+      itemCode: r.itemCode, itemName: r.itemName, qty: r.qty ?? '', converter: r.converter ?? 1000,
+      srcCode: src.code, srcName: src.name,
+    }));
+    if (!rows.length) { setFormMsg({ ok: false, msg: `"${src.name}" ยังไม่มีสูตรให้ดึง` }); return; }
+    setEditMenu(m => {
+      const base = m.items.filter(r => r.itemCode);              // ทิ้งแถวว่างที่ยังไม่ได้เลือกวัตถุดิบ
+      const sources = m.sources.some(s => s.code === src.code) ? m.sources : [...m.sources, { code: src.code, name: src.name }];
+      return { ...m, items: [...base, ...rows], sources };
+    });
+    setFormMsg({ ok: true, msg: `ดึงวัตถุดิบจาก "${src.name}" มา ${rows.length} รายการ` });
+  };
+
+  // ถอดวัตถุดิบที่ดึงมาจากเมนูนั้นออกทั้งชุด
+  const removeSource = (code) => setEditMenu(m => {
+    const rest = m.items.filter(r => r.srcCode !== code);
+    return { ...m, items: rest.length ? rest : [emptyIng()], sources: m.sources.filter(s => s.code !== code) };
+  });
+
+  // จำนวนวัตถุดิบที่ซ้ำกัน (เกิดได้เมื่อดึงหลายเมนูที่ใช้วัตถุดิบเดียวกัน)
+  const dupCount = useMemo(() => {
+    if (!editMenu) return 0;
+    const seen = new Set();
+    return editMenu.items.reduce((n, r) => {
+      if (!r.itemCode) return n;
+      if (seen.has(r.itemCode)) return n + 1;
+      seen.add(r.itemCode);
+      return n;
+    }, 0);
+  }, [editMenu]);
+
+  // รวมวัตถุดิบซ้ำเป็นบรรทัดเดียว (บวกยอดใช้เข้าด้วยกัน)
+  const mergeDuplicates = () => {
+    setEditMenu(m => {
+      const out = [];
+      const pos = {};
+      m.items.forEach(r => {
+        if (!r.itemCode) { out.push(r); return; }
+        if (pos[r.itemCode] === undefined) { pos[r.itemCode] = out.length; out.push({ ...r }); return; }
+        const t = out[pos[r.itemCode]];
+        t.qty = Math.round(((parseFloat(t.qty) || 0) + (parseFloat(r.qty) || 0)) * 10000) / 10000;
+        const names = [...new Set([t.srcName, r.srcName].filter(Boolean))];
+        if (names.length) t.srcName = names.join(' + ');
+      });
+      return { ...m, items: out };
+    });
+    setFormMsg({ ok: true, msg: `รวมวัตถุดิบซ้ำ ${dupCount} รายการเข้าด้วยกันแล้ว` });
+  };
 
   const priceMap = useMemo(() => {
     const map = {};
@@ -103,22 +175,30 @@ export default function QcRdMenu() {
 
   const handleSave = async () => {
     if (!editMenu.code.trim() || !editMenu.name.trim()) {
-      setToast({ ok: false, msg: 'กรุณากรอกรหัสและชื่อเมนู' });
+      setFormMsg({ ok: false, msg: 'กรุณากรอกรหัสและชื่อเมนู' });
+      return;
+    }
+    const isNewGroup = editMenu.group === NEW_GROUP;
+    if (isNewGroup && !editMenu.newGroupName.trim()) {
+      setFormMsg({ ok: false, msg: 'กรุณากรอกชื่อหมวดหมู่ใหม่' });
       return;
     }
     setSaving(true);
     setToast(null);
+    setFormMsg(null);
     try {
       const rows = editMenu.items.filter(r => r.itemCode && parseFloat(r.qty) > 0);
       const res = await apiCall('saveMenu', {
         code: editMenu.code.trim(), name: editMenu.name.trim(), price: editMenu.price,
+        group: isNewGroup ? '' : editMenu.group,
+        newGroupName: isNewGroup ? editMenu.newGroupName.trim() : '',
         items: rows.map(r => ({ itemCode: r.itemCode, itemName: r.itemName, qty: parseFloat(r.qty) || 0, converter: parseFloat(r.converter) || 1000 })),
       });
       setToast({ ok: true, msg: `บันทึก "${editMenu.name}" สำเร็จ (${res.data?.bomRows ?? rows.length} วัตถุดิบ)` });
       setEditMenu(null);
       loadAll();
     } catch (err) {
-      setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
+      setFormMsg({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
       setSaving(false);
     }
@@ -186,6 +266,10 @@ export default function QcRdMenu() {
             <option value="ใช้งาน">ใช้งาน</option>
             <option value="ปิดการใช้งาน">ปิดการใช้งาน</option>
           </select>
+          <button onClick={() => setGroupModal(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">
+            <Pencil size={13} /> จัดการหมวดหมู่
+          </button>
         </div>
 
         {error && (
@@ -288,7 +372,9 @@ export default function QcRdMenu() {
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-slate-800">สูตร: {viewMenu.name} <span className="font-mono text-xs text-slate-400 ml-1">{viewMenu.code}</span></h3>
-                <p className="text-xs text-slate-500 mt-0.5">ราคาขาย {fmt(viewMenu.price, 0)} บาท · ต้นทุนรวม {fmt(viewMenu.cost)} บาท</p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {viewMenu.groupName ? `${viewMenu.groupName} · ` : ''}ราคาขาย {fmt(viewMenu.price, 0)} บาท · ต้นทุนรวม {fmt(viewMenu.cost)} บาท
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={() => { openEdit(viewMenu); setViewCode(null); }}
@@ -366,7 +452,7 @@ export default function QcRdMenu() {
             </div>
 
             <div className="p-5 overflow-auto space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div>
                   <label className="text-xs font-bold text-slate-500">รหัสเมนู (POS)</label>
                   <input value={editMenu.code} disabled={!editMenu.isNew}
@@ -379,10 +465,62 @@ export default function QcRdMenu() {
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                 </div>
                 <div>
+                  <label className="text-xs font-bold text-slate-500">หมวดหมู่</label>
+                  <select value={editMenu.group}
+                    onChange={e => setEditMenu(m => ({ ...m, group: e.target.value, newGroupName: e.target.value === NEW_GROUP ? m.newGroupName : '' }))}
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="">— ไม่ระบุหมวดหมู่ —</option>
+                    {groupList.map(g => <option key={g.code} value={g.code}>{g.name}</option>)}
+                    <option value={NEW_GROUP}>＋ เพิ่มหมวดหมู่ใหม่…</option>
+                  </select>
+                </div>
+                <div>
                   <label className="text-xs font-bold text-slate-500">ราคาขาย (บาท)</label>
                   <input type="number" value={editMenu.price} onChange={e => setEditMenu(m => ({ ...m, price: e.target.value }))}
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                 </div>
+              </div>
+
+              {editMenu.group === NEW_GROUP && (
+                <div className="p-3 bg-amber-50/70 border border-amber-100 rounded-xl">
+                  <label className="text-xs font-bold text-slate-500">ชื่อหมวดหมู่ใหม่ (จะถูกเพิ่มลงชีท menucodegroup)</label>
+                  <input value={editMenu.newGroupName} autoFocus
+                    onChange={e => setEditMenu(m => ({ ...m, newGroupName: e.target.value }))}
+                    placeholder="เช่น พิซซ่าหน้าใหม่"
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+              )}
+
+              {/* ดึงสูตรจากเมนูอื่นเข้ามารวม (เมนูเซ็ต/เมนูรวม) */}
+              <div className="p-3 bg-sky-50/60 border border-sky-100 rounded-xl space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                    <ClipboardList size={14} /> เพิ่มเมนูอื่นเข้ามาในสูตรนี้ (ดึงวัตถุดิบของเมนูนั้นมาทั้งชุด)
+                  </span>
+                  {dupCount > 0 && (
+                    <button onClick={mergeDuplicates}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-sky-700 bg-white border border-sky-200 rounded-lg px-2.5 py-1 hover:bg-sky-50">
+                      รวมวัตถุดิบซ้ำ {dupCount} รายการ
+                    </button>
+                  )}
+                </div>
+                <MenuPicker menus={menus} bom={bom} excludeCode={editMenu.code.trim()} onPick={importFromMenu} />
+                {editMenu.sources.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {editMenu.sources.map(s => (
+                      <span key={s.code} className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-sky-200 text-sky-700 rounded-full text-[11px] font-medium">
+                        {s.name}
+                        <button onClick={() => removeSource(s.code)} title="เอาวัตถุดิบชุดนี้ออก"
+                          className="text-sky-300 hover:text-rose-500"><X size={11} /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {formMsg && (
+                  <div className={`text-xs font-semibold flex items-center gap-1 ${formMsg.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {formMsg.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}{formMsg.msg}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -426,6 +564,13 @@ export default function QcRdMenu() {
           </div>
         </div>
       )}
+
+      {/* ───── Modal จัดการหมวดหมู่ ───── */}
+      {groupModal && (
+        <GroupManager groups={groupList} menus={menus}
+          onClose={() => setGroupModal(false)}
+          onSaved={loadAll} />
+      )}
     </div>
   );
 }
@@ -456,6 +601,11 @@ function IngredientRow({ row, items, onChange, onRemove }) {
               {items.find(i => i.code === row.itemCode)?.status === 'ปิดการใช้งาน' && (
                 <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded-full text-[10px] font-bold align-middle">ปิดใช้งาน</span>
               )}
+              {row.srcName && (
+                <span className="ml-1.5 inline-block px-1.5 py-0.5 bg-sky-50 text-sky-600 border border-sky-100 rounded-full text-[10px] font-medium align-middle">
+                  จาก {row.srcName}
+                </span>
+              )}
             </span>
             <button onClick={() => { onChange({ ...row, itemCode: '', itemName: '' }); setQuery(''); }}
               className="text-slate-300 hover:text-rose-500 flex-shrink-0"><X size={14} /></button>
@@ -485,6 +635,134 @@ function IngredientRow({ row, items, onChange, onRemove }) {
       <input type="number" value={row.converter} onChange={e => onChange({ ...row, converter: e.target.value })} placeholder="ตัวแปลง" title="หน่วยเล็กต่อ 1 หน่วยซื้อ เช่น 1000 = ซื้อเป็น กก. ใช้เป็นกรัม"
         className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
       <button onClick={onRemove} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={15} /></button>
+    </div>
+  );
+}
+
+// ค้นหาเมนูที่มีสูตรอยู่แล้ว เพื่อดึงวัตถุดิบทั้งชุดเข้ามาในสูตรที่กำลังแก้
+function MenuPicker({ menus, bom, excludeCode, onPick }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+
+  const suggestions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return menus
+      .filter(m => m.code !== excludeCode && (bom[m.code]?.items?.length || 0) > 0)
+      .filter(m => !q || m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
+        || (m.groupName || '').toLowerCase().includes(q))
+      .slice(0, 15);
+  }, [menus, bom, query, excludeCode]);
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <input value={query} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onChange={e => { setQuery(e.target.value); setOpen(true); }}
+          placeholder="พิมพ์ค้นหาเมนูที่ต้องการดึงสูตร (รหัส/ชื่อ/หมวดหมู่)…"
+          className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500" />
+      </div>
+      {open && suggestions.length > 0 && (
+        <div className="absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-60 overflow-auto">
+          {suggestions.map(m => (
+            <button key={m.code} onMouseDown={() => { onPick(m); setQuery(''); setOpen(false); }}
+              className="block w-full text-left px-3 py-2 text-sm hover:bg-sky-50">
+              <span className="font-mono text-xs text-slate-400 mr-1.5">{m.code}</span>{m.name}
+              <span className="float-right text-xs text-slate-400">{bom[m.code].items.length} วัตถุดิบ</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// จัดการหมวดหมู่เมนู (ชีท menucodegroup): เปลี่ยนชื่อหมวดเดิม / เพิ่มหมวดใหม่
+function GroupManager({ groups, menus, onClose, onSaved }) {
+  const [drafts, setDrafts] = useState(() => Object.fromEntries(groups.map(g => [g.code, g.name])));
+  const [newName, setNewName] = useState('');
+  const [busy, setBusy] = useState('');
+  const [msg, setMsg] = useState(null);
+
+  const countByGroup = useMemo(() => {
+    const c = {};
+    menus.forEach(m => { if (m.group) c[m.group] = (c[m.group] || 0) + 1; });
+    return c;
+  }, [menus]);
+
+  const run = async (key, payload, okMsg) => {
+    setBusy(key);
+    setMsg(null);
+    try {
+      await apiCall('saveMenuGroup', payload);
+      setMsg({ ok: true, msg: okMsg });
+      onSaved();
+    } catch (err) {
+      setMsg({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const addGroup = async () => {
+    const name = newName.trim();
+    if (!name) { setMsg({ ok: false, msg: 'กรุณากรอกชื่อหมวดหมู่' }); return; }
+    await run('__add__', { name }, `เพิ่มหมวดหมู่ "${name}" แล้ว`);
+    setNewName('');
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-slate-800">จัดการหมวดหมู่เมนู</h3>
+            <p className="text-xs text-slate-500 mt-0.5">{groups.length} หมวดในชีท menucodegroup</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><X size={20} /></button>
+        </div>
+
+        <div className="p-5 overflow-auto space-y-2">
+          {groups.length === 0 && <p className="text-sm text-slate-400 text-center py-4">ยังไม่มีหมวดหมู่</p>}
+          {groups.map(g => {
+            const changed = (drafts[g.code] ?? g.name).trim() !== g.name;
+            return (
+              <div key={g.code} className="flex items-center gap-2">
+                <span className="font-mono text-xs text-slate-400 w-10 flex-shrink-0">{g.code}</span>
+                <input value={drafts[g.code] ?? g.name}
+                  onChange={e => setDrafts(d => ({ ...d, [g.code]: e.target.value }))}
+                  className="flex-1 min-w-0 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+                <span className="text-[11px] text-slate-400 w-14 text-right flex-shrink-0">{countByGroup[g.code] || 0} เมนู</span>
+                <button disabled={!changed || Boolean(busy)}
+                  onClick={() => run(g.code, { code: g.code, name: (drafts[g.code] || '').trim() }, `เปลี่ยนชื่อหมวดเป็น "${(drafts[g.code] || '').trim()}" แล้ว`)}
+                  className="p-1.5 rounded-lg border border-slate-200 text-slate-500 disabled:opacity-30 hover:bg-slate-50 flex-shrink-0">
+                  {busy === g.code ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="p-5 border-t border-slate-100 space-y-2">
+          <label className="text-xs font-bold text-slate-500">เพิ่มหมวดหมู่ใหม่</label>
+          <div className="flex items-center gap-2">
+            <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="ชื่อหมวดหมู่"
+              className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <button onClick={addGroup} disabled={Boolean(busy)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-200 rounded-xl">
+              {busy === '__add__' ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} เพิ่ม
+            </button>
+          </div>
+          {msg && (
+            <div className={`text-xs font-semibold flex items-center gap-1 ${msg.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {msg.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}{msg.msg}
+            </div>
+          )}
+          <p className="text-[11px] text-slate-400">
+            เปลี่ยนชื่อหมวดจะมีผลกับทุกเมนูในหมวดนั้นทันที · ถ้าต้องการย้ายเมนูไปหมวดอื่น ให้แก้ที่ฟอร์มของเมนูนั้น
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

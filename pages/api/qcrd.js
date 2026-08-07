@@ -190,7 +190,17 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', data });
     }
 
-    return res.status(400).json({ status: 'error', message: 'ระบุ ?sheet=menu|bom|item' });
+    if (sheet === 'menugroup') {
+      // หมวดหมู่เมนูทั้งหมด (A=รหัสหมวด B=ชื่อหมวด) — ใช้เป็นตัวเลือกตอนเพิ่ม/แก้ไขเมนู
+      const rows = await fetchSheet('menucodegroup');
+      const data = rows.slice(1)
+        .filter(r => (r[0] || '').trim())
+        .map(r => ({ code: (r[0] || '').trim(), name: (r[1] || '').trim() }))
+        .filter(g => g.name);
+      return res.status(200).json({ status: 'success', data });
+    }
+
+    return res.status(400).json({ status: 'error', message: 'ระบุ ?sheet=menu|bom|item|menugroup' });
   } catch (err) {
     console.error('QC/RD API error:', err.message);
     return res.status(502).json({ status: 'error', message: err.message });

@@ -12,6 +12,7 @@
  *          I=รหัสวัตถุดิบ(ตัด 0 นำหน้า) J=ราคาวัตถุดิบ K=ต้นทุน/หน่วยเล็ก L=(ว่าง) M=ต้นทุน/หน่วยเล็ก N=ต้นทุนรวมของแถว
  *   item : A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ(ใช้งาน/ปิดการใช้งาน) F,G,H=รหัสไอเทมทดแทน 1-3
  *          I=ตัวแปลงหน่วย(หน่วยเล็กต่อ 1 หน่วยซื้อ) J=สาขาที่ใช้(คั่นด้วย ,)
+ *   menucodegroup : A=รหัสหมวด(MenuCode) B=ชื่อหมวด
  */
 
 var SHEET_ID = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
@@ -39,6 +40,8 @@ function doPost(e) {
       res = deleteItem_(ss, data);
     } else if (action === 'saveMenuStatus') {
       res = saveMenuStatus_(ss, data);
+    } else if (action === 'saveMenuGroup') {
+      res = saveMenuGroup_(ss, data);
     } else if (action === 'sortBom') {
       res = sortBom_(ss);
     } else {
@@ -51,13 +54,23 @@ function doPost(e) {
 }
 
 // เพิ่ม/แก้ไขเมนู: upsert แถวในชีท menu + แทนที่สูตรทั้งหมดของเมนูนั้นในชีท BOM
-// payload: { code, name, price, items: [{ itemCode, itemName, qty, converter }] }
+// payload: { code, name, price, group, newGroupName, items: [{ itemCode, itemName, qty, converter }] }
+//   group        = รหัสหมวด (คอลัมน์ C) — ส่ง '' เพื่อล้างหมวด, ไม่ส่งเลย = คงหมวดเดิม
+//   newGroupName = ชื่อหมวดใหม่ ถ้าส่งมาจะสร้าง/หาในชีท menucodegroup แล้วใช้รหัสนั้นแทน group
 function saveMenu_(ss, data) {
   var code = String(data.code || '').trim();
   var name = String(data.name || '').trim();
   var price = Number(data.price) || '';
   var items = data.items || [];
   if (!code || !name) return { status: 'error', message: 'ต้องระบุรหัสและชื่อเมนู' };
+
+  // หมวดหมู่: null = ไม่แตะคอลัมน์ C ของแถวเดิม
+  var groupCode = null;
+  if (String(data.newGroupName || '').trim()) {
+    groupCode = upsertMenuGroup_(ss, '', data.newGroupName).code;
+  } else if (data.group !== undefined) {
+    groupCode = String(data.group || '').trim();
+  }
 
   // ราคาวัตถุดิบจากชีท item (ใช้คำนวณต้นทุน)
   var itemSh = ss.getSheetByName('item');
@@ -94,11 +107,12 @@ function saveMenu_(ss, data) {
   }
   var costCell = bomRows.length ? Math.round(totalCost * 10000) / 10000 : '';
   if (found > 0) {
-    menuSh.getRange(found, 2, 1, 2).setValues([[name, menuSh.getRange(found, 3).getValue() || '']]);
+    menuSh.getRange(found, 2).setValue(name);
+    if (groupCode !== null) menuSh.getRange(found, 3).setValue(groupCode);
     if (data.price !== undefined && data.price !== '') menuSh.getRange(found, 4).setValue(price);
     if (bomRows.length) menuSh.getRange(found, 5).setValue(costCell);
   } else {
-    menuSh.appendRow([code, name, '', price, costCell]);
+    menuSh.appendRow([code, name, groupCode || '', price, costCell]);
   }
 
   // แทนที่แถว BOM เดิมของเมนูนี้ (ลบจากล่างขึ้นบน แล้วต่อท้ายใหม่)
@@ -112,7 +126,49 @@ function saveMenu_(ss, data) {
     sortBom_(ss); // จัดเรียงชีท BOM ใหม่ทุกครั้ง สูตรของเมนูเดียวกันจะอยู่ติดกันเสมอ
   }
 
-  return { status: 'success', data: { code: code, bomRows: bomRows.length, totalCost: costCell } };
+  return { status: 'success', data: { code: code, bomRows: bomRows.length, totalCost: costCell, group: groupCode } };
+}
+
+// หมวดหมู่เมนู (ชีท menucodegroup: A=รหัสหมวด B=ชื่อหมวด)
+// - ส่ง code มา → เปลี่ยนชื่อหมวดนั้น (ไม่เจอรหัส = สร้างใหม่ด้วยรหัสที่ส่งมา)
+// - ไม่ส่ง code → หาจากชื่อก่อน ถ้าไม่มีค่อยสร้างรหัสใหม่ (เลขถัดจากรหัสสูงสุดในชีท)
+function upsertMenuGroup_(ss, code, name) {
+  var sh = ss.getSheetByName('menucodegroup');
+  if (!sh) throw new Error('ไม่พบชีท menucodegroup');
+  code = String(code || '').trim();
+  name = String(name || '').trim();
+  if (!code && !name) throw new Error('ต้องระบุรหัสหรือชื่อหมวดหมู่');
+
+  var values = sh.getLastRow() > 1 ? sh.getRange(1, 1, sh.getLastRow(), 2).getValues() : [[]];
+  var maxCode = 0;
+  var foundByName = -1;
+  for (var i = 1; i < values.length; i++) {
+    var c = String(values[i][0] || '').trim();
+    var n = String(values[i][1] || '').trim();
+    var asNum = Number(c);
+    if (c && !isNaN(asNum) && asNum > maxCode) maxCode = asNum;
+    if (code && c === code) {
+      if (name && name !== n) sh.getRange(i + 1, 2).setValue(name);
+      return { code: c, name: name || n, renamed: Boolean(name && name !== n) };
+    }
+    if (!code && name && n === name && foundByName < 0) foundByName = i;
+  }
+  if (foundByName >= 0) return { code: String(values[foundByName][0] || '').trim(), name: name };
+  if (!name) throw new Error('ไม่พบรหัสหมวด ' + code + ' และไม่ได้ระบุชื่อหมวดใหม่');
+
+  var newCode = code || String(maxCode + 1);
+  sh.appendRow([newCode, name]);
+  return { code: newCode, name: name, created: true };
+}
+
+// เพิ่ม/เปลี่ยนชื่อหมวดหมู่เมนู
+// payload: { code, name }  — มี code = เปลี่ยนชื่อหมวดนั้น, ไม่มี code = เพิ่มหมวดใหม่
+function saveMenuGroup_(ss, data) {
+  try {
+    return { status: 'success', data: upsertMenuGroup_(ss, data.code, data.name) };
+  } catch (err) {
+    return { status: 'error', message: err.message };
+  }
 }
 
 // เรียงชีท BOM ให้ลำดับเมนู "ตรงกับหน้าเว็บ" — คือเรียงตามลำดับแถวในชีท menu
