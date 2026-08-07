@@ -29,11 +29,13 @@ import {
   AlertTriangle,
   ClipboardList,
   FileText,
-  PackageOpen
+  PackageOpen,
+  Fingerprint
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
 import EmployeeList from '../components/EmployeeList';
+import Attendance from '../components/Attendance';
 import OtherExpense from '../components/OtherExpense';
 import QcRdMenu from '../components/QcRdMenu';
 import QcRdItems from '../components/QcRdItems';
@@ -2178,6 +2180,13 @@ export default function App() {
                     <Users size={16} />
                     <span>รายชื่อพนักงาน</span>
                   </button>
+                  <button
+                    onClick={() => { setActiveTab('attendance'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'attendance' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <Fingerprint size={16} />
+                    <span>ดูสแกนหน้า</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -2286,6 +2295,7 @@ export default function App() {
                 {activeTab === 'itemSearch' && <Search size={20} className="text-amber-600" />}
                 {(activeTab === 'stockList' || activeTab === 'stockTotal') && <PackageSearch size={20} className="text-amber-600" />}
                 {activeTab === 'employeeList' && <Users size={20} className="text-amber-600" />}
+                {activeTab === 'attendance' && <Fingerprint size={20} className="text-amber-600" />}
                 {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdMenu' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdItems' && <ClipboardList size={20} className="text-amber-600" />}
@@ -2298,6 +2308,7 @@ export default function App() {
                   : activeTab === 'stockList' ? 'นับสต๊อกและขอเบิก'
                   : activeTab === 'stockTotal' ? 'ดูยอดรวมทุกสาขา'
                   : activeTab === 'employeeList' ? 'รายชื่อพนักงาน'
+                  : activeTab === 'attendance' ? 'ดูสแกนหน้า (เข้า-ออกงาน)'
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
@@ -2339,6 +2350,9 @@ export default function App() {
             {/* HR VIEWS (รายชื่อพนักงาน — ดึงจาก Google Sheet ผ่าน GAS) */}
             {activeTab === 'employeeList' && <EmployeeList />}
 
+            {/* HR: ดูสแกนหน้า (เข้า-ออกงาน) — จากเครื่องสแกน ZKBio Time ผ่าน /api/attendance */}
+            {activeTab === 'attendance' && <Attendance />}
+
             {/* ACC: ค่าใช้จ่ายอื่นๆ (กรอก+บันทึกลง Google Sheet) */}
             {activeTab === 'otherExpense' && <OtherExpense />}
 
@@ -2356,7 +2370,7 @@ export default function App() {
             {activeTab === 'branchRequisition' && <BranchRequisition />}
 
             {/* FILTER PANEL */}
-            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'otherExpense' || activeTab === 'qcrdMenu' || activeTab === 'qcrdItems' || activeTab === 'aiNarai' || activeTab === 'planList' || activeTab === 'branchRequisition') && (
+            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'attendance' || activeTab === 'otherExpense' || activeTab === 'qcrdMenu' || activeTab === 'qcrdItems' || activeTab === 'aiNarai' || activeTab === 'planList' || activeTab === 'branchRequisition') && (
             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">กำหนดช่วงวันที่และสาขา</h2>
               <div className="flex flex-wrap items-center gap-2 mb-4">

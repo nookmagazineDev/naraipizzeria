@@ -8,7 +8,7 @@
 //    GET /ctranbetweendate?start=YYYY-MM-DD&end=YYYY-MM-DD   → รายการสินค้า (dbo.Ctrans)
 //    GET /cpaidbetweendate?start=YYYY-MM-DD&end=YYYY-MM-DD   → รายบิล/การชำระ (ตารางบิล)
 //  endpoint ZKBio Time 9 (เครื่องสแกนนิ้ว — ฐานข้อมูลแยกบน SQLEXPRESS):
-//    GET /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD[&emp=รหัส] → log สแกนนิ้ว
+//    GET /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD[&emp=รหัส][&area=รหัสสาขา] → log สแกนนิ้ว
 //    GET /zk/employees           → รายชื่อพนักงานในเครื่องสแกน + แผนก
 //    GET /zk/ping /zk/tables /zk/columns /zk/sample → debug ฐาน ZKBio
 //  endpoint ช่วย debug:
@@ -86,6 +86,9 @@ if (!zkInstance) zkConfig.port = Number(process.env.ZK_DB_PORT) || 1433;
 const ZK_TRANS_TABLE = (process.env.ZK_TRANS_TABLE || 'iclock_transaction').replace(/[^A-Za-z0-9_]/g, '');
 const ZK_EMP_TABLE   = (process.env.ZK_EMP_TABLE   || 'personnel_employee').replace(/[^A-Za-z0-9_]/g, '');
 const ZK_DEPT_TABLE  = (process.env.ZK_DEPT_TABLE  || 'personnel_department').replace(/[^A-Za-z0-9_]/g, '');
+// เพดานจำนวนแถวของ /zk/transactions (ค่านี้ต้องตรงกับรายการ ZK_ROW_CAPS ใน pages/api/attendance.js
+// ซึ่งใช้ตรวจว่าข้อมูลถูกตัดเพราะชนเพดานหรือเปล่า)
+const ZK_MAX_ROWS = Math.max(1, Number(process.env.ZK_MAX_ROWS) || 100000);
 
 // ต่อ ZKBio แบบ lazy: ต่อครั้งแรกเมื่อมีคนเรียก /zk/* — ต่อไม่ได้ก็ไม่กระทบ API ยอดขายหลัก
 let zkPoolPromise = null;
@@ -296,9 +299,11 @@ app.get('/zk/ping', async (req, res) => {
   }
 });
 
-// ── /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD&emp=รหัส : log สแกนนิ้วดิบ ──
+// ── /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD&emp=รหัส&area=รหัสสาขา : log สแกนนิ้วดิบ ──
+//    area (ไม่บังคับ) = รหัสสาขาที่ตั้งไว้ในเครื่องสแกน (area_alias เช่น SUM/XCM/ZBW)
+//    กรองที่ SQL เพื่อลดข้อมูลที่ส่งกลับ — หน้าเว็บ "ดูสแกนหน้า" ส่งมาเมื่อผู้ใช้เลือกสาขา
 app.get('/zk/transactions', async (req, res) => {
-  const { start, end, emp } = req.query;
+  const { start, end, emp, area } = req.query;
   if (!start || !end) return res.status(400).json({ error: 'ต้องมี start และ end' });
   try {
     const pool = await getZkPool();
@@ -310,12 +315,21 @@ app.get('/zk/transactions', async (req, res) => {
       dbReq.input('emp', sql.VarChar, String(emp).trim());
       empFilter = ' AND emp_code = @emp';
     }
+    let areaFilter = '';
+    if (area != null && String(area).trim() !== '') {
+      dbReq.input('area', sql.NVarChar, String(area).trim().toUpperCase());
+      areaFilter = ' AND UPPER(area_alias) = @area';
+    }
+    // เพดานแถว: หน้า "ดูสแกนหน้า" มีช่วง "เดือนนี้/เดือนที่แล้ว" แบบทุกสาขา
+    // ซึ่งเกิน 20,000 แถวได้ง่าย (≈20 สาขา x 15 คน x 4 ครั้ง/วัน x 30 วัน)
+    // แถวเล็กมากและ response ถูก gzip อยู่แล้ว จึงขยายเพดานได้โดยไม่หนัก
+    // (ถ้าชนเพดานพอดี ฝั่ง /api/attendance จะเตือนผู้ใช้ให้แคบช่วงวันที่ลง)
     const result = await dbReq.query(`
-      SELECT TOP 20000
+      SELECT TOP ${ZK_MAX_ROWS}
         emp_code, punch_time, punch_state, verify_type,
         terminal_sn, terminal_alias, area_alias
       FROM dbo.${ZK_TRANS_TABLE}
-      WHERE punch_time >= @start AND punch_time <= @end${empFilter}
+      WHERE punch_time >= @start AND punch_time <= @end${empFilter}${areaFilter}
       ORDER BY punch_time
     `);
     res.json({ data: result.recordset.map(mapRow) });
