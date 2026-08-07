@@ -4,14 +4,15 @@
 //   → { status:'success', source, branch, start, end, count, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
 //
 // มี upstream 2 ทาง ลองไล่ตามลำดับ:
-//   1) office-server (storenarai.dyndns.tv:8787) — endpoint /attendance ตัวที่ Narai-branch ใช้อยู่จริง
-//      ต่อ ZKBio9 อยู่แล้วและรันอยู่ตลอด จึงเป็นทางหลัก (โปรเจคนี้ก็เรียกเครื่องนี้อยู่แล้วใน usagemenu/usagebytable)
+//   1) office-server (203.154.185.48:14322) — endpoint /attendance ที่ต่อฐาน ZKBio9 อยู่จริง
+//      เป็นทางหลัก (คนละเครื่อง/คนละพอร์ตกับ usage API ที่ usagemenu/usagebytable เรียก)
+//      ตั้ง env ATTENDANCE_API_BASE ทับได้เวลา IP/พอร์ตเปลี่ยน
 //   2) host API ของร้าน (api.khanoykorshabu.com) — endpoint /zk/* ใน host-server/server.js ของ repo นี้
 //      ใช้เป็นทางสำรอง เผื่อวันหน้าเครื่องออฟฟิศปิด แต่เครื่องร้านอัปเดต server.js แล้ว
 //
 // สองทางนี้คืนคนละรูปแบบ จึงแปลงให้เป็นรูปเดียวกันก่อนส่งออก
 
-const OFFICE_API = process.env.USAGE_API_BASE || 'http://storenarai.dyndns.tv:8787';
+const OFFICE_API = process.env.ATTENDANCE_API_BASE || 'http://203.154.185.48:14322';
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 
 // ป้ายกำกับตามมาตรฐาน ZKTeco — แต่ละเครื่องตั้งค่าปุ่มไม่เหมือนกัน หน้าเว็บจึงคิด "เข้า/ออก"

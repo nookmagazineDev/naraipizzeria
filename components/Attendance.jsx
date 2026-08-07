@@ -262,7 +262,7 @@ export default function Attendance() {
             {/* ข้อความจาก API บอกอยู่แล้วว่าลอง upstream ตัวไหนไปบ้างและพลาดเพราะอะไร */}
             <div className="text-xs text-rose-500 mt-1">
               {errorCode === 'ZK_UPSTREAM_FAILED'
-                ? 'ตรวจว่าเครื่องออฟฟิศ (storenarai.dyndns.tv:8787) เปิดอยู่ และ ZKBio Time ยังส่งข้อมูลเข้าฐานตามปกติ'
+                ? 'ตรวจว่าเครื่องออฟฟิศ (203.154.185.48:14322) เปิดอยู่ และ ZKBio Time ยังส่งข้อมูลเข้าฐานตามปกติ'
                 : 'ถ้าขึ้นว่าต่อฐานข้อมูล ZKBio ไม่ได้ ให้ตรวจว่าเครื่องที่รัน ZKBio เปิด SQL Server และตั้งค่า ZK_DB_* ไว้แล้ว'}
             </div>
           </div>
