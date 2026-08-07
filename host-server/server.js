@@ -8,7 +8,7 @@
 //    GET /ctranbetweendate?start=YYYY-MM-DD&end=YYYY-MM-DD   → รายการสินค้า (dbo.Ctrans)
 //    GET /cpaidbetweendate?start=YYYY-MM-DD&end=YYYY-MM-DD   → รายบิล/การชำระ (ตารางบิล)
 //  endpoint ZKBio Time 9 (เครื่องสแกนนิ้ว — ฐานข้อมูลแยกบน SQLEXPRESS):
-//    GET /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD[&emp=รหัส] → log สแกนนิ้ว
+//    GET /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD[&emp=รหัส][&area=รหัสสาขา] → log สแกนนิ้ว
 //    GET /zk/employees           → รายชื่อพนักงานในเครื่องสแกน + แผนก
 //    GET /zk/ping /zk/tables /zk/columns /zk/sample → debug ฐาน ZKBio
 //  endpoint ช่วย debug:
@@ -296,9 +296,11 @@ app.get('/zk/ping', async (req, res) => {
   }
 });
 
-// ── /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD&emp=รหัส : log สแกนนิ้วดิบ ──
+// ── /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD&emp=รหัส&area=รหัสสาขา : log สแกนนิ้วดิบ ──
+//    area (ไม่บังคับ) = รหัสสาขาที่ตั้งไว้ในเครื่องสแกน (area_alias เช่น SUM/XCM/ZBW)
+//    กรองที่ SQL เพื่อลดข้อมูลที่ส่งกลับ — หน้าเว็บ "ดูสแกนหน้า" ส่งมาเมื่อผู้ใช้เลือกสาขา
 app.get('/zk/transactions', async (req, res) => {
-  const { start, end, emp } = req.query;
+  const { start, end, emp, area } = req.query;
   if (!start || !end) return res.status(400).json({ error: 'ต้องมี start และ end' });
   try {
     const pool = await getZkPool();
@@ -310,12 +312,17 @@ app.get('/zk/transactions', async (req, res) => {
       dbReq.input('emp', sql.VarChar, String(emp).trim());
       empFilter = ' AND emp_code = @emp';
     }
+    let areaFilter = '';
+    if (area != null && String(area).trim() !== '') {
+      dbReq.input('area', sql.NVarChar, String(area).trim().toUpperCase());
+      areaFilter = ' AND UPPER(area_alias) = @area';
+    }
     const result = await dbReq.query(`
       SELECT TOP 20000
         emp_code, punch_time, punch_state, verify_type,
         terminal_sn, terminal_alias, area_alias
       FROM dbo.${ZK_TRANS_TABLE}
-      WHERE punch_time >= @start AND punch_time <= @end${empFilter}
+      WHERE punch_time >= @start AND punch_time <= @end${empFilter}${areaFilter}
       ORDER BY punch_time
     `);
     res.json({ data: result.recordset.map(mapRow) });
