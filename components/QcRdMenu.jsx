@@ -124,7 +124,7 @@ export default function QcRdMenu() {
       // ที่มาที่บันทึกไว้ในชีท (คอลัมน์ O–R) — เอากลับมาโชว์และแก้สัดส่วนต่อได้
       srcCode: r.srcCode || undefined, srcName: r.srcName || undefined,
       srcBase: r.srcBase ?? undefined,
-      tag: r.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL, noCost: Boolean(r.noCost),
+      tag: r.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL, noDeduct: Boolean(r.noDeduct),
     }));
     // สร้างชิป "เมนูที่ดึงมา" ใหม่จากที่มาของแต่ละแถว
     const sources = [];
@@ -139,7 +139,7 @@ export default function QcRdMenu() {
       isNew: false, items: rows.length ? rows : [emptyIng()], sources,
     });
   };
-  const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000, tag: TAG_MATERIAL, noCost: false });
+  const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000, tag: TAG_MATERIAL, noDeduct: false });
 
   // ───── ดึงวัตถุดิบจากเมนูอื่นเข้ามาในสูตรที่กำลังแก้ (ทำเมนูเซ็ต/เมนูรวม) ─────
   // factor = สัดส่วนของสูตรต้นทาง (1 = ทั้งสูตร, 0.2 = 20% ของสูตร, 2 = 2 เท่า)
@@ -167,7 +167,7 @@ export default function QcRdMenu() {
       return {
         itemCode: r.itemCode, itemName: r.itemName, qty: roundQty(base * factor),
         converter: r.converter ?? 1000, srcCode: src.code, srcName: src.name, srcBase: base,
-        tag: r.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL, noCost: Boolean(r.noCost),
+        tag: r.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL, noDeduct: Boolean(r.noDeduct),
       };
     });
     setEditMenu(m => ({
@@ -251,7 +251,6 @@ export default function QcRdMenu() {
   }, [bom, editMenu]);
 
   const estCost = (rows) => rows.reduce((s, r) => {
-    if (r.noCost) return s;                     // ติ๊ก "ไม่คิดต้นทุน" ไว้ = ไม่รวมในต้นทุนเมนู
     const p = priceMap[r.itemCode] || 0;
     const conv = parseFloat(r.converter) || 1000;
     const qty = parseFloat(r.qty) || 0;
@@ -287,7 +286,7 @@ export default function QcRdMenu() {
           srcCode: r.srcCode || '', srcName: r.srcName || '',
           srcFactor: r.srcCode ? factorOf(r.srcCode) : '',
           srcBase: r.srcBase ?? '',
-          tag: r.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL, noCost: r.noCost ? 'Y' : '',
+          tag: r.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL, noDeduct: r.noDeduct ? 'Y' : '',
         })),
       });
 
@@ -537,10 +536,10 @@ export default function QcRdMenu() {
                               #{r.tag}
                             </span>
                           )}
-                          {r.noCost && (
-                            <span title="ไม่ถูกนำไปรวมเป็นต้นทุนของเมนู"
+                          {r.noDeduct && (
+                            <span title="ไม่ถูกตัดสต็อกตามสูตร (ต้นทุนยังคิดปกติ)"
                               className="ml-1.5 inline-block px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-[10px] font-bold align-middle">
-                              ไม่คิดต้นทุน
+                              ไม่ตัด BOM
                             </span>
                           )}
                           {offItem && (
@@ -864,11 +863,11 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
           className="flex-1 min-w-[200px] px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
           {TAG_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
-        <label title="ยังอยู่ในสูตร (ตัดสต็อกได้) แต่ไม่ถูกนำไปรวมเป็นต้นทุนของเมนู"
-          className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold border cursor-pointer select-none ${row.noCost ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-slate-500 border-slate-200'}`}>
-          <input type="checkbox" checked={Boolean(row.noCost)}
-            onChange={e => onChange({ ...row, noCost: e.target.checked })} className="accent-amber-500" />
-          ไม่คิดต้นทุน
+        <label title="ไม่ถูกตัดสต็อกตามสูตรเวลาขาย — ต้นทุนของแถวนี้ยังถูกคิดรวมในเมนูตามปกติ"
+          className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold border cursor-pointer select-none ${row.noDeduct ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-slate-500 border-slate-200'}`}>
+          <input type="checkbox" checked={Boolean(row.noDeduct)}
+            onChange={e => onChange({ ...row, noDeduct: e.target.checked })} className="accent-amber-500" />
+          ไม่ตัด BOM
         </label>
         {info?.itemType === 'แพ็กเกจจิ้ง' && (
           <span className="inline-block px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-[10px] font-bold">
