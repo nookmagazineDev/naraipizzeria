@@ -110,6 +110,9 @@ async function fetchSheet(name) {
 
 const num = v => { const n = parseFloat(String(v).replace(/,/g, '')); return isNaN(n) ? null : n; };
 
+// ค่าที่นับว่า "ติ๊กไว้" ในชีท (Google Sheets เขียน checkbox เป็น TRUE, สคริปต์เขียน Y)
+const TRUTHY = /^(y|yes|true|1|ใช่)$/i;
+
 // ตำแหน่งคอลัมน์ "ปริมาณที่ได้ / หน่วยที่ได้" ในชีท menu (0-indexed)
 // มองหาจากหัวตารางตั้งแต่คอลัมน์ G เป็นต้นไป (กันชนกับ D=UnitPrice) ไม่เจอใช้ G/H ตามค่าเริ่มต้น
 // ต้องตรงกับฝั่งเขียนใน qcrd-apps-script.gs (yieldCols_)
@@ -177,6 +180,9 @@ export default async function handler(req, res) {
           srcName: (r[15] || '').trim(),
           srcFactor: num(r[16]),
           srcBase: num(r[17]),
+          // S=แท็ก · T=ไม่คิดต้นทุน (แถวยังอยู่ในสูตรแต่ไม่ถูกรวมเป็นต้นทุนเมนู)
+          tag: (r[18] || '').trim(),
+          noCost: TRUTHY.test((r[19] || '').trim()),
         });
       });
       return res.status(200).json({ status: 'success', data: map });
@@ -206,6 +212,9 @@ export default async function handler(req, res) {
             usedBranches: (r[9] || '').split(',').map(s => s.trim()).filter(Boolean),
             // N=หมวดสโตร์ (ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
             storeCategory: (r[13] || '').trim(),
+            // O=ประเภท (วัตถุดิบ/แพ็กเกจจิ้ง) · P=ใช้กับ (ทั้งสอง/ทานที่ร้าน/ห่อกลับบ้าน)
+            itemType: (r[14] || '').trim(),
+            usedWhen: (r[15] || '').trim(),
             _row: row,
           };
         });

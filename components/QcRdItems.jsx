@@ -20,6 +20,11 @@ const codeMatch = (code, q) => {
   return c.includes(s) || c.replace(/^0+/, '').includes(s.replace(/^0+/, ''));
 };
 
+// ประเภทวัตถุดิบ (ชีท item คอลัมน์ O) — แยกบรรจุภัณฑ์ออกจากวัตถุดิบอาหาร
+// ใช้กับ (คอลัมน์ P) มีความหมายเฉพาะกับแพ็กเกจจิ้ง: ไว้แยกต้นทุนทานที่ร้าน vs ห่อกลับบ้านตอนตัดสูตร
+const PACKAGING = 'แพ็กเกจจิ้ง';
+const USED_WHEN = ['ทั้งสอง', 'ทานที่ร้าน', 'ห่อกลับบ้าน'];
+
 // รายชื่อสาขาสำหรับเลือก "สาขาที่ใช้ไอเทม" (ชุดเดียวกับหน้าค่าใช้จ่าย)
 const BRANCHES = [
   'SJP', 'CRM', 'XCM', 'SLR', 'SUM', 'XUM', 'SCS', 'SMP', 'XSB', 'XHH',
@@ -34,6 +39,7 @@ export default function QcRdItems() {
   const [unitFilter, setUnitFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [storeFilter, setStoreFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');   // '' = ทุกประเภท, 'food' = วัตถุดิบอาหาร, PACKAGING
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null); // { ok, msg }
   const [editItem, setEditItem] = useState(null); // { code, name, status, subs[] }
@@ -68,6 +74,7 @@ export default function QcRdItems() {
     () => [...new Set(items.map(i => i.storeCategory).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
     [items]);
   const noStoreCount = useMemo(() => items.filter(i => !i.storeCategory).length, [items]);
+  const packagingCount = useMemo(() => items.filter(i => i.itemType === PACKAGING).length, [items]);
   const NO_STORE = '__none__'; // ค่าพิเศษของตัวกรอง = แสดงเฉพาะรายการที่ยังไม่ได้ระบุหมวดสโตร์
 
   // รหัสที่มีมากกว่า 1 แถวในชีท (กรอกซ้ำ) — เตือนไว้ เพราะฟีเจอร์แก้ไข/ลบด้วยรหัสอย่างเดียวจะโดนแค่แถวแรกเสมอ
@@ -84,10 +91,12 @@ export default function QcRdItems() {
       if (statusFilter && i.status !== statusFilter) return false;
       if (storeFilter === NO_STORE) { if (i.storeCategory) return false; }
       else if (storeFilter && (i.storeCategory || '') !== storeFilter) return false;
+      if (typeFilter === PACKAGING && i.itemType !== PACKAGING) return false;
+      if (typeFilter === 'food' && i.itemType === PACKAGING) return false;
       if (!q) return true;
       return codeMatch(i.code, q) || i.name.toLowerCase().includes(q);
     });
-  }, [items, search, unitFilter, statusFilter, storeFilter]);
+  }, [items, search, unitFilter, statusFilter, storeFilter, typeFilter]);
 
   const saveUnits = async () => {
     setSaving(true);
@@ -110,12 +119,14 @@ export default function QcRdItems() {
     // หน่วยที่ระบบวิเคราะห์เองยังไม่ได้อยู่ในชีท — ใส่ให้เป็นค่าตั้งต้นในช่อง กดบันทึกแล้วจะลงชีทจริง
     price: i.price ?? '', unit: i.unit || '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
     storeCategory: i.storeCategory || '', addingNewStore: false,
+    itemType: i.itemType || '', usedWhen: i.usedWhen || '',
   });
 
   const openNew = () => setEditItem({
     isNew: true,
     code: '', name: '', status: 'ใช้งาน', subs: [],
     price: '', unit: '', converter: '', branches: [], storeCategory: '', addingNewStore: false,
+    itemType: '', usedWhen: '',
   });
 
   const toggleBranch = (b) => setEditItem(m => ({
@@ -137,6 +148,8 @@ export default function QcRdItems() {
         status: editItem.status, subs: editItem.subs.slice(0, 3),
         price: editItem.price, unit: (editItem.unit || '').trim(), converter: editItem.converter,
         branches: editItem.branches, storeCategory: (editItem.storeCategory || '').trim(),
+        // ประเภท/ใช้กับ — ไว้แยกต้นทุนบรรจุภัณฑ์ระหว่างทานที่ร้านกับห่อกลับบ้าน
+        itemType: editItem.itemType || '', usedWhen: editItem.itemType === PACKAGING ? (editItem.usedWhen || '') : '',
       });
       setToast({ ok: true, msg: editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ` });
       setEditItem(null);
@@ -229,6 +242,12 @@ export default function QcRdItems() {
             {storeCategories.map(s => <option key={s} value={s}>{s}</option>)}
             {noStoreCount > 0 && <option value={NO_STORE}>— ไม่ได้ระบุ ({noStoreCount})</option>}
           </select>
+          <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="">ทุกประเภท</option>
+            <option value="food">วัตถุดิบอาหาร</option>
+            <option value={PACKAGING}>{PACKAGING} ({packagingCount})</option>
+          </select>
         </div>
 
         {(error || (toast && !toast.ok)) && (
@@ -271,7 +290,15 @@ export default function QcRdItems() {
                       </span>
                     )}
                   </td>
-                  <td className={`px-4 py-2 ${i.status === 'ปิดการใช้งาน' ? '' : 'text-slate-800'}`}>{i.name}</td>
+                  <td className={`px-4 py-2 ${i.status === 'ปิดการใช้งาน' ? '' : 'text-slate-800'}`}>
+                    {i.name}
+                    {i.itemType === PACKAGING && (
+                      <span title={`บรรจุภัณฑ์${i.usedWhen ? ` · ใช้กับ${i.usedWhen}` : ''}`}
+                        className="ml-1.5 inline-block px-1.5 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-[10px] font-bold align-middle">
+                        {PACKAGING}{i.usedWhen && i.usedWhen !== USED_WHEN[0] ? ` · ${i.usedWhen}` : ''}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-2 text-center whitespace-nowrap">
                     {i.unit ? (
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${i.unitSource === 'sheet' ? 'bg-slate-100 text-slate-600' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
@@ -395,6 +422,33 @@ export default function QcRdItems() {
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
               </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-500">ประเภท</label>
+                  <select value={editItem.itemType}
+                    onChange={e => setEditItem(m => ({ ...m, itemType: e.target.value, usedWhen: e.target.value === PACKAGING ? (m.usedWhen || USED_WHEN[0]) : '' }))}
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                    <option value="">วัตถุดิบอาหาร</option>
+                    <option value={PACKAGING}>{PACKAGING} (บรรจุภัณฑ์)</option>
+                  </select>
+                </div>
+                {editItem.itemType === PACKAGING && (
+                  <div>
+                    <label className="text-xs font-bold text-slate-500">ใช้กับ</label>
+                    <select value={editItem.usedWhen || USED_WHEN[0]}
+                      onChange={e => setEditItem(m => ({ ...m, usedWhen: e.target.value }))}
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                      {USED_WHEN.map(w => <option key={w} value={w}>{w}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+              {editItem.itemType === PACKAGING && (
+                <p className="-mt-1 text-[11px] text-violet-600">
+                  ทำเครื่องหมายเป็นบรรจุภัณฑ์ไว้ เพื่อให้แยกต้นทุนระหว่างลูกค้าทานที่ร้านกับห่อกลับบ้านได้ในอนาคต
+                </p>
+              )}
 
               <div>
                 <label className="text-xs font-bold text-slate-500">หมวดสโตร์ <span className="font-normal">(ตำแหน่งจัดเก็บ เช่น ของแห้ง / ห้องผัก / ตู้1)</span></label>
