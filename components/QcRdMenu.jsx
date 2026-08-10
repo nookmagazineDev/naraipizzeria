@@ -65,6 +65,13 @@ export default function QcRdMenu() {
     return m;
   }, [items]);
 
+  // แท็กที่เคยใช้ในสูตรทั้งหมด (ใช้เป็นตัวเลือกในช่องติดแท็ก)
+  const bomTags = useMemo(() => {
+    const set = new Set();
+    Object.values(bom).forEach(b => (b.items || []).forEach(r => { if (r.tag) set.add(r.tag); }));
+    return [...set].sort((a, b) => a.localeCompare(b, 'th'));
+  }, [bom]);
+
   // หน่วยซื้อที่มีอยู่จริงในชีท item (ใช้เป็นตัวเลือกในช่องหน่วยของแถววัตถุดิบ)
   const itemUnits = useMemo(
     () => [...new Set(items.map(i => i.unit).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
@@ -119,6 +126,7 @@ export default function QcRdMenu() {
       // ที่มาที่บันทึกไว้ในชีท (คอลัมน์ O–R) — เอากลับมาโชว์และแก้สัดส่วนต่อได้
       srcCode: r.srcCode || undefined, srcName: r.srcName || undefined,
       srcBase: r.srcBase ?? undefined,
+      tag: r.tag || '', noCost: Boolean(r.noCost),
     }));
     // สร้างชิป "เมนูที่ดึงมา" ใหม่จากที่มาของแต่ละแถว
     const sources = [];
@@ -133,7 +141,7 @@ export default function QcRdMenu() {
       isNew: false, items: rows.length ? rows : [emptyIng()], sources,
     });
   };
-  const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000 });
+  const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000, tag: '', noCost: false });
 
   // ───── ดึงวัตถุดิบจากเมนูอื่นเข้ามาในสูตรที่กำลังแก้ (ทำเมนูเซ็ต/เมนูรวม) ─────
   // factor = สัดส่วนของสูตรต้นทาง (1 = ทั้งสูตร, 0.2 = 20% ของสูตร, 2 = 2 เท่า)
@@ -161,6 +169,7 @@ export default function QcRdMenu() {
       return {
         itemCode: r.itemCode, itemName: r.itemName, qty: roundQty(base * factor),
         converter: r.converter ?? 1000, srcCode: src.code, srcName: src.name, srcBase: base,
+        tag: r.tag || '', noCost: Boolean(r.noCost),
       };
     });
     setEditMenu(m => ({
@@ -244,6 +253,7 @@ export default function QcRdMenu() {
   }, [bom, editMenu]);
 
   const estCost = (rows) => rows.reduce((s, r) => {
+    if (r.noCost) return s;                     // ติ๊ก "ไม่คิดต้นทุน" ไว้ = ไม่รวมในต้นทุนเมนู
     const p = priceMap[r.itemCode] || 0;
     const conv = parseFloat(r.converter) || 1000;
     const qty = parseFloat(r.qty) || 0;
@@ -279,6 +289,7 @@ export default function QcRdMenu() {
           srcCode: r.srcCode || '', srcName: r.srcName || '',
           srcFactor: r.srcCode ? factorOf(r.srcCode) : '',
           srcBase: r.srcBase ?? '',
+          tag: r.tag || '', noCost: r.noCost ? 'Y' : '',
         })),
       });
 
@@ -523,6 +534,17 @@ export default function QcRdMenu() {
                               จาก {r.srcName}{r.srcFactor && r.srcFactor !== 1 ? ` ×${fmtQty(r.srcFactor)}` : ''}
                             </span>
                           )}
+                          {r.tag && (
+                            <span className="ml-1.5 inline-block px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded-full text-[10px] font-medium align-middle">
+                              #{r.tag}
+                            </span>
+                          )}
+                          {r.noCost && (
+                            <span title="ไม่ถูกนำไปรวมเป็นต้นทุนของเมนู"
+                              className="ml-1.5 inline-block px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-[10px] font-bold align-middle">
+                              ไม่คิดต้นทุน
+                            </span>
+                          )}
                           {offItem && (
                             <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded-full text-[10px] font-bold align-middle">
                               <AlertTriangle size={9} /> ปิดใช้งาน
@@ -698,6 +720,9 @@ export default function QcRdMenu() {
                 <datalist id="qcrd-item-units">
                   {itemUnits.map(u => <option key={u} value={u} />)}
                 </datalist>
+                <datalist id="qcrd-bom-tags">
+                  {bomTags.map(t => <option key={t} value={t} />)}
+                </datalist>
                 <div className="space-y-2">
                   {editMenu.items.map((r, idx) => (
                     <IngredientRow key={idx} row={r} items={items}
@@ -831,6 +856,25 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
       <input type="number" value={row.converter} onChange={e => onChange({ ...row, converter: e.target.value })} placeholder="ตัวแปลง" title="หน่วยเล็กต่อ 1 หน่วยซื้อ เช่น 1000 = ซื้อเป็น กก. ใช้เป็นกรัม"
         className={`w-24 px-2 py-2 border rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 ${convMismatch ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200'}`} />
       <button onClick={onRemove} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={15} /></button>
+
+      <div className="w-full flex flex-wrap items-center gap-2 pl-1">
+        <input list="qcrd-bom-tags" value={row.tag || ''} onChange={e => onChange({ ...row, tag: e.target.value })}
+          placeholder="ติดแท็ก (เช่น แพ็กเกจจิ้ง / ท็อปปิ้ง / ของแถม)"
+          title="แท็กกำกับวัตถุดิบแถวนี้ ใช้จัดกลุ่ม/กรองทีหลัง เก็บแยกคอลัมน์ ไม่กระทบการคำนวณ"
+          className="flex-1 min-w-[200px] px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        <label title="ยังอยู่ในสูตร (ตัดสต็อกได้) แต่ไม่ถูกนำไปรวมเป็นต้นทุนของเมนู"
+          className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold border cursor-pointer select-none ${row.noCost ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-slate-500 border-slate-200'}`}>
+          <input type="checkbox" checked={Boolean(row.noCost)}
+            onChange={e => onChange({ ...row, noCost: e.target.checked })} className="accent-amber-500" />
+          ไม่คิดต้นทุน
+        </label>
+        {info?.itemType === 'แพ็กเกจจิ้ง' && (
+          <span className="inline-block px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-[10px] font-bold">
+            แพ็กเกจจิ้ง{info.usedWhen && info.usedWhen !== 'ทั้งสอง' ? ` · ${info.usedWhen}` : ''}
+          </span>
+        )}
+      </div>
+
       {convMismatch && (
         <div className="w-full flex items-center gap-1.5 pl-1 text-[11px] text-amber-700">
           <AlertTriangle size={11} className="flex-shrink-0" />

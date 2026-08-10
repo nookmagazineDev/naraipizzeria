@@ -11,10 +11,11 @@
  *          G=ปริมาณที่ได้ H=หน่วยที่ได้ (คอลัมน์เสริม สคริปต์เติมหัวตารางให้เองครั้งแรกที่บันทึก)
  *   BOM  : A=เลขPOS B=ชื่อเมนู C=ลำดับ D=รหัสวัตถุดิบ E=ชื่อวัตถุดิบ F=ยอดใช้ G=1 H=ตัวแปลงหน่วย
  *          I=รหัสวัตถุดิบ(ตัด 0 นำหน้า) J=ราคาวัตถุดิบ K=ต้นทุน/หน่วยเล็ก L=(ว่าง) M=ต้นทุน/หน่วยเล็ก N=ต้นทุนรวมของแถว
- *          O=รหัสเมนูต้นทาง P=ชื่อเมนูต้นทาง Q=สัดส่วนที่ดึงมา R=ยอดใช้ตามสูตรเดิม
- *          (O–R เป็นบันทึกที่มาของวัตถุดิบเฉย ๆ ไม่เกี่ยวกับการคำนวณต้นทุน A–N)
+ *          O=รหัสเมนูต้นทาง P=ชื่อเมนูต้นทาง Q=สัดส่วนที่ดึงมา R=ยอดใช้ตามสูตรเดิม S=แท็ก T=ไม่คิดต้นทุน(Y)
+ *          (O–T เป็นข้อมูลกำกับ ไม่เกี่ยวกับการคำนวณต้นทุน A–N · T=Y แถวนั้นจะไม่ถูกรวมเป็นต้นทุน)
  *   item : A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ(ใช้งาน/ปิดการใช้งาน) F,G,H=รหัสไอเทมทดแทน 1-3
- *          I=ตัวแปลงหน่วย(หน่วยเล็กต่อ 1 หน่วยซื้อ) J=สาขาที่ใช้(คั่นด้วย ,)
+ *          I=ตัวแปลงหน่วย(หน่วยเล็กต่อ 1 หน่วยซื้อ) J=สาขาที่ใช้(คั่นด้วย ,) N=หมวดสโตร์
+ *          O=ประเภท(วัตถุดิบ/แพ็กเกจจิ้ง) P=ใช้กับ(ทั้งสอง/ทานที่ร้าน/ห่อกลับบ้าน) — สำหรับแยกต้นทุนบรรจุภัณฑ์
  *   menucodegroup : A=รหัสหมวด(MenuCode) B=ชื่อหมวด
  */
 
@@ -150,17 +151,20 @@ function buildBomRows_(code, name, items, priceMap) {
     if (!itemCode) continue;
     var qty = Number(it.qty) || 0;
     var conv = Number(it.converter) || 1000;
-    var p = priceMap[itemCode] || 0;
+    // ติดธง "ไม่คิดต้นทุน" ไว้ = ยังอยู่ในสูตร (ตัดสต็อกได้) แต่ไม่เอาไปรวมต้นทุนเมนู
+    var noCost = isTruthy_(it.noCost);
+    var p = noCost ? 0 : (priceMap[itemCode] || 0);
     var unitCost = conv ? p / conv : 0;
     var lineCost = qty * unitCost;
     total += lineCost;
-    // O–R = บันทึกที่มา (ดึงมาจากสูตรของเมนูไหน สัดส่วนเท่าไร ยอดเดิมเท่าไร) ไม่ใช้คำนวณต้นทุน
+    // O–R = บันทึกที่มา · S = แท็ก · T = ไม่คิดต้นทุน (ทั้งหมดไม่ใช่คอลัมน์คำนวณ)
     rows.push([code, name, rows.length + 1, itemCode, String(it.itemName || '').trim(),
                qty, 1, conv, itemCode.replace(/^0+/, ''), p || '',
                p ? unitCost : '', '', p ? unitCost : '', p ? lineCost : '',
                String(it.srcCode || '').trim(), String(it.srcName || '').trim(),
                it.srcFactor === undefined || it.srcFactor === '' ? '' : Number(it.srcFactor),
-               it.srcBase === undefined || it.srcBase === '' ? '' : Number(it.srcBase)]);
+               it.srcBase === undefined || it.srcBase === '' ? '' : Number(it.srcBase),
+               String(it.tag || '').trim(), noCost ? 'Y' : '']);
   }
   return { rows: rows, total: total };
 }
@@ -204,7 +208,7 @@ function cascadeFromMenu_(ss, srcCode, priceMap, seen, depth) {
   if (!bomSh || bomSh.getLastRow() < 2) return out;
 
   // หาเมนูปลายทาง (มีแถวที่คอลัมน์ O = srcCode) + สัดส่วนที่เคยดึงไป
-  var scan = bomSh.getRange(2, 1, bomSh.getLastRow() - 1, 18).getValues();
+  var scan = bomSh.getRange(2, 1, bomSh.getLastRow() - 1, 20).getValues();
   var targets = [];
   var factorOf = {};
   for (var i = 0; i < scan.length; i++) {
@@ -221,7 +225,7 @@ function cascadeFromMenu_(ss, srcCode, priceMap, seen, depth) {
   for (var t = 0; t < targets.length; t++) {
     var tCode = targets[t];
     // อ่านใหม่ทุกรอบ เพราะรอบก่อนหน้าอาจแก้ชีทไปแล้ว
-    var cur = bomSh.getRange(2, 1, bomSh.getLastRow() - 1, 18).getValues();
+    var cur = bomSh.getRange(2, 1, bomSh.getLastRow() - 1, 20).getValues();
     var srcItems = [];
     var keep = [];
     var tName = '';
@@ -234,7 +238,8 @@ function cascadeFromMenu_(ss, srcCode, priceMap, seen, depth) {
       // แถวที่มาจากเมนูต้นทางนี้จะถูกสร้างใหม่ ที่เหลือเก็บไว้ตามเดิม
       if (String(row[14] || '').trim() === srcCode) continue;
       keep.push({ itemCode: row[3], itemName: row[4], qty: row[5], converter: row[7],
-                  srcCode: row[14], srcName: row[15], srcFactor: row[16], srcBase: row[17] });
+                  srcCode: row[14], srcName: row[15], srcFactor: row[16], srcBase: row[17],
+                  tag: row[18], noCost: row[19] });
     }
 
     var factor = factorOf[tCode];
@@ -245,6 +250,7 @@ function cascadeFromMenu_(ss, srcCode, priceMap, seen, depth) {
         itemCode: sr[3], itemName: sr[4],
         qty: Math.round(base * factor * 10000) / 10000, converter: sr[7],
         srcCode: srcCode, srcName: String(sr[1] || '').trim(), srcFactor: factor, srcBase: base,
+        tag: sr[18], noCost: sr[19],   // แท็ก/ไม่คิดต้นทุน ตามที่ตั้งไว้ในสูตรต้นทาง
       });
     }
 
@@ -259,11 +265,18 @@ function cascadeFromMenu_(ss, srcCode, priceMap, seen, depth) {
 
 // เติมหัวตารางคอลัมน์บันทึกที่มาในชีท BOM (O–R) ให้เองถ้ายังว่าง — เขียนเฉพาะช่องที่ว่างจริง
 function ensureBomSrcHeader_(bomSh) {
-  var labels = ['รหัสเมนูต้นทาง', 'ชื่อเมนูต้นทาง', 'สัดส่วนที่ดึงมา', 'ยอดใช้ตามสูตรเดิม'];
-  var header = bomSh.getRange(1, 15, 1, 4).getValues()[0];
+  var labels = ['รหัสเมนูต้นทาง', 'ชื่อเมนูต้นทาง', 'สัดส่วนที่ดึงมา', 'ยอดใช้ตามสูตรเดิม', 'แท็ก', 'ไม่คิดต้นทุน'];
+  var header = bomSh.getRange(1, 15, 1, labels.length).getValues()[0];
   for (var i = 0; i < labels.length; i++) {
     if (!String(header[i] || '').trim()) bomSh.getRange(1, 15 + i).setValue(labels[i]);
   }
+}
+
+// ค่าที่นับว่า "ใช่/ติ๊กไว้" จากชีทหรือจากหน้าเว็บ (ชีทอาจเก็บเป็น TRUE, Y, 1, ใช่)
+function isTruthy_(v) {
+  if (v === true) return true;
+  var s = String(v === undefined || v === null ? '' : v).trim().toLowerCase();
+  return s === 'y' || s === 'yes' || s === 'true' || s === '1' || s === 'ใช่';
 }
 
 // หาคอลัมน์ "ปริมาณที่ได้ / หน่วยที่ได้" ในชีท menu (1-indexed)
@@ -408,6 +421,7 @@ function saveItem_(ss, data) {
       if (data.storeCategory !== undefined) {
         sh.getRange(row, 14).setValue(String(data.storeCategory || '').trim());
       }
+      writeItemExtra_(sh, row, data);
       return { status: 'success', data: { code: code, row: row } };
     }
   }
@@ -442,7 +456,22 @@ function addItem_(ss, data) {
     converter, (data.branches || []).join(','),
     '', '', '', storeCategory,
   ]]);
+  writeItemExtra_(sh, newRow, data);
   return { status: 'success', data: { code: code, row: newRow } };
+}
+
+// ประเภทวัตถุดิบ (O) และใช้กับ (P) ของชีท item — เขียนเฉพาะที่ส่งมา พร้อมเติมหัวตารางให้ถ้ายังว่าง
+// ประเภท = 'แพ็กเกจจิ้ง' สำหรับบรรจุภัณฑ์ · ใช้กับ = ทั้งสอง / ทานที่ร้าน / ห่อกลับบ้าน
+// เก็บไว้เพื่อแยกต้นทุนบรรจุภัณฑ์ระหว่างทานที่ร้านกับห่อกลับบ้านตอนตัดสูตรในอนาคต
+function writeItemExtra_(sh, row, data) {
+  if (data.itemType === undefined && data.usedWhen === undefined) return;
+  var labels = ['ประเภท', 'ใช้กับ'];
+  var header = sh.getRange(1, 15, 1, 2).getValues()[0];
+  for (var i = 0; i < labels.length; i++) {
+    if (!String(header[i] || '').trim()) sh.getRange(1, 15 + i).setValue(labels[i]);
+  }
+  if (data.itemType !== undefined) sh.getRange(row, 15).setValue(String(data.itemType || '').trim());
+  if (data.usedWhen !== undefined) sh.getRange(row, 16).setValue(String(data.usedWhen || '').trim());
 }
 
 // ลบวัตถุดิบ: ลบทั้งแถวออกจากชีท item
