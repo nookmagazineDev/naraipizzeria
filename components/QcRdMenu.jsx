@@ -20,9 +20,10 @@ const roundQty = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
 
 const PAGE_SIZE = 50;
 const NEW_GROUP = '__new__'; // ค่าใน dropdown หมวดหมู่ = สร้างหมวดใหม่
-// แท็กมาตรฐานของวัตถุดิบในสูตร (เลือกจาก dropdown · เพิ่มแท็กใหม่เองได้)
-const TAG_PRESETS = ['แพ็กเกจจิ้ง', 'ท็อปปิ้ง', 'ของแถม', 'เครื่องปรุง', 'ซอส'];
-const NEW_TAG = '__newtag__';
+// แท็กของวัตถุดิบในสูตร มีแค่ 2 อย่าง — ใช้คำเดียวกับ "ประเภท" ในหน้าวัตถุดิบ จะได้ไขว้ข้อมูลกันได้
+const TAG_MATERIAL = 'วัตถุดิบ';
+const TAG_PACKAGING = 'แพ็กเกจจิ้ง';
+const TAG_OPTIONS = [TAG_MATERIAL, TAG_PACKAGING];
 
 // หน่วยของ "ปริมาณที่ได้" ที่ใช้บ่อย (พิมพ์หน่วยอื่นเองได้)
 const YIELD_UNITS = ['ชิ้น', 'ถาด', 'จาน', 'ที่', 'ชุด', 'แก้ว', 'ถ้วย', 'ถุง', 'กรัม', 'กก.', 'มล.', 'ลิตร'];
@@ -68,13 +69,6 @@ export default function QcRdMenu() {
     items.forEach(i => { m[i.code] = i; });
     return m;
   }, [items]);
-
-  // ตัวเลือกแท็กใน dropdown = แท็กมาตรฐาน + แท็กที่เคยใช้จริงในสูตรทั้งหมด
-  const bomTags = useMemo(() => {
-    const set = new Set(TAG_PRESETS);
-    Object.values(bom).forEach(b => (b.items || []).forEach(r => { if (r.tag) set.add(r.tag); }));
-    return [...set].sort((a, b) => a.localeCompare(b, 'th'));
-  }, [bom]);
 
   // หน่วยซื้อที่มีอยู่จริงในชีท item (ใช้เป็นตัวเลือกในช่องหน่วยของแถววัตถุดิบ)
   const itemUnits = useMemo(
@@ -130,7 +124,7 @@ export default function QcRdMenu() {
       // ที่มาที่บันทึกไว้ในชีท (คอลัมน์ O–R) — เอากลับมาโชว์และแก้สัดส่วนต่อได้
       srcCode: r.srcCode || undefined, srcName: r.srcName || undefined,
       srcBase: r.srcBase ?? undefined,
-      tag: r.tag || '', noCost: Boolean(r.noCost),
+      tag: r.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL, noCost: Boolean(r.noCost),
     }));
     // สร้างชิป "เมนูที่ดึงมา" ใหม่จากที่มาของแต่ละแถว
     const sources = [];
@@ -145,7 +139,7 @@ export default function QcRdMenu() {
       isNew: false, items: rows.length ? rows : [emptyIng()], sources,
     });
   };
-  const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000, tag: '', noCost: false });
+  const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000, tag: TAG_MATERIAL, noCost: false });
 
   // ───── ดึงวัตถุดิบจากเมนูอื่นเข้ามาในสูตรที่กำลังแก้ (ทำเมนูเซ็ต/เมนูรวม) ─────
   // factor = สัดส่วนของสูตรต้นทาง (1 = ทั้งสูตร, 0.2 = 20% ของสูตร, 2 = 2 เท่า)
@@ -173,7 +167,7 @@ export default function QcRdMenu() {
       return {
         itemCode: r.itemCode, itemName: r.itemName, qty: roundQty(base * factor),
         converter: r.converter ?? 1000, srcCode: src.code, srcName: src.name, srcBase: base,
-        tag: r.tag || '', noCost: Boolean(r.noCost),
+        tag: r.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL, noCost: Boolean(r.noCost),
       };
     });
     setEditMenu(m => ({
@@ -293,7 +287,7 @@ export default function QcRdMenu() {
           srcCode: r.srcCode || '', srcName: r.srcName || '',
           srcFactor: r.srcCode ? factorOf(r.srcCode) : '',
           srcBase: r.srcBase ?? '',
-          tag: r.tag || '', noCost: r.noCost ? 'Y' : '',
+          tag: r.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL, noCost: r.noCost ? 'Y' : '',
         })),
       });
 
@@ -726,7 +720,7 @@ export default function QcRdMenu() {
                 </datalist>
                 <div className="space-y-2">
                   {editMenu.items.map((r, idx) => (
-                    <IngredientRow key={idx} row={r} items={items} tagOptions={bomTags}
+                    <IngredientRow key={idx} row={r} items={items}
                       unit={editMenu.unitEdits?.[r.itemCode] ?? (itemMap[r.itemCode]?.unit || '')}
                       onUnitChange={u => setEditMenu(m => ({ ...m, unitEdits: { ...m.unitEdits, [r.itemCode]: u } }))}
                       onChange={next => setEditMenu(m => ({ ...m, items: m.items.map((x, i) => i === idx ? next : x) }))}
@@ -782,10 +776,9 @@ export default function QcRdMenu() {
 
 // แถววัตถุดิบในฟอร์ม: ค้นหาไอเทมจากชีท item + กรอกยอดใช้/หน่วยซื้อ/ตัวแปลง
 // unit/onUnitChange = หน่วยซื้อของวัตถุดิบ (ชีท item คอลัมน์ D) แก้จากในฟอร์มเมนูได้เลย
-function IngredientRow({ row, items, unit, tagOptions, onUnitChange, onChange, onRemove }) {
+function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
-  const [addingTag, setAddingTag] = useState(false);   // สลับ dropdown แท็ก → ช่องพิมพ์แท็กใหม่
 
   const info = items.find(i => i.code === row.itemCode);
   // ตัวแปลงหน่วยในสูตรไม่ตรงกับที่ตั้งไว้ในข้อมูลวัตถุดิบ → ฟ้องให้เห็น กดใช้ค่าจากวัตถุดิบได้
@@ -834,7 +827,12 @@ function IngredientRow({ row, items, unit, tagOptions, onUnitChange, onChange, o
                 {suggestions.map(s => (
                   // เลือกวัตถุดิบแล้วดึงตัวแปลงหน่วยของวัตถุดิบนั้นมาให้เลย (ชีท item คอลัมน์ I)
                   <button key={s.code} onMouseDown={() => {
-                    onChange({ ...row, itemCode: s.code, itemName: s.name, converter: s.converter || row.converter || 1000 });
+                    onChange({
+                      ...row, itemCode: s.code, itemName: s.name,
+                      converter: s.converter || row.converter || 1000,
+                      // วัตถุดิบที่ตั้งประเภทเป็นแพ็กเกจจิ้งไว้ ให้ติดแท็กแพ็กเกจจิ้งให้เลย (เปลี่ยนเองได้)
+                      tag: s.itemType === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL,
+                    });
                     setOpen(false);
                   }}
                     className="block w-full text-left px-3 py-2 text-sm hover:bg-indigo-50">
@@ -860,26 +858,12 @@ function IngredientRow({ row, items, unit, tagOptions, onUnitChange, onChange, o
       <button onClick={onRemove} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={15} /></button>
 
       <div className="w-full flex flex-wrap items-center gap-2 pl-1">
-        {addingTag ? (
-          <input autoFocus value={row.tag || ''} onChange={e => onChange({ ...row, tag: e.target.value })}
-            onBlur={() => setAddingTag(false)}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); setAddingTag(false); } }}
-            placeholder="พิมพ์ชื่อแท็กใหม่…"
-            className="flex-1 min-w-[200px] px-2 py-1 border border-indigo-300 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-        ) : (
-          <select value={row.tag || ''}
-            onChange={e => {
-              if (e.target.value === NEW_TAG) { onChange({ ...row, tag: '' }); setAddingTag(true); return; }
-              onChange({ ...row, tag: e.target.value });
-            }}
-            title="แท็กกำกับวัตถุดิบแถวนี้ ใช้จัดกลุ่ม/กรองทีหลัง เก็บแยกคอลัมน์ ไม่กระทบการคำนวณ"
-            className="flex-1 min-w-[200px] px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
-            <option value="">— ไม่ติดแท็ก —</option>
-            {tagOptions.map(t => <option key={t} value={t}>{t}</option>)}
-            {row.tag && !tagOptions.includes(row.tag) && <option value={row.tag}>{row.tag}</option>}
-            <option value={NEW_TAG}>＋ เพิ่มแท็กใหม่…</option>
-          </select>
-        )}
+        <select value={row.tag === TAG_PACKAGING ? TAG_PACKAGING : TAG_MATERIAL}
+          onChange={e => onChange({ ...row, tag: e.target.value })}
+          title="แท็กกำกับวัตถุดิบแถวนี้ (ชีท BOM คอลัมน์แยก) ไม่กระทบการคำนวณต้นทุน"
+          className="flex-1 min-w-[200px] px-2 py-1 border border-slate-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+          {TAG_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
         <label title="ยังอยู่ในสูตร (ตัดสต็อกได้) แต่ไม่ถูกนำไปรวมเป็นต้นทุนของเมนู"
           className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-semibold border cursor-pointer select-none ${row.noCost ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-white text-slate-500 border-slate-200'}`}>
           <input type="checkbox" checked={Boolean(row.noCost)}
