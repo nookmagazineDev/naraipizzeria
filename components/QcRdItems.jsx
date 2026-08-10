@@ -20,8 +20,10 @@ const codeMatch = (code, q) => {
   return c.includes(s) || c.replace(/^0+/, '').includes(s.replace(/^0+/, ''));
 };
 
-// ประเภทวัตถุดิบ (ชีท item คอลัมน์ O) — แยกบรรจุภัณฑ์ออกจากวัตถุดิบอาหาร
+// ประเภท (ชีท item คอลัมน์ O) มีแค่ 2 ค่า: วัตถุดิบ (ค่าเริ่มต้นเสมอ) หรือ แพ็กเกจจิ้ง
 // ใช้กับ (คอลัมน์ P) มีความหมายเฉพาะกับแพ็กเกจจิ้ง: ไว้แยกต้นทุนทานที่ร้าน vs ห่อกลับบ้านตอนตัดสูตร
+// ของเดิมในชีทที่คอลัมน์ O ยังว่าง ถือเป็น "วัตถุดิบ" และจะถูกเขียนค่าลงไปเมื่อบันทึกครั้งถัดไป
+const MATERIAL = 'วัตถุดิบ';
 const PACKAGING = 'แพ็กเกจจิ้ง';
 const USED_WHEN = ['ทั้งสอง', 'ทานที่ร้าน', 'ห่อกลับบ้าน'];
 
@@ -39,7 +41,7 @@ export default function QcRdItems() {
   const [unitFilter, setUnitFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [storeFilter, setStoreFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');   // '' = ทุกประเภท, 'food' = วัตถุดิบอาหาร, PACKAGING
+  const [typeFilter, setTypeFilter] = useState('');   // '' = ทุกประเภท, MATERIAL, PACKAGING
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null); // { ok, msg }
   const [editItem, setEditItem] = useState(null); // { code, name, status, subs[] }
@@ -92,7 +94,7 @@ export default function QcRdItems() {
       if (storeFilter === NO_STORE) { if (i.storeCategory) return false; }
       else if (storeFilter && (i.storeCategory || '') !== storeFilter) return false;
       if (typeFilter === PACKAGING && i.itemType !== PACKAGING) return false;
-      if (typeFilter === 'food' && i.itemType === PACKAGING) return false;
+      if (typeFilter === MATERIAL && i.itemType === PACKAGING) return false;
       if (!q) return true;
       return codeMatch(i.code, q) || i.name.toLowerCase().includes(q);
     });
@@ -119,14 +121,14 @@ export default function QcRdItems() {
     // หน่วยที่ระบบวิเคราะห์เองยังไม่ได้อยู่ในชีท — ใส่ให้เป็นค่าตั้งต้นในช่อง กดบันทึกแล้วจะลงชีทจริง
     price: i.price ?? '', unit: i.unit || '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
     storeCategory: i.storeCategory || '', addingNewStore: false,
-    itemType: i.itemType || '', usedWhen: i.usedWhen || '',
+    itemType: i.itemType === PACKAGING ? PACKAGING : MATERIAL, usedWhen: i.usedWhen || '',
   });
 
   const openNew = () => setEditItem({
     isNew: true,
     code: '', name: '', status: 'ใช้งาน', subs: [],
     price: '', unit: '', converter: '', branches: [], storeCategory: '', addingNewStore: false,
-    itemType: '', usedWhen: '',
+    itemType: MATERIAL, usedWhen: '',
   });
 
   const toggleBranch = (b) => setEditItem(m => ({
@@ -149,7 +151,8 @@ export default function QcRdItems() {
         price: editItem.price, unit: (editItem.unit || '').trim(), converter: editItem.converter,
         branches: editItem.branches, storeCategory: (editItem.storeCategory || '').trim(),
         // ประเภท/ใช้กับ — ไว้แยกต้นทุนบรรจุภัณฑ์ระหว่างทานที่ร้านกับห่อกลับบ้าน
-        itemType: editItem.itemType || '', usedWhen: editItem.itemType === PACKAGING ? (editItem.usedWhen || '') : '',
+        itemType: editItem.itemType === PACKAGING ? PACKAGING : MATERIAL,
+        usedWhen: editItem.itemType === PACKAGING ? (editItem.usedWhen || USED_WHEN[0]) : '',
       });
       setToast({ ok: true, msg: editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ` });
       setEditItem(null);
@@ -245,7 +248,7 @@ export default function QcRdItems() {
           <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
             className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
             <option value="">ทุกประเภท</option>
-            <option value="food">วัตถุดิบอาหาร</option>
+            <option value={MATERIAL}>{MATERIAL}</option>
             <option value={PACKAGING}>{PACKAGING} ({packagingCount})</option>
           </select>
         </div>
@@ -429,8 +432,8 @@ export default function QcRdItems() {
                   <select value={editItem.itemType}
                     onChange={e => setEditItem(m => ({ ...m, itemType: e.target.value, usedWhen: e.target.value === PACKAGING ? (m.usedWhen || USED_WHEN[0]) : '' }))}
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                    <option value="">วัตถุดิบอาหาร</option>
-                    <option value={PACKAGING}>{PACKAGING} (บรรจุภัณฑ์)</option>
+                    <option value={MATERIAL}>{MATERIAL}</option>
+                    <option value={PACKAGING}>{PACKAGING}</option>
                   </select>
                 </div>
                 {editItem.itemType === PACKAGING && (
