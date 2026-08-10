@@ -234,6 +234,15 @@ export default function QcRdMenu() {
   // ปริมาณที่ได้ต่อ 1 สูตรในฟอร์ม (ใช้หารต้นทุนให้เป็นต่อหน่วย)
   const perYield = parseFloat(editMenu?.yieldQty) || 0;
 
+  // เมนูอื่นที่ดึงสูตรของเมนูที่กำลังแก้ไปใช้ — บันทึกแล้วจะถูกคิดยอดใหม่ตามไปด้วย
+  const usedByMenus = useMemo(() => {
+    const code = editMenu?.code?.trim();
+    if (!code || editMenu.isNew) return [];
+    return Object.entries(bom)
+      .filter(([c, b]) => c !== code && (b.items || []).some(r => r.srcCode === code))
+      .map(([c, b]) => ({ code: c, name: b.name || c }));
+  }, [bom, editMenu]);
+
   const estCost = (rows) => rows.reduce((s, r) => {
     const p = priceMap[r.itemCode] || 0;
     const conv = parseFloat(r.converter) || 1000;
@@ -282,10 +291,13 @@ export default function QcRdMenu() {
         try { await apiCall('saveItem', { code, unit: String(unit).trim() }); unitSaved++; }
         catch { /* หน่วยบันทึกไม่ผ่านไม่ควรทำให้การบันทึกเมนูล้ม — รายงานรวมท้ายสุด */ }
       }
+      // เมนูอื่นที่ดึงสูตรของเมนูนี้ไปใช้ ถูกคิดยอดใหม่ให้ตามสูตรล่าสุดโดย Apps Script
+      const cascaded = res.data?.cascaded || [];
       setToast({
         ok: true,
         msg: `บันทึก "${editMenu.name}" สำเร็จ (${res.data?.bomRows ?? rows.length} วัตถุดิบ`
-          + `${unitEdits.length ? ` · หน่วย ${unitSaved}/${unitEdits.length} รายการ` : ''})`,
+          + `${unitEdits.length ? ` · หน่วย ${unitSaved}/${unitEdits.length} รายการ` : ''})`
+          + (cascaded.length ? ` · อัปเดตเมนูที่ผูกไว้ ${cascaded.length} เมนู: ${cascaded.map(c => c.name || c.code).join(', ')}` : ''),
       });
       setEditMenu(null);
       loadAll();
@@ -658,6 +670,16 @@ export default function QcRdMenu() {
                 )}
               </div>
 
+              {usedByMenus.length > 0 && (
+                <div className="p-3 bg-amber-50/70 border border-amber-100 rounded-xl text-xs text-amber-800 flex items-start gap-2">
+                  <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    สูตรนี้ถูกดึงไปใช้ใน <b>{usedByMenus.length} เมนู</b> ({usedByMenus.map(x => x.name).join(', ')})
+                    {' '}— กดบันทึกแล้วระบบจะคิดยอดวัตถุดิบและต้นทุนของเมนูเหล่านั้นใหม่ตามสัดส่วนเดิมให้อัตโนมัติ
+                  </span>
+                </div>
+              )}
+
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs font-bold text-slate-500">วัตถุดิบในสูตร (ยอดใช้เป็นหน่วยเล็ก เช่น กรัม · ตัวแปลง = หน่วยเล็กต่อ 1 หน่วยซื้อ)</label>
@@ -738,6 +760,10 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
 
+  const info = items.find(i => i.code === row.itemCode);
+  // ตัวแปลงหน่วยในสูตรไม่ตรงกับที่ตั้งไว้ในข้อมูลวัตถุดิบ → ฟ้องให้เห็น กดใช้ค่าจากวัตถุดิบได้
+  const convMismatch = Boolean(row.itemCode && info?.converter && parseFloat(row.converter) !== info.converter);
+
   const suggestions = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return [];
@@ -779,10 +805,16 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
             {open && suggestions.length > 0 && (
               <div className="absolute z-10 mt-1 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-56 overflow-auto">
                 {suggestions.map(s => (
-                  <button key={s.code} onMouseDown={() => { onChange({ ...row, itemCode: s.code, itemName: s.name }); setOpen(false); }}
+                  // เลือกวัตถุดิบแล้วดึงตัวแปลงหน่วยของวัตถุดิบนั้นมาให้เลย (ชีท item คอลัมน์ I)
+                  <button key={s.code} onMouseDown={() => {
+                    onChange({ ...row, itemCode: s.code, itemName: s.name, converter: s.converter || row.converter || 1000 });
+                    setOpen(false);
+                  }}
                     className="block w-full text-left px-3 py-2 text-sm hover:bg-indigo-50">
                     <span className="font-mono text-xs text-slate-400 mr-1.5">{s.code}</span>{s.name}
-                    <span className="float-right text-xs text-slate-400 font-mono">{s.price != null ? s.price.toLocaleString() : ''}</span>
+                    <span className="float-right text-xs text-slate-400 font-mono">
+                      {s.converter ? `×${s.converter}` : ''} {s.price != null ? s.price.toLocaleString() : ''}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -797,8 +829,16 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
         title="หน่วยซื้อของวัตถุดิบ (เช่น กก. / ถุง / ขวด) — บันทึกลงชีท item คอลัมน์ D ใช้ร่วมกันทุกเมนู"
         className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm bg-white disabled:bg-slate-100 disabled:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
       <input type="number" value={row.converter} onChange={e => onChange({ ...row, converter: e.target.value })} placeholder="ตัวแปลง" title="หน่วยเล็กต่อ 1 หน่วยซื้อ เช่น 1000 = ซื้อเป็น กก. ใช้เป็นกรัม"
-        className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+        className={`w-24 px-2 py-2 border rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 ${convMismatch ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200'}`} />
       <button onClick={onRemove} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={15} /></button>
+      {convMismatch && (
+        <div className="w-full flex items-center gap-1.5 pl-1 text-[11px] text-amber-700">
+          <AlertTriangle size={11} className="flex-shrink-0" />
+          ตัวแปลงหน่วยไม่ตรงกับข้อมูลวัตถุดิบ (ในชีท item ตั้งไว้ {info.converter.toLocaleString()})
+          <button onClick={() => onChange({ ...row, converter: info.converter })}
+            className="font-semibold underline hover:text-amber-900">ใช้ค่า {info.converter.toLocaleString()}</button>
+        </div>
+      )}
     </div>
   );
 }
