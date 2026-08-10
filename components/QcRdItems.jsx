@@ -107,14 +107,15 @@ export default function QcRdItems() {
   const openEdit = (i) => setEditItem({
     isNew: false,
     code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])],
-    price: i.price ?? '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
+    // หน่วยที่ระบบวิเคราะห์เองยังไม่ได้อยู่ในชีท — ใส่ให้เป็นค่าตั้งต้นในช่อง กดบันทึกแล้วจะลงชีทจริง
+    price: i.price ?? '', unit: i.unit || '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
     storeCategory: i.storeCategory || '', addingNewStore: false,
   });
 
   const openNew = () => setEditItem({
     isNew: true,
     code: '', name: '', status: 'ใช้งาน', subs: [],
-    price: '', converter: '', branches: [], storeCategory: '', addingNewStore: false,
+    price: '', unit: '', converter: '', branches: [], storeCategory: '', addingNewStore: false,
   });
 
   const toggleBranch = (b) => setEditItem(m => ({
@@ -134,7 +135,7 @@ export default function QcRdItems() {
       await apiCall(editItem.isNew ? 'addItem' : 'saveItem', {
         code, name: editItem.name.trim(),
         status: editItem.status, subs: editItem.subs.slice(0, 3),
-        price: editItem.price, converter: editItem.converter,
+        price: editItem.price, unit: (editItem.unit || '').trim(), converter: editItem.converter,
         branches: editItem.branches, storeCategory: (editItem.storeCategory || '').trim(),
       });
       setToast({ ok: true, msg: editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ` });
@@ -377,6 +378,15 @@ export default function QcRdItems() {
                   <input type="number" inputMode="decimal" value={editItem.price}
                     onChange={e => setEditItem(m => ({ ...m, price: e.target.value }))} placeholder="0.00"
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500">หน่วย <span className="font-normal">(หน่วยซื้อ เช่น กก. / ถุง / ขวด)</span></label>
+                  <input list="qcrd-units" value={editItem.unit}
+                    onChange={e => setEditItem(m => ({ ...m, unit: e.target.value }))} placeholder="เช่น กก."
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  <datalist id="qcrd-units">
+                    {units.map(u => <option key={u} value={u} />)}
+                  </datalist>
                 </div>
                 <div>
                   <label className="text-xs font-bold text-slate-500">ตัวแปลงหน่วย <span className="font-normal">(หน่วยเล็กต่อ 1 หน่วยซื้อ เช่น 1000)</span></label>

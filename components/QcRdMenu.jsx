@@ -65,6 +65,11 @@ export default function QcRdMenu() {
     return m;
   }, [items]);
 
+  // หน่วยซื้อที่มีอยู่จริงในชีท item (ใช้เป็นตัวเลือกในช่องหน่วยของแถววัตถุดิบ)
+  const itemUnits = useMemo(
+    () => [...new Set(items.map(i => i.unit).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
+    [items]);
+
   const disabledIngredients = (code) =>
     (bom[code]?.items || []).filter(r => itemMap[r.itemCode]?.status === 'ปิดการใช้งาน');
 
@@ -105,18 +110,27 @@ export default function QcRdMenu() {
     setFormMsg(null);
     setEditMenu({
       code: '', name: '', price: '', group: '', newGroupName: '',
-      yieldQty: '', yieldUnit: '', isNew: true, items: [emptyIng()], sources: [],
+      yieldQty: '', yieldUnit: '', unitEdits: {}, isNew: true, items: [emptyIng()], sources: [],
     });
   };
   const openEdit = (m) => {
     const rows = (bom[m.code]?.items || []).map(r => ({
       itemCode: r.itemCode, itemName: r.itemName, qty: r.qty ?? '', converter: r.converter ?? 1000,
+      // ที่มาที่บันทึกไว้ในชีท (คอลัมน์ O–R) — เอากลับมาโชว์และแก้สัดส่วนต่อได้
+      srcCode: r.srcCode || undefined, srcName: r.srcName || undefined,
+      srcBase: r.srcBase ?? undefined,
     }));
+    // สร้างชิป "เมนูที่ดึงมา" ใหม่จากที่มาของแต่ละแถว
+    const sources = [];
+    (bom[m.code]?.items || []).forEach(r => {
+      if (!r.srcCode || sources.some(s => s.code === r.srcCode)) return;
+      sources.push({ code: r.srcCode, name: r.srcName || r.srcCode, factor: String(r.srcFactor ?? 1) });
+    });
     setFormMsg(null);
     setEditMenu({
       code: m.code, name: m.name, price: m.price ?? '', group: m.group || '', newGroupName: '',
-      yieldQty: m.yieldQty ?? '', yieldUnit: m.yieldUnit || '',
-      isNew: false, items: rows.length ? rows : [emptyIng()], sources: [],
+      yieldQty: m.yieldQty ?? '', yieldUnit: m.yieldUnit || '', unitEdits: {},
+      isNew: false, items: rows.length ? rows : [emptyIng()], sources,
     });
   };
   const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000 });
@@ -242,15 +256,37 @@ export default function QcRdMenu() {
     setFormMsg(null);
     try {
       const rows = editMenu.items.filter(r => r.itemCode && parseFloat(r.qty) > 0);
+      const factorOf = (code) => editMenu.sources.find(s => s.code === code)?.factor ?? '';
       const res = await apiCall('saveMenu', {
         code: editMenu.code.trim(), name: editMenu.name.trim(), price: editMenu.price,
         group: isNewGroup ? '' : editMenu.group,
         newGroupName: isNewGroup ? editMenu.newGroupName.trim() : '',
         yieldQty: String(editMenu.yieldQty ?? '').trim(),
         yieldUnit: String(editMenu.yieldUnit || '').trim(),
-        items: rows.map(r => ({ itemCode: r.itemCode, itemName: r.itemName, qty: parseFloat(r.qty) || 0, converter: parseFloat(r.converter) || 1000 })),
+        items: rows.map(r => ({
+          itemCode: r.itemCode, itemName: r.itemName,
+          qty: parseFloat(r.qty) || 0, converter: parseFloat(r.converter) || 1000,
+          // ที่มาของวัตถุดิบ → ชีท BOM คอลัมน์ O–R (แยกจากคอลัมน์ที่ใช้คำนวณต้นทุน)
+          srcCode: r.srcCode || '', srcName: r.srcName || '',
+          srcFactor: r.srcCode ? factorOf(r.srcCode) : '',
+          srcBase: r.srcBase ?? '',
+        })),
       });
-      setToast({ ok: true, msg: `บันทึก "${editMenu.name}" สำเร็จ (${res.data?.bomRows ?? rows.length} วัตถุดิบ)` });
+
+      // หน่วยของวัตถุดิบที่แก้ในฟอร์ม → เขียนลงชีท item คอลัมน์ D (คนละชีทกับ BOM จึงยิงแยก)
+      const usedCodes = new Set(rows.map(r => r.itemCode));
+      const unitEdits = Object.entries(editMenu.unitEdits || {})
+        .filter(([code, unit]) => code && usedCodes.has(code) && (itemMap[code]?.unit || '') !== String(unit).trim());
+      let unitSaved = 0;
+      for (const [code, unit] of unitEdits) {
+        try { await apiCall('saveItem', { code, unit: String(unit).trim() }); unitSaved++; }
+        catch { /* หน่วยบันทึกไม่ผ่านไม่ควรทำให้การบันทึกเมนูล้ม — รายงานรวมท้ายสุด */ }
+      }
+      setToast({
+        ok: true,
+        msg: `บันทึก "${editMenu.name}" สำเร็จ (${res.data?.bomRows ?? rows.length} วัตถุดิบ`
+          + `${unitEdits.length ? ` · หน่วย ${unitSaved}/${unitEdits.length} รายการ` : ''})`,
+      });
       setEditMenu(null);
       loadAll();
     } catch (err) {
@@ -469,6 +505,12 @@ export default function QcRdMenu() {
                         <td className="px-3 py-1.5 font-mono text-xs text-slate-500">{r.itemCode}</td>
                         <td className="px-3 py-1.5">
                           {r.itemName}
+                          {r.srcName && (
+                            <span title={r.srcBase ? `สูตรเดิมของ "${r.srcName}" ใช้ ${r.srcBase}` : ''}
+                              className="ml-1.5 inline-block px-1.5 py-0.5 bg-sky-50 text-sky-600 border border-sky-100 rounded-full text-[10px] font-medium align-middle">
+                              จาก {r.srcName}{r.srcFactor && r.srcFactor !== 1 ? ` ×${fmtQty(r.srcFactor)}` : ''}
+                            </span>
+                          )}
                           {offItem && (
                             <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded-full text-[10px] font-bold align-middle">
                               <AlertTriangle size={9} /> ปิดใช้งาน
@@ -627,16 +669,25 @@ export default function QcRdMenu() {
                 <div className="hidden sm:flex items-center gap-2 px-2 text-[11px] font-bold text-slate-400 uppercase tracking-wide">
                   <span className="flex-1 min-w-[240px]">วัตถุดิบ</span>
                   <span className="w-24 text-right">ยอดใช้</span>
+                  <span className="w-24">หน่วยซื้อ</span>
                   <span className="w-24 text-right">ตัวแปลงหน่วย</span>
                   <span className="w-8" />
                 </div>
+                <datalist id="qcrd-item-units">
+                  {itemUnits.map(u => <option key={u} value={u} />)}
+                </datalist>
                 <div className="space-y-2">
                   {editMenu.items.map((r, idx) => (
                     <IngredientRow key={idx} row={r} items={items}
+                      unit={editMenu.unitEdits?.[r.itemCode] ?? (itemMap[r.itemCode]?.unit || '')}
+                      onUnitChange={u => setEditMenu(m => ({ ...m, unitEdits: { ...m.unitEdits, [r.itemCode]: u } }))}
                       onChange={next => setEditMenu(m => ({ ...m, items: m.items.map((x, i) => i === idx ? next : x) }))}
                       onRemove={() => setEditMenu(m => ({ ...m, items: m.items.filter((_, i) => i !== idx) }))} />
                   ))}
                 </div>
+                <p className="text-[11px] text-slate-400 mt-1.5">
+                  ช่อง "หน่วยซื้อ" แก้แล้วจะบันทึกลงข้อมูลวัตถุดิบ (ชีท item) ใช้ร่วมกันทุกเมนูที่ใช้วัตถุดิบตัวนั้น
+                </p>
               </div>
 
               <div className="p-3 bg-indigo-50/60 rounded-xl text-sm space-y-1.5">
@@ -681,8 +732,9 @@ export default function QcRdMenu() {
   );
 }
 
-// แถววัตถุดิบในฟอร์ม: ค้นหาไอเทมจากชีท item + กรอกยอดใช้/ตัวแปลง
-function IngredientRow({ row, items, onChange, onRemove }) {
+// แถววัตถุดิบในฟอร์ม: ค้นหาไอเทมจากชีท item + กรอกยอดใช้/หน่วยซื้อ/ตัวแปลง
+// unit/onUnitChange = หน่วยซื้อของวัตถุดิบ (ชีท item คอลัมน์ D) แก้จากในฟอร์มเมนูได้เลย
+function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
 
@@ -740,6 +792,10 @@ function IngredientRow({ row, items, onChange, onRemove }) {
       </div>
       <input type="number" value={row.qty} onChange={e => onChange({ ...row, qty: e.target.value })} placeholder="ยอดใช้"
         className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+      <input list="qcrd-item-units" value={unit} disabled={!row.itemCode}
+        onChange={e => onUnitChange(e.target.value)} placeholder="หน่วย"
+        title="หน่วยซื้อของวัตถุดิบ (เช่น กก. / ถุง / ขวด) — บันทึกลงชีท item คอลัมน์ D ใช้ร่วมกันทุกเมนู"
+        className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm bg-white disabled:bg-slate-100 disabled:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
       <input type="number" value={row.converter} onChange={e => onChange({ ...row, converter: e.target.value })} placeholder="ตัวแปลง" title="หน่วยเล็กต่อ 1 หน่วยซื้อ เช่น 1000 = ซื้อเป็น กก. ใช้เป็นกรัม"
         className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
       <button onClick={onRemove} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={15} /></button>
