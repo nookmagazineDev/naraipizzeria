@@ -172,6 +172,11 @@ export default async function handler(req, res) {
           itemPrice: num(r[9]),
           unitCost: num(r[10]),
           lineCost: num(r[13]),
+          // O–R = บันทึกที่มาของวัตถุดิบ (ดึงมาจากสูตรเมนูไหน) ไม่เกี่ยวกับการคำนวณต้นทุน
+          srcCode: (r[14] || '').trim(),
+          srcName: (r[15] || '').trim(),
+          srcFactor: num(r[16]),
+          srcBase: num(r[17]),
         });
       });
       return res.status(200).json({ status: 'success', data: map });
