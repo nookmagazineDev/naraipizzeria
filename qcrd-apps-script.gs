@@ -76,35 +76,10 @@ function saveMenu_(ss, data) {
     groupCode = String(data.group || '').trim();
   }
 
-  // ราคาวัตถุดิบจากชีท item (ใช้คำนวณต้นทุน)
-  var itemSh = ss.getSheetByName('item');
-  var priceMap = {};
-  if (itemSh) {
-    var iv = itemSh.getDataRange().getValues();
-    for (var i = 1; i < iv.length; i++) {
-      var c = String(iv[i][0] || '').trim();
-      if (c) priceMap[c] = Number(iv[i][2]) || 0;
-    }
-  }
-
-  // คำนวณ BOM แต่ละแถว + ต้นทุนรวมเมนู
-  var totalCost = 0;
-  var bomRows = items.map(function (it, idx) {
-    var itemCode = String(it.itemCode || '').trim();
-    var qty = Number(it.qty) || 0;
-    var conv = Number(it.converter) || 1000;
-    var p = priceMap[itemCode] || 0;
-    var unitCost = conv ? p / conv : 0;
-    var lineCost = qty * unitCost;
-    totalCost += lineCost;
-    // O–R = บันทึกที่มา (ดึงมาจากสูตรของเมนูไหน สัดส่วนเท่าไร ยอดเดิมเท่าไร) ไม่ใช้คำนวณต้นทุน
-    return [code, name, idx + 1, itemCode, String(it.itemName || '').trim(),
-            qty, 1, conv, itemCode.replace(/^0+/, ''), p || '',
-            p ? unitCost : '', '', p ? unitCost : '', p ? lineCost : '',
-            String(it.srcCode || '').trim(), String(it.srcName || '').trim(),
-            it.srcFactor === undefined || it.srcFactor === '' ? '' : Number(it.srcFactor),
-            it.srcBase === undefined || it.srcBase === '' ? '' : Number(it.srcBase)];
-  });
+  var priceMap = itemPriceMap_(ss);            // ราคาวัตถุดิบจากชีท item (ใช้คำนวณต้นทุน)
+  var built = buildBomRows_(code, name, items, priceMap);
+  var bomRows = built.rows;
+  var totalCost = built.total;
 
   // upsert ชีท menu (คอลัมน์ E = ต้นทุนรวมจากสูตร)
   var menuSh = ss.getSheetByName('menu');
@@ -135,19 +110,151 @@ function saveMenu_(ss, data) {
     }
   }
 
-  // แทนที่แถว BOM เดิมของเมนูนี้ (ลบจากล่างขึ้นบน แล้วต่อท้ายใหม่)
+  // แทนที่แถว BOM เดิมของเมนูนี้ทั้งชุด
   var bomSh = ss.getSheetByName('BOM');
-  var bv = bomSh.getRange(1, 1, bomSh.getLastRow(), 1).getValues();
-  for (var j = bv.length - 1; j >= 1; j--) {
-    if (String(bv[j][0] || '').trim() === code) bomSh.deleteRow(j + 1);
-  }
-  if (bomRows.length) {
-    ensureBomSrcHeader_(bomSh);
-    bomSh.getRange(bomSh.getLastRow() + 1, 1, bomRows.length, bomRows[0].length).setValues(bomRows);
+  replaceMenuBomRows_(bomSh, code, bomRows);
+
+  // เมนูอื่นที่ดึงสูตรของเมนูนี้ไปใช้ → คิดยอดใช้ใหม่ตามสูตรล่าสุด (คูณสัดส่วนเดิมของแต่ละเมนู)
+  var cascaded = cascadeFromMenu_(ss, code, priceMap, {}, 0);
+
+  if (bomRows.length || cascaded.length) {
     sortBom_(ss); // จัดเรียงชีท BOM ใหม่ทุกครั้ง สูตรของเมนูเดียวกันจะอยู่ติดกันเสมอ
   }
 
-  return { status: 'success', data: { code: code, bomRows: bomRows.length, totalCost: costCell, group: groupCode } };
+  return { status: 'success', data: {
+    code: code, bomRows: bomRows.length, totalCost: costCell, group: groupCode, cascaded: cascaded,
+  } };
+}
+
+// ราคาวัตถุดิบจากชีท item: รหัส → ราคาต่อหน่วยซื้อ
+function itemPriceMap_(ss) {
+  var sh = ss.getSheetByName('item');
+  var map = {};
+  if (!sh) return map;
+  var v = sh.getDataRange().getValues();
+  for (var i = 1; i < v.length; i++) {
+    var c = String(v[i][0] || '').trim();
+    if (c) map[c] = Number(v[i][2]) || 0;
+  }
+  return map;
+}
+
+// สร้างแถว BOM (A–R) ของเมนูหนึ่ง + ต้นทุนรวม จากรายการวัตถุดิบ
+// items: [{ itemCode, itemName, qty, converter, srcCode, srcName, srcFactor, srcBase }]
+function buildBomRows_(code, name, items, priceMap) {
+  var total = 0;
+  var rows = [];
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var itemCode = String(it.itemCode || '').trim();
+    if (!itemCode) continue;
+    var qty = Number(it.qty) || 0;
+    var conv = Number(it.converter) || 1000;
+    var p = priceMap[itemCode] || 0;
+    var unitCost = conv ? p / conv : 0;
+    var lineCost = qty * unitCost;
+    total += lineCost;
+    // O–R = บันทึกที่มา (ดึงมาจากสูตรของเมนูไหน สัดส่วนเท่าไร ยอดเดิมเท่าไร) ไม่ใช้คำนวณต้นทุน
+    rows.push([code, name, rows.length + 1, itemCode, String(it.itemName || '').trim(),
+               qty, 1, conv, itemCode.replace(/^0+/, ''), p || '',
+               p ? unitCost : '', '', p ? unitCost : '', p ? lineCost : '',
+               String(it.srcCode || '').trim(), String(it.srcName || '').trim(),
+               it.srcFactor === undefined || it.srcFactor === '' ? '' : Number(it.srcFactor),
+               it.srcBase === undefined || it.srcBase === '' ? '' : Number(it.srcBase)]);
+  }
+  return { rows: rows, total: total };
+}
+
+// ลบแถวเดิมของเมนูนั้นในชีท BOM (จากล่างขึ้นบน) แล้วต่อชุดใหม่ท้ายชีท
+function replaceMenuBomRows_(bomSh, code, rows) {
+  var last = bomSh.getLastRow();
+  if (last >= 2) {
+    var col = bomSh.getRange(2, 1, last - 1, 1).getValues();
+    for (var j = col.length - 1; j >= 0; j--) {
+      if (String(col[j][0] || '').trim() === code) bomSh.deleteRow(j + 2);
+    }
+  }
+  if (rows.length) {
+    ensureBomSrcHeader_(bomSh);
+    bomSh.getRange(bomSh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+  }
+}
+
+// เขียนต้นทุนรวม (คอลัมน์ E) ของเมนูในชีท menu
+function setMenuCost_(menuSh, code, cost) {
+  var v = menuSh.getRange(1, 1, menuSh.getLastRow(), 1).getValues();
+  for (var i = 1; i < v.length; i++) {
+    if (String(v[i][0] || '').trim() === code) { menuSh.getRange(i + 1, 5).setValue(cost); return true; }
+  }
+  return false;
+}
+
+// อัปเดตเมนูที่ "ดึงสูตรมาจาก srcCode" ให้ตรงกับสูตรล่าสุดของ srcCode
+// - วัตถุดิบชุดที่มาจาก srcCode ถูกสร้างใหม่ทั้งชุด = ยอดใช้ล่าสุด × สัดส่วนเดิมของเมนูนั้น
+// - วัตถุดิบที่เมนูปลายทางใส่เอง หรือดึงมาจากเมนูอื่น ยังอยู่เหมือนเดิม
+// - ต้นทุนรวมของเมนูปลายทาง (ชีท menu คอลัมน์ E) คิดใหม่ให้ด้วย
+// - เมนูปลายทางอาจถูกเมนูอื่นดึงต่ออีกทอด จึงไล่ต่อเป็นทอด ๆ (กันวนซ้ำด้วย seen + จำกัดความลึก)
+function cascadeFromMenu_(ss, srcCode, priceMap, seen, depth) {
+  var out = [];
+  if (!srcCode || depth > 3 || seen[srcCode]) return out;
+  seen[srcCode] = true;
+
+  var bomSh = ss.getSheetByName('BOM');
+  var menuSh = ss.getSheetByName('menu');
+  if (!bomSh || bomSh.getLastRow() < 2) return out;
+
+  // หาเมนูปลายทาง (มีแถวที่คอลัมน์ O = srcCode) + สัดส่วนที่เคยดึงไป
+  var scan = bomSh.getRange(2, 1, bomSh.getLastRow() - 1, 18).getValues();
+  var targets = [];
+  var factorOf = {};
+  for (var i = 0; i < scan.length; i++) {
+    var menu = String(scan[i][0] || '').trim();
+    if (!menu || menu === srcCode) continue;
+    if (String(scan[i][14] || '').trim() !== srcCode) continue;
+    if (factorOf[menu] === undefined) {
+      factorOf[menu] = Number(scan[i][16]) || 1;
+      targets.push(menu);
+    }
+  }
+  if (!targets.length) return out;
+
+  for (var t = 0; t < targets.length; t++) {
+    var tCode = targets[t];
+    // อ่านใหม่ทุกรอบ เพราะรอบก่อนหน้าอาจแก้ชีทไปแล้ว
+    var cur = bomSh.getRange(2, 1, bomSh.getLastRow() - 1, 18).getValues();
+    var srcItems = [];
+    var keep = [];
+    var tName = '';
+    for (var k = 0; k < cur.length; k++) {
+      var row = cur[k];
+      var m = String(row[0] || '').trim();
+      if (m === srcCode) { srcItems.push(row); continue; }
+      if (m !== tCode) continue;
+      if (!tName) tName = String(row[1] || '').trim();
+      // แถวที่มาจากเมนูต้นทางนี้จะถูกสร้างใหม่ ที่เหลือเก็บไว้ตามเดิม
+      if (String(row[14] || '').trim() === srcCode) continue;
+      keep.push({ itemCode: row[3], itemName: row[4], qty: row[5], converter: row[7],
+                  srcCode: row[14], srcName: row[15], srcFactor: row[16], srcBase: row[17] });
+    }
+
+    var factor = factorOf[tCode];
+    for (var s = 0; s < srcItems.length; s++) {
+      var sr = srcItems[s];
+      var base = Number(sr[5]) || 0;
+      keep.push({
+        itemCode: sr[3], itemName: sr[4],
+        qty: Math.round(base * factor * 10000) / 10000, converter: sr[7],
+        srcCode: srcCode, srcName: String(sr[1] || '').trim(), srcFactor: factor, srcBase: base,
+      });
+    }
+
+    var b = buildBomRows_(tCode, tName || tCode, keep, priceMap);
+    replaceMenuBomRows_(bomSh, tCode, b.rows);
+    setMenuCost_(menuSh, tCode, b.rows.length ? Math.round(b.total * 10000) / 10000 : '');
+    out.push({ code: tCode, name: tName || tCode, rows: b.rows.length });
+    out = out.concat(cascadeFromMenu_(ss, tCode, priceMap, seen, depth + 1));
+  }
+  return out;
 }
 
 // เติมหัวตารางคอลัมน์บันทึกที่มาในชีท BOM (O–R) ให้เองถ้ายังว่าง — เขียนเฉพาะช่องที่ว่างจริง
