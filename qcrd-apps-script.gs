@@ -11,8 +11,8 @@
  *          G=ปริมาณที่ได้ H=หน่วยที่ได้ (คอลัมน์เสริม สคริปต์เติมหัวตารางให้เองครั้งแรกที่บันทึก)
  *   BOM  : A=เลขPOS B=ชื่อเมนู C=ลำดับ D=รหัสวัตถุดิบ E=ชื่อวัตถุดิบ F=ยอดใช้ G=1 H=ตัวแปลงหน่วย
  *          I=รหัสวัตถุดิบ(ตัด 0 นำหน้า) J=ราคาวัตถุดิบ K=ต้นทุน/หน่วยเล็ก L=(ว่าง) M=ต้นทุน/หน่วยเล็ก N=ต้นทุนรวมของแถว
- *          O=รหัสเมนูต้นทาง P=ชื่อเมนูต้นทาง Q=สัดส่วนที่ดึงมา R=ยอดใช้ตามสูตรเดิม S=แท็ก T=ไม่คิดต้นทุน(Y)
- *          (O–T เป็นข้อมูลกำกับ ไม่เกี่ยวกับการคำนวณต้นทุน A–N · T=Y แถวนั้นจะไม่ถูกรวมเป็นต้นทุน)
+ *          O=รหัสเมนูต้นทาง P=ชื่อเมนูต้นทาง Q=สัดส่วนที่ดึงมา R=ยอดใช้ตามสูตรเดิม S=แท็ก T=ไม่ตัด BOM(Y)
+ *          (O–T เป็นข้อมูลกำกับ ไม่กระทบการคำนวณต้นทุน A–N · T=Y = ไม่ตัดสต็อกตามสูตร แต่ยังคิดต้นทุนปกติ)
  *   item : A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ(ใช้งาน/ปิดการใช้งาน) F,G,H=รหัสไอเทมทดแทน 1-3
  *          I=ตัวแปลงหน่วย(หน่วยเล็กต่อ 1 หน่วยซื้อ) J=สาขาที่ใช้(คั่นด้วย ,) N=หมวดสโตร์
  *          O=ประเภท(วัตถุดิบ/แพ็กเกจจิ้ง) P=ใช้กับ(ทั้งสอง/ทานที่ร้าน/ห่อกลับบ้าน) — สำหรับแยกต้นทุนบรรจุภัณฑ์
@@ -151,20 +151,20 @@ function buildBomRows_(code, name, items, priceMap) {
     if (!itemCode) continue;
     var qty = Number(it.qty) || 0;
     var conv = Number(it.converter) || 1000;
-    // ติดธง "ไม่คิดต้นทุน" ไว้ = ยังอยู่ในสูตร (ตัดสต็อกได้) แต่ไม่เอาไปรวมต้นทุนเมนู
-    var noCost = isTruthy_(it.noCost);
-    var p = noCost ? 0 : (priceMap[itemCode] || 0);
+    // ติดธง "ไม่ตัด BOM" ไว้ = ไม่ถูกตัดสต็อกตามสูตร แต่ยังคิดเป็นต้นทุนของเมนูตามปกติ
+    var noDeduct = isTruthy_(it.noDeduct);
+    var p = priceMap[itemCode] || 0;
     var unitCost = conv ? p / conv : 0;
     var lineCost = qty * unitCost;
     total += lineCost;
-    // O–R = บันทึกที่มา · S = แท็ก · T = ไม่คิดต้นทุน (ทั้งหมดไม่ใช่คอลัมน์คำนวณ)
+    // O–R = บันทึกที่มา · S = แท็ก · T = ไม่ตัด BOM (ทั้งหมดเป็นข้อมูลกำกับ ไม่ใช่คอลัมน์คำนวณ)
     rows.push([code, name, rows.length + 1, itemCode, String(it.itemName || '').trim(),
                qty, 1, conv, itemCode.replace(/^0+/, ''), p || '',
                p ? unitCost : '', '', p ? unitCost : '', p ? lineCost : '',
                String(it.srcCode || '').trim(), String(it.srcName || '').trim(),
                it.srcFactor === undefined || it.srcFactor === '' ? '' : Number(it.srcFactor),
                it.srcBase === undefined || it.srcBase === '' ? '' : Number(it.srcBase),
-               String(it.tag || '').trim(), noCost ? 'Y' : '']);
+               String(it.tag || '').trim(), noDeduct ? 'Y' : '']);
   }
   return { rows: rows, total: total };
 }
@@ -239,7 +239,7 @@ function cascadeFromMenu_(ss, srcCode, priceMap, seen, depth) {
       if (String(row[14] || '').trim() === srcCode) continue;
       keep.push({ itemCode: row[3], itemName: row[4], qty: row[5], converter: row[7],
                   srcCode: row[14], srcName: row[15], srcFactor: row[16], srcBase: row[17],
-                  tag: row[18], noCost: row[19] });
+                  tag: row[18], noDeduct: row[19] });
     }
 
     var factor = factorOf[tCode];
@@ -250,7 +250,7 @@ function cascadeFromMenu_(ss, srcCode, priceMap, seen, depth) {
         itemCode: sr[3], itemName: sr[4],
         qty: Math.round(base * factor * 10000) / 10000, converter: sr[7],
         srcCode: srcCode, srcName: String(sr[1] || '').trim(), srcFactor: factor, srcBase: base,
-        tag: sr[18], noCost: sr[19],   // แท็ก/ไม่คิดต้นทุน ตามที่ตั้งไว้ในสูตรต้นทาง
+        tag: sr[18], noDeduct: sr[19],   // แท็ก/ไม่ตัด BOM ตามที่ตั้งไว้ในสูตรต้นทาง
       });
     }
 
@@ -265,10 +265,12 @@ function cascadeFromMenu_(ss, srcCode, priceMap, seen, depth) {
 
 // เติมหัวตารางคอลัมน์บันทึกที่มาในชีท BOM (O–R) ให้เองถ้ายังว่าง — เขียนเฉพาะช่องที่ว่างจริง
 function ensureBomSrcHeader_(bomSh) {
-  var labels = ['รหัสเมนูต้นทาง', 'ชื่อเมนูต้นทาง', 'สัดส่วนที่ดึงมา', 'ยอดใช้ตามสูตรเดิม', 'แท็ก', 'ไม่คิดต้นทุน'];
+  var labels = ['รหัสเมนูต้นทาง', 'ชื่อเมนูต้นทาง', 'สัดส่วนที่ดึงมา', 'ยอดใช้ตามสูตรเดิม', 'แท็ก', 'ไม่ตัด BOM'];
+  var outdated = { 'ไม่คิดต้นทุน': true };   // ชื่อหัวตารางเดิมที่เปลี่ยนความหมายไปแล้ว ให้เขียนทับได้
   var header = bomSh.getRange(1, 15, 1, labels.length).getValues()[0];
   for (var i = 0; i < labels.length; i++) {
-    if (!String(header[i] || '').trim()) bomSh.getRange(1, 15 + i).setValue(labels[i]);
+    var cur = String(header[i] || '').trim();
+    if (!cur || outdated[cur]) bomSh.getRange(1, 15 + i).setValue(labels[i]);
   }
 }
 

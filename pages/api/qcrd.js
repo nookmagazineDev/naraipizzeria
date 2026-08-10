@@ -180,9 +180,9 @@ export default async function handler(req, res) {
           srcName: (r[15] || '').trim(),
           srcFactor: num(r[16]),
           srcBase: num(r[17]),
-          // S=แท็ก · T=ไม่คิดต้นทุน (แถวยังอยู่ในสูตรแต่ไม่ถูกรวมเป็นต้นทุนเมนู)
+          // S=แท็ก · T=ไม่ตัด BOM (ไม่ถูกตัดสต็อกตามสูตร แต่ยังคิดเป็นต้นทุนของเมนูปกติ)
           tag: (r[18] || '').trim(),
-          noCost: TRUTHY.test((r[19] || '').trim()),
+          noDeduct: TRUTHY.test((r[19] || '').trim()),
         });
       });
       return res.status(200).json({ status: 'success', data: map });
