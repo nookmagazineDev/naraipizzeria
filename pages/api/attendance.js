@@ -4,8 +4,8 @@
 //   → { status:'success', branch, start, end, count, truncated, source, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
 //
 // มีสามทางให้ดึง ลองทีละทางจนกว่าจะได้ (การเชื่อมต่อ/คิวรี่อยู่ใน lib/zkDb.js):
-//   office-server — /attendance ที่ inventory.dyndns.tv:8787 (= 203.154.185.48) ← ทางหลัก
-//                   ทางเดียวกับที่ Narai-branch ใช้ ถอยไปเครื่องเดิม storenarai ได้ด้วย
+//   office-server — /attendance (ไล่ลองหลาย base: Cloudflare Tunnel, เครื่องคลาวด์, เครื่องเดิม)
+//                   ทางเดียวกับที่ Narai-branch ใช้ — ตั้ง ZK_OFFICE_API_BASE ทับได้
 //   host API      — /zk/transactions ที่ api.khanoykorshabu.com
 //   SQL ตรง       — ต่อ ZKBio9 ตรงจาก Vercel ใช้ได้เมื่อตั้ง ZK_DB_USER/ZK_DB_PASSWORD
 //                   และเปิดพอร์ต SQL ให้เข้าจากภายนอกได้
