@@ -261,7 +261,9 @@ export default function Attendance() {
             <div>{error}</div>
             {/* คำใบ้ให้ตรงกับสาเหตุ: host-server เก่า / ติดต่อไม่ได้ / ต่อ SQL ตรงไม่ได้ แก้คนละจุดกัน */}
             <div className="text-xs text-rose-500 mt-1">
-              {errorCode === 'ZK_HOST_OUTDATED'
+              {errorCode === 'ZK_OFFICE_UNREACHABLE'
+                ? 'ติดต่อ office-server ที่ออฟฟิศไม่ได้ (storenarai.dyndns.tv:8787) — ตรวจว่าเครื่องเปิดอยู่และเซิร์ฟเวอร์ยังรัน ถ้าหน้า "ยอดใช้วัตถุดิบ" ก็ดึงไม่ขึ้นเหมือนกัน แปลว่าเป็นที่เซิร์ฟเวอร์ตัวนี้'
+                : errorCode === 'ZK_HOST_OUTDATED'
                 ? 'เครื่องออฟฟิศตอบอยู่ แต่ไม่รู้จัก /zk/* — server.js ที่รันอยู่เป็นเวอร์ชันเก่า ให้ก๊อป host-server/server.js ตัวล่าสุดไปทับแล้วรีสตาร์ท node server.js (ถ้าเปิด http://localhost:14365/zk/ping บนเครื่องนั้นแล้วได้ ok:true แปลว่า tunnel/โดเมนชี้ผิดที่แทน)'
                 : errorCode === 'ZK_HOST_UNREACHABLE'
                 ? 'ตรวจที่เครื่องออฟฟิศ: เปิดเครื่องอยู่ไหม, host-server (node server.js) รันอยู่ไหม และ tunnel/โดเมนที่ตั้งใน STORE_API_BASE ยังใช้ได้ไหม — เช็กเร็วๆ ด้วยการเปิด http://localhost:14365/zk/ping บนเครื่องนั้น'
