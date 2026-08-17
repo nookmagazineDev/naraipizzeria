@@ -3,6 +3,8 @@ import { apiCall } from '../lib/stockApi';
 import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
+
 export default function StockList() {
   // NARAI OFFICE: โหมดดูอย่างเดียวทุกสาขา (ไม่มี login)
   const user = { branch: 'all' };
@@ -79,17 +81,35 @@ export default function StockList() {
     setLoading(true);
     setItems([]);
     try {
-      const [itemsRes, empRes] = await Promise.all([
+      const [itemsRes, empRes, closingRes] = await Promise.all([
         apiCall('getStockItems', { branch }),
-        apiCall('getScheduleEmployees', { branch })
+        apiCall('getScheduleEmployees', { branch }),
+        // ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ จากชีท "ปิดรอบสิ้นเดือน"
+        fetch(`/api/stock-closing?branch=${encodeURIComponent(branch)}`)
+          .then(r => r.json())
+          .catch(() => ({ status: 'error', message: 'เชื่อมต่อไม่สำเร็จ' })),
       ]);
 
+      const closing = closingRes.status === 'success' ? (closingRes.data || {}) : {};
+
       if (itemsRes.status === 'success') {
-        setItems(itemsRes.data.map(item => ({ ...item, remaining: '', requested: '' })));
+        setItems(itemsRes.data.map(item => {
+          const endding = closing[normalizeId(item.productId)];
+          return {
+            ...item,
+            previousBalance: endding ? endding.balance : '',
+            previousBalanceDate: endding ? endding.date : '',
+            remaining: '',
+            requested: '',
+          };
+        }));
       } else {
         toast.error('ไม่สามารถดึงข้อมูลรายการสินค้าได้');
       }
       if (empRes.status === 'success') setEmployees(empRes.data);
+      if (closingRes.status !== 'success') {
+        toast.error('ยอดยกมา (Endding): ' + (closingRes.message || 'ดึงข้อมูลปิดรอบสิ้นเดือนไม่สำเร็จ'));
+      }
     } catch (err) {
       toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     } finally {
@@ -555,7 +575,7 @@ export default function StockList() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">หมวดจัดเก็บ</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา (Endding)</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
@@ -594,17 +614,15 @@ export default function StockList() {
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
 
-                          {/* ยอดยกมา */}
+                          {/* ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ */}
                           <td className="px-4 py-3 text-center bg-purple-50/30">
-                            <div
-                              className={`font-semibold text-purple-700 text-sm ${item.stockHistory && item.stockHistory.length > 1 ? 'cursor-pointer hover:underline hover:text-purple-900' : ''}`}
-                              onClick={() => item.stockHistory && item.stockHistory.length > 1 && setSelectedStockHistory({ name: item.name, history: item.stockHistory, highlight: 'previous' })}
-                              title={item.stockHistory && item.stockHistory.length > 1 ? 'คลิกเพื่อดูประวัติ' : ''}
-                            >
+                            <div className="font-semibold text-purple-700 text-sm">
                               {item.previousBalance !== '' && item.previousBalance !== undefined ? item.previousBalance : '-'}
                             </div>
                             {item.previousBalanceDate && (
-                              <div className="text-[10px] text-gray-400 mt-0.5">{String(item.previousBalanceDate || '').split(' ')[0]}</div>
+                              <div className="text-[10px] text-gray-400 mt-0.5" title="วันที่ปิดยอดสิ้นเดือน">
+                                ปิดรอบ {String(item.previousBalanceDate || '').split(' ')[0]}
+                              </div>
                             )}
                           </td>
 
@@ -942,18 +960,16 @@ export default function StockList() {
                 <tbody className="divide-y">
                   {[...selectedStockHistory.history].reverse().map((entry, idx) => {
                     const isLatest = idx === 0;
-                    const isPrevious = idx === 1;
                     return (
                       <tr
                         key={idx}
-                        className={`transition-colors ${isLatest ? 'bg-indigo-50 font-semibold' : isPrevious ? 'bg-purple-50' : 'hover:bg-gray-50'}`}
+                        className={`transition-colors ${isLatest ? 'bg-indigo-50 font-semibold' : 'hover:bg-gray-50'}`}
                       >
                         <td className="px-4 py-3 text-gray-700">
                           {entry.date}
                           {isLatest && <span className="ml-2 text-[10px] bg-indigo-500 text-white px-1.5 py-0.5 rounded-full">ล่าสุด</span>}
-                          {isPrevious && <span className="ml-2 text-[10px] bg-purple-400 text-white px-1.5 py-0.5 rounded-full">ยกมา</span>}
                         </td>
-                        <td className={`px-4 py-3 text-right font-bold ${isLatest ? 'text-indigo-700' : isPrevious ? 'text-purple-700' : 'text-gray-800'}`}>
+                        <td className={`px-4 py-3 text-right font-bold ${isLatest ? 'text-indigo-700' : 'text-gray-800'}`}>
                           {entry.remaining}
                         </td>
                         <td className="px-4 py-3 text-gray-500 text-xs">{entry.counter || '-'}</td>
