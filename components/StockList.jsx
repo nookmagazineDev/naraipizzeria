@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { apiCall } from '../lib/stockApi';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { apiCall, apiRead } from '../lib/stockApi';
 import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
 export default function StockList() {
   // NARAI OFFICE: โหมดดูอย่างเดียวทุกสาขา (ไม่มี login)
@@ -9,6 +11,10 @@ export default function StockList() {
   const isAll = true;
 
   const [loading, setLoading] = useState(false);
+  const [isLoadingClosing, setIsLoadingClosing] = useState(false);
+  const branchRef = useRef('');        // สาขาที่กำลังโหลดอยู่ ใช้ทิ้งผลลัพธ์ที่มาช้าหลังเปลี่ยนสาขา
+  const itemsCacheRef = useRef({});    // { [สาขา]: รายการสินค้าที่เคยโหลด } — สลับสาขากลับมาแล้วขึ้นทันที
+  const closingCacheRef = useRef({});  // { [สาขา]: ยอดปิดรอบ } — ใช้ merge ไม่ว่าฝั่งไหนจะมาถึงก่อน
   const [items, setItems] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [branches, setBranches] = useState([]);
@@ -26,7 +32,6 @@ export default function StockList() {
   const [apiEndDate, setApiEndDate] = useState('');
   const [isFetchingApi, setIsFetchingApi] = useState(false);
   const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
-  const [recipeMap, setRecipeMap] = useState({});
   const [usageByMenu, setUsageByMenu] = useState({});
   const [expandedMenu, setExpandedMenu] = useState(null);
   const [menuTables, setMenuTables] = useState({}); // { [menuName]: { loading, rows } }
@@ -60,40 +65,78 @@ export default function StockList() {
 
   useEffect(() => {
     if (isAll) {
-      // Load branch list for the dropdown selector
-      apiCall('getBranches', {}).then(res => {
-        if (res.status === 'success') setBranches(res.data);
-      });
-      // โหลดสูตรเมนู (วัตถุดิบ -> รายชื่อเมนู) ครั้งเดียว ใช้แสดงในป๊อปอัปรายละเอียดการเบิกใช้
-      fetch('/api/recipe')
-        .then(r => r.json())
-        .then(res => { if (res.status === 'success') setRecipeMap(res.data || {}); })
-        .catch(() => {});
+      // ตอนเปิดหน้า โหลดแค่รายชื่อสาขาสำหรับ dropdown — ข้อมูลที่เหลือรอเลือกสาขาก่อน
+      apiRead('getBranches').then(res => setBranches(res.data)).catch(() => {});
     } else {
       loadData(user?.branch);
     }
   }, []);
 
+  // เติมยอดยกมา (Endding) ให้รายการสินค้า — เรียกได้ทั้งตอนรายการมาถึงและตอนยอดปิดรอบมาถึง
+  const mergeEndding = (list, closing) => list.map(item => {
+    const endding = closing[normalizeId(item.productId)];
+    return {
+      ...item,
+      previousBalance: endding ? endding.balance : '',
+      previousBalanceDate: endding ? endding.date : '',
+    };
+  });
+
   const loadData = async (branch) => {
     if (!branch) return;
-    setLoading(true);
-    setItems([]);
-    try {
-      const [itemsRes, empRes] = await Promise.all([
-        apiCall('getStockItems', { branch }),
-        apiCall('getScheduleEmployees', { branch })
-      ]);
+    branchRef.current = branch;
 
-      if (itemsRes.status === 'success') {
-        setItems(itemsRes.data.map(item => ({ ...item, remaining: '', requested: '' })));
-      } else {
-        toast.error('ไม่สามารถดึงข้อมูลรายการสินค้าได้');
+    // เคยเปิดสาขานี้แล้วให้ขึ้นของเดิมทันที แล้วค่อยรีเฟรชเบื้องหลัง (ไม่ต้องนั่งดู spinner ซ้ำ)
+    const cached = itemsCacheRef.current[branch];
+    setItems(cached || []);
+    setLoading(!cached);
+    setIsLoadingClosing(!closingCacheRef.current[branch]);
+
+    // ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ จากชีท "ปิดรอบสิ้นเดือน"
+    // ยิงคู่ไปกับรายการสินค้า แต่ไม่รอ — ตารางขึ้นก่อน แล้วค่อยเติมยอดยกมาเมื่อมาถึง
+    fetch(`/api/stock-closing?branch=${encodeURIComponent(branch)}`)
+      .then(r => r.json())
+      .catch(() => ({ status: 'error', message: 'เชื่อมต่อไม่สำเร็จ' }))
+      .then(closingRes => {
+        if (closingRes.status === 'success') {
+          const closing = closingRes.data || {};
+          closingCacheRef.current[branch] = closing;
+          // ถ้ารายการสินค้าขึ้นไปแล้ว เติมยอดยกมาให้ตารางที่แสดงอยู่เลย
+          // ถ้ายังไม่ขึ้น ฝั่งรายการสินค้าจะหยิบ closingCacheRef ไป merge เองตอนมาถึง
+          if (branch === branchRef.current) {
+            setItems(prevItems => {
+              const merged = mergeEndding(prevItems, closing);
+              if (merged.length) itemsCacheRef.current[branch] = merged;
+              return merged;
+            });
+          }
+        } else if (branch === branchRef.current) {
+          toast.error('ยอดยกมา (Endding): ' + (closingRes.message || 'ดึงข้อมูลปิดรอบสิ้นเดือนไม่สำเร็จ'));
+        }
+        if (branch === branchRef.current) setIsLoadingClosing(false);
+      });
+
+    try {
+      const itemsRes = await apiRead('getStockItems', { branch });
+      if (branch !== branchRef.current) return;   // เปลี่ยนสาขาไปแล้ว ทิ้งผลเก่า
+
+      const merged = mergeEndding(
+        itemsRes.data.map(item => ({ ...item, remaining: '', requested: '' })),
+        closingCacheRef.current[branch] || {}
+      );
+      itemsCacheRef.current[branch] = merged;
+      setItems(merged);
+
+      // รายชื่อพนักงาน (ผู้นับ/ผู้เบิก) ใช้เฉพาะโหมดสาขา — โหมดดูอย่างเดียวไม่ต้องเสียเวลาเรียก
+      if (!isAll) {
+        const empRes = await apiRead('getScheduleEmployees', { branch });
+        setEmployees(empRes.data);
       }
-      if (empRes.status === 'success') setEmployees(empRes.data);
     } catch (err) {
-      toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
+      if (branch === branchRef.current) toast.error(err.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     } finally {
-      setLoading(false);
+      // isLoadingClosing ปล่อยให้ฝั่งยอดปิดรอบเคลียร์เอง ช่องยอดยกมาจะได้หมุนจนกว่าเลขจะมาจริง
+      if (branch === branchRef.current) setLoading(false);
     }
   };
 
@@ -177,6 +220,7 @@ export default function StockList() {
   };
 
   const handleBranchChange = (branch) => {
+    branchRef.current = branch;
     setSelectedBranch(branch);
     setItems([]);
     setSearchTerm('');
@@ -555,7 +599,7 @@ export default function StockList() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">หมวดจัดเก็บ</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา (Endding)</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
@@ -594,17 +638,17 @@ export default function StockList() {
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
 
-                          {/* ยอดยกมา */}
+                          {/* ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ */}
                           <td className="px-4 py-3 text-center bg-purple-50/30">
-                            <div
-                              className={`font-semibold text-purple-700 text-sm ${item.stockHistory && item.stockHistory.length > 1 ? 'cursor-pointer hover:underline hover:text-purple-900' : ''}`}
-                              onClick={() => item.stockHistory && item.stockHistory.length > 1 && setSelectedStockHistory({ name: item.name, history: item.stockHistory, highlight: 'previous' })}
-                              title={item.stockHistory && item.stockHistory.length > 1 ? 'คลิกเพื่อดูประวัติ' : ''}
-                            >
-                              {item.previousBalance !== '' && item.previousBalance !== undefined ? item.previousBalance : '-'}
+                            <div className="font-semibold text-purple-700 text-sm">
+                              {isLoadingClosing
+                                ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto text-purple-300" />
+                                : (item.previousBalance !== '' && item.previousBalance !== undefined ? item.previousBalance : '-')}
                             </div>
                             {item.previousBalanceDate && (
-                              <div className="text-[10px] text-gray-400 mt-0.5">{String(item.previousBalanceDate || '').split(' ')[0]}</div>
+                              <div className="text-[10px] text-gray-400 mt-0.5" title="วันที่ปิดยอดสิ้นเดือน">
+                                ปิดรอบ {String(item.previousBalanceDate || '').split(' ')[0]}
+                              </div>
                             )}
                           </td>
 
@@ -653,7 +697,7 @@ export default function StockList() {
                                   const posTotal = Number(item.apiUsage.total) || 0;
                                   const scale = (posTotal > 0 && estTotal > 0) ? posTotal / estTotal : 1;
                                   const byMenu = rawByMenu.map(r => ({ ...r, qty: Number((Number(r.qty) * scale).toFixed(2)) }));
-                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [], byMenu, posTotal, scaled: scale !== 1 });
+                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, byMenu, posTotal, scaled: scale !== 1 });
                                 }}
                                 title="คลิกเพื่อดูรายละเอียด"
                               >
@@ -942,18 +986,16 @@ export default function StockList() {
                 <tbody className="divide-y">
                   {[...selectedStockHistory.history].reverse().map((entry, idx) => {
                     const isLatest = idx === 0;
-                    const isPrevious = idx === 1;
                     return (
                       <tr
                         key={idx}
-                        className={`transition-colors ${isLatest ? 'bg-indigo-50 font-semibold' : isPrevious ? 'bg-purple-50' : 'hover:bg-gray-50'}`}
+                        className={`transition-colors ${isLatest ? 'bg-indigo-50 font-semibold' : 'hover:bg-gray-50'}`}
                       >
                         <td className="px-4 py-3 text-gray-700">
                           {entry.date}
                           {isLatest && <span className="ml-2 text-[10px] bg-indigo-500 text-white px-1.5 py-0.5 rounded-full">ล่าสุด</span>}
-                          {isPrevious && <span className="ml-2 text-[10px] bg-purple-400 text-white px-1.5 py-0.5 rounded-full">ยกมา</span>}
                         </td>
-                        <td className={`px-4 py-3 text-right font-bold ${isLatest ? 'text-indigo-700' : isPrevious ? 'text-purple-700' : 'text-gray-800'}`}>
+                        <td className={`px-4 py-3 text-right font-bold ${isLatest ? 'text-indigo-700' : 'text-gray-800'}`}>
                           {entry.remaining}
                         </td>
                         <td className="px-4 py-3 text-gray-500 text-xs">{entry.counter || '-'}</td>
