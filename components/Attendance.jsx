@@ -259,12 +259,12 @@ export default function Attendance() {
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
           <div>
             <div>{error}</div>
-            {/* คำใบ้ให้ตรงกับสาเหตุ: ยังไม่ตั้ง env กับต่อ DB ไม่ได้ แก้คนละจุดกัน */}
+            {/* คำใบ้ให้ตรงกับสาเหตุ: host API ล่ม กับต่อ SQL ตรงไม่ได้ แก้คนละจุดกัน */}
             <div className="text-xs text-rose-500 mt-1">
-              {errorCode === 'ZK_NOT_CONFIGURED'
-                ? 'ตั้ง environment variable ZK_DB_USER และ ZK_DB_PASSWORD บน Vercel แล้ว redeploy หนึ่งครั้ง'
+              {errorCode === 'ZK_HOST_UNREACHABLE'
+                ? 'ตรวจที่เครื่องออฟฟิศ: เปิดเครื่องอยู่ไหม, host-server (node server.js) รันอยู่ไหม และ tunnel/โดเมนที่ตั้งใน STORE_API_BASE ยังใช้ได้ไหม — เช็กเร็วๆ ด้วยการเปิด http://localhost:14365/zk/ping บนเครื่องนั้น'
                 : errorCode === 'ZK_CONNECT_FAILED'
-                  ? 'ตรวจว่าเครื่องที่รัน SQL Server ของ ZKBio เปิดอยู่ และเปิดพอร์ตให้เข้าถึงจากภายนอกได้'
+                  ? 'ตรวจว่า SQL Server ของ ZKBio เปิดอยู่ และเปิดพอร์ตให้เข้าถึงจากภายนอกได้ (ปกติควรให้ดึงผ่าน host API แทน ไม่ต้องเปิดพอร์ต SQL ออกเน็ต)'
                   : 'ลองใหม่อีกครั้ง หรือแคบช่วงวันที่ลง'}
             </div>
           </div>

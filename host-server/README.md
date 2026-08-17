@@ -6,6 +6,8 @@ API ตัวกลางที่รันบน **เครื่อง Window
 Dashboard เรียกผ่าน proxy ฝั่ง Next.js:
 - `pages/api/sales.js`  → `/cpaidbetweendate`
 - `pages/api/detail.js` → `/ctranbetweendate`
+- `pages/api/attendance.js` (หน้า "ดูสแกนหน้า") → `/zk/transactions`, `/zk/employees`
+- `pages/api/ai-chat.js` (AI NARAI) → `/zk/transactions`, `/zk/employees`
 
 > หมายเหตุ: `/usagemenu`, `/usagebytable` (port 8787) ยังใช้เซิร์ฟเวอร์เดิม `storenarai.dyndns.tv` ไม่เกี่ยวกับไฟล์นี้
 
@@ -86,6 +88,9 @@ $env:ZK_DB_NAME     = 'ZKBio9'                 # ชื่อ DB ของ ZKBio
 - การต่อ ZKBio เป็นแบบ lazy — ถ้ายังไม่ตั้งค่าหรือต่อไม่ได้ endpoint `/zk/*` จะคืน error
   แต่ API ยอดขายหลักทำงานปกติ
 - เช็กว่าต่อได้: เปิด `http://localhost:14365/zk/ping`
+- **หน้า "ดูสแกนหน้า" บน Dashboard ดึงผ่าน `/zk/transactions` ของเครื่องนี้**
+  ถ้าหน้าเว็บขึ้น "ต่อ host API ... ไม่ได้" แปลว่าเครื่องนี้ปิด / `node server.js` ไม่ได้รัน /
+  tunnel หลุด — ไม่ต้องไปเปิดพอร์ต SQL ออกอินเทอร์เน็ต (ไม่ปลอดภัย และไม่ใช่ทางที่โค้ดใช้)
 - ถ้าชื่อตารางไม่ตรงกับ default (`iclock_transaction`, `personnel_employee`,
   `personnel_department`) ให้ดูชื่อจริงจาก `/zk/tables` แล้วตั้ง env
   `ZK_TRANS_TABLE` / `ZK_EMP_TABLE` / `ZK_DEPT_TABLE`

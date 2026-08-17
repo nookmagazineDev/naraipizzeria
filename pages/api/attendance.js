@@ -5,7 +5,18 @@
 //   → { status:'success', branch, start, end, count, truncated, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
 //
 // การเชื่อมต่อ/คิวรี่อยู่ใน lib/zkDb.js (ตั้งค่าผ่าน env ZK_DB_*)
-import { getZkPool, zkNameMap, queryPunches, ZK_ROW_CAP } from '../../lib/zkDb';
+//
+// ดึงผ่าน host API (/zk/transactions) ที่รันบนเครื่องออฟฟิศเครื่องเดียวกับ SQL Server
+// เป็นทางหลัก — ทางเดียวกับ /api/sales และ AI NARAI ที่ใช้งานได้อยู่แล้ว จึงไม่ต้อง
+// เปิดพอร์ต SQL ออกอินเทอร์เน็ต ถ้ามีการตั้ง ZK_DB_USER/ZK_DB_PASSWORD ไว้
+// จะลองต่อ SQL ตรงเป็นทางสำรองให้อีกชั้น
+import {
+  fetchPunchesViaHost, fetchNamesViaHost, hasDirectDbConfig, ZK_API_BASE,
+  getZkPool, zkNameMap, queryPunches, ZK_ROW_CAP,
+} from '../../lib/zkDb';
+
+// ช่วงกว้างๆ ทุกสาขาใช้เวลาหลายสิบวินาที — เผื่อเวลาให้พอเหมือน /api/sales
+export const config = { maxDuration: 60 };
 
 // ป้ายกำกับตามมาตรฐาน ZKTeco — แต่ละเครื่องตั้งค่าปุ่มไม่เหมือนกัน หน้าเว็บจึงคิด "เข้า/ออก"
 // จากลำดับเวลาสแกนของวันด้วย ไม่ได้อิง punch_state อย่างเดียว (ดู lib/attendance.js)
@@ -41,6 +52,53 @@ export function mapPunchRows(rows, nameOf = {}) {
   });
 }
 
+/** error ที่ติด code มาด้วย เพื่อให้หน้าเว็บขึ้นคำแนะนำได้ตรงสาเหตุ */
+function fail(code, message) {
+  const e = new Error(message);
+  e.code = code;
+  return e;
+}
+
+/**
+ * ดึงรายการสแกน: host API ก่อน ถ้าไม่ได้ค่อยลองต่อ SQL ตรง (เมื่อตั้งรหัสไว้)
+ * คืน { rows, nameOf, source } — source ไว้ดูว่าข้อมูลรอบนี้มาจากทางไหน
+ * โยน error ที่รวมสาเหตุของทั้งสองทางไว้ เพื่อให้รู้ว่าต้องไปแก้ตรงไหน
+ */
+async function loadPunches({ start, end, branch, emp }) {
+  let hostErr;
+  try {
+    const [rows, nameOf] = await Promise.all([
+      fetchPunchesViaHost({ start, end, branch, emp }),
+      fetchNamesViaHost(), // ดึงชื่อไม่ได้ก็คืน {} ให้ ไม่ทำให้ทั้งคำขอล้ม
+    ]);
+    return { rows, nameOf, source: 'host-api' };
+  } catch (e) {
+    hostErr = e;
+  }
+
+  if (!hasDirectDbConfig()) {
+    throw fail('ZK_HOST_UNREACHABLE',
+      `ต่อ host API (${ZK_API_BASE}/zk/transactions) ไม่ได้: ${hostErr.message} — ` +
+      'ตรวจว่าเครื่องออฟฟิศเปิดอยู่และ host-server (node server.js) กับ tunnel ยังรันอยู่'
+    );
+  }
+
+  try {
+    const pool = await getZkPool();
+    const [rows, nameOf] = await Promise.all([
+      queryPunches(pool, { start, endExclusive: exclusiveEnd(end), branch, emp }),
+      zkNameMap(pool),
+    ]);
+    return { rows, nameOf, source: 'sql-direct' };
+  } catch (dbErr) {
+    // ล้มทั้งคู่ = เครื่องออฟฟิศน่าจะปิด/เน็ตหลุด ชี้ไปที่ host API ซึ่งเป็นทางที่ควรใช้
+    throw fail('ZK_HOST_UNREACHABLE',
+      `ดึงข้อมูลการสแกนไม่สำเร็จทั้งสองทาง — host API (${ZK_API_BASE}): ${hostErr.message} · ` +
+      `ต่อ SQL ตรง: ${dbErr.message}`
+    );
+  }
+}
+
 export default async function handler(req, res) {
   const start = txt(req.query.start);
   const end = txt(req.query.end);
@@ -58,27 +116,25 @@ export default async function handler(req, res) {
   }
 
   try {
-    const pool = await getZkPool();
-    const [rows, nameOf] = await Promise.all([
-      queryPunches(pool, { start, endExclusive: exclusiveEnd(end), branch, emp }),
-      zkNameMap(pool),
-    ]);
+    const { rows, nameOf, source } = await loadPunches({ start, end, branch, emp });
 
-    const data = mapPunchRows(rows, nameOf);
+    // เกินเพดาน = ช่วงวันที่กว้างไป ตัดให้เหลือรายการล่าสุดแล้วเตือนผู้ใช้
     const truncated = rows.length >= ZK_ROW_CAP;
+    const data = mapPunchRows(truncated ? rows.slice(0, ZK_ROW_CAP) : rows, nameOf);
 
     return res.status(200).json({
       status: 'success',
       branch, start, end,
       count: data.length,
       truncated,
+      source,
       ...(truncated ? { message: `ข้อมูลถูกตัดที่ ${ZK_ROW_CAP.toLocaleString()} รายการ — ช่วงวันที่กว้างเกินไป กรุณาแคบช่วงลงหรือเลือกสาขา` } : {}),
       data,
     });
   } catch (err) {
     console.error('attendance API error:', err.message);
-    // ยังไม่ได้ตั้ง env = ปัญหาคนละแบบกับต่อ DB ไม่ได้ แยก code ให้หน้าเว็บขึ้นวิธีแก้ถูก
-    const code = /ยังไม่ได้ตั้งค่า/.test(err.message) ? 'ZK_NOT_CONFIGURED' : 'ZK_CONNECT_FAILED';
+    // แยกสาเหตุให้หน้าเว็บขึ้นวิธีแก้ถูกจุด: host API ล่ม vs ต่อ SQL ตรงไม่ได้
+    const code = err.code || 'ZK_CONNECT_FAILED';
     return res.status(502).json({ status: 'error', code, message: err.message || 'ดึงข้อมูลการสแกนไม่สำเร็จ' });
   }
 }
