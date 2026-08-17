@@ -1,17 +1,16 @@
-// ประวัติสแกนหน้า/สแกนนิ้ว — ต่อฐาน ZKBio Time 9 (SQL Server) โดยตรง
-// ข้อมูลชุดเดียวกับหน้า "สแกนเข้า-ออก" ของโปรเจค Narai-branch (ที่นั่น office-server เป็นตัวต่อ DB ให้)
+// ประวัติสแกนหน้า/สแกนนิ้ว จากเครื่องสแกน ZKBio Time 9
 //
 //   GET /api/attendance?start=YYYY-MM-DD&end=YYYY-MM-DD[&branch=รหัสสาขา][&emp=รหัสพนักงาน]
-//   → { status:'success', branch, start, end, count, truncated, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
+//   → { status:'success', branch, start, end, count, truncated, source, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
 //
-// การเชื่อมต่อ/คิวรี่อยู่ใน lib/zkDb.js (ตั้งค่าผ่าน env ZK_DB_*)
-//
-// ดึงผ่าน host API (/zk/transactions) ที่รันบนเครื่องออฟฟิศเครื่องเดียวกับ SQL Server
-// เป็นทางหลัก — ทางเดียวกับ /api/sales และ AI NARAI ที่ใช้งานได้อยู่แล้ว จึงไม่ต้อง
-// เปิดพอร์ต SQL ออกอินเทอร์เน็ต ถ้ามีการตั้ง ZK_DB_USER/ZK_DB_PASSWORD ไว้
-// จะลองต่อ SQL ตรงเป็นทางสำรองให้อีกชั้น
+// มีสองทางให้ดึง ลองทีละทางจนกว่าจะได้ (การเชื่อมต่อ/คิวรี่อยู่ใน lib/zkDb.js):
+//   host API  — /zk/transactions บนเครื่องออฟฟิศเครื่องเดียวกับ SQL Server
+//               ทางเดียวกับ /api/sales และ AI NARAI จึงไม่ต้องเปิดพอร์ต SQL ออกเน็ต
+//   SQL ตรง   — ต่อ ZKBio9 ตรงจาก Vercel ใช้ได้เมื่อตั้ง ZK_DB_USER/ZK_DB_PASSWORD
+//               และเปิดพอร์ต SQL ให้เข้าจากภายนอกได้
+// ปกติเรียง host API ก่อน — ตั้ง env ZK_SOURCE=sql เพื่อให้เอา SQL ตรงขึ้นก่อน
 import {
-  fetchPunchesViaHost, fetchNamesViaHost, hasDirectDbConfig, ZK_API_BASE,
+  fetchPunchesViaHost, fetchNamesViaHost, hasDirectDbConfig, preferDirectDb, ZK_API_BASE,
   getZkPool, zkNameMap, queryPunches, ZK_ROW_CAP,
 } from '../../lib/zkDb';
 
@@ -59,46 +58,57 @@ function fail(code, message) {
   return e;
 }
 
+/** ทางที่ 1: ผ่าน host API บนเครื่องออฟฟิศ */
+async function viaHostApi({ start, end, branch, emp }) {
+  const [rows, nameOf] = await Promise.all([
+    fetchPunchesViaHost({ start, end, branch, emp }),
+    fetchNamesViaHost(), // ดึงชื่อไม่ได้ก็คืน {} ให้ ไม่ทำให้ทั้งคำขอล้ม
+  ]);
+  return { rows, nameOf, source: 'host-api' };
+}
+
+/** ทางที่ 2: ต่อ SQL Server ของ ZKBio ตรง (ต้องเปิดพอร์ตออกเน็ต + ตั้ง ZK_DB_USER/PASSWORD) */
+async function viaSqlDirect({ start, end, branch, emp }) {
+  const pool = await getZkPool();
+  const [rows, nameOf] = await Promise.all([
+    queryPunches(pool, { start, endExclusive: exclusiveEnd(end), branch, emp }),
+    zkNameMap(pool),
+  ]);
+  return { rows, nameOf, source: 'sql-direct' };
+}
+
 /**
- * ดึงรายการสแกน: host API ก่อน ถ้าไม่ได้ค่อยลองต่อ SQL ตรง (เมื่อตั้งรหัสไว้)
+ * ดึงรายการสแกน — ลองทีละทางตามลำดับ ได้ทางไหนก่อนใช้ทางนั้น
+ * ปกติเอา host API ก่อน (ไม่ต้องเปิดพอร์ต SQL ออกเน็ต) ตั้ง ZK_SOURCE=sql เพื่อสลับลำดับ
  * คืน { rows, nameOf, source } — source ไว้ดูว่าข้อมูลรอบนี้มาจากทางไหน
- * โยน error ที่รวมสาเหตุของทั้งสองทางไว้ เพื่อให้รู้ว่าต้องไปแก้ตรงไหน
+ * ถ้าล้มหมด โยน error ที่รวมสาเหตุของทุกทางไว้ เพื่อให้รู้ว่าต้องไปแก้ตรงไหน
  */
-async function loadPunches({ start, end, branch, emp }) {
-  let hostErr;
-  try {
-    const [rows, nameOf] = await Promise.all([
-      fetchPunchesViaHost({ start, end, branch, emp }),
-      fetchNamesViaHost(), // ดึงชื่อไม่ได้ก็คืน {} ให้ ไม่ทำให้ทั้งคำขอล้ม
-    ]);
-    return { rows, nameOf, source: 'host-api' };
-  } catch (e) {
-    hostErr = e;
+async function loadPunches(args) {
+  const ways = [['host', viaHostApi]];
+  if (hasDirectDbConfig()) {
+    if (preferDirectDb()) ways.unshift(['sql', viaSqlDirect]);
+    else ways.push(['sql', viaSqlDirect]);
   }
+
+  const errs = {};
+  for (const [name, run] of ways) {
+    try {
+      return await run(args);
+    } catch (e) {
+      errs[name] = e;
+    }
+  }
+
+  const { host: hostErr, sql: dbErr } = errs;
+  const parts = ways
+    .map(([name]) => (name === 'host'
+      ? `host API (${ZK_API_BASE}): ${hostErr.message}`
+      : `ต่อ SQL ตรง: ${dbErr.message}`));
 
   // 404 = มีเซิร์ฟเวอร์ตอบ แต่ไม่รู้จัก /zk/* → คนละปัญหากับเครื่องปิด/เน็ตหลุด
-  const hostCode = hostErr.status === 404 ? 'ZK_HOST_OUTDATED' : 'ZK_HOST_UNREACHABLE';
+  const code = hostErr.status === 404 ? 'ZK_HOST_OUTDATED' : 'ZK_HOST_UNREACHABLE';
 
-  if (!hasDirectDbConfig()) {
-    throw fail(hostCode,
-      `ต่อ host API (${ZK_API_BASE}/zk/transactions) ไม่ได้: ${hostErr.message}`
-    );
-  }
-
-  try {
-    const pool = await getZkPool();
-    const [rows, nameOf] = await Promise.all([
-      queryPunches(pool, { start, endExclusive: exclusiveEnd(end), branch, emp }),
-      zkNameMap(pool),
-    ]);
-    return { rows, nameOf, source: 'sql-direct' };
-  } catch (dbErr) {
-    // ล้มทั้งคู่ — คำแนะนำยังยึดตามสาเหตุฝั่ง host API ซึ่งเป็นทางที่ควรใช้
-    throw fail(hostCode,
-      `ดึงข้อมูลการสแกนไม่สำเร็จทั้งสองทาง — host API (${ZK_API_BASE}): ${hostErr.message} · ` +
-      `ต่อ SQL ตรง: ${dbErr.message}`
-    );
-  }
+  throw fail(code, `ดึงข้อมูลการสแกนไม่สำเร็จ — ${parts.join(' · ')}`);
 }
 
 export default async function handler(req, res) {
