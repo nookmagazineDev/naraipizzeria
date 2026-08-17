@@ -4,14 +4,14 @@
 //   → { status:'success', branch, start, end, count, truncated, source, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
 //
 // มีสามทางให้ดึง ลองทีละทางจนกว่าจะได้ (การเชื่อมต่อ/คิวรี่อยู่ใน lib/zkDb.js):
-//   office-server — /attendance ที่ storenarai.dyndns.tv:8787 ← ทางหลัก
-//                   ตัวเดียวกับที่หน้า usage ใช้ และเป็นทางที่ Narai-branch ใช้มาตลอด
+//   office-server — /attendance (ไล่ลองหลาย base: Cloudflare Tunnel, เครื่องคลาวด์, เครื่องเดิม)
+//                   ทางเดียวกับที่ Narai-branch ใช้ — ตั้ง ZK_OFFICE_API_BASE ทับได้
 //   host API      — /zk/transactions ที่ api.khanoykorshabu.com
 //   SQL ตรง       — ต่อ ZKBio9 ตรงจาก Vercel ใช้ได้เมื่อตั้ง ZK_DB_USER/ZK_DB_PASSWORD
 //                   และเปิดพอร์ต SQL ให้เข้าจากภายนอกได้
 // เลือกทางที่ลองก่อนได้ด้วย env ZK_SOURCE = office (default) | host | sql
 import {
-  fetchAttendanceViaOffice, ZK_OFFICE_API_BASE,
+  fetchAttendanceViaOffice,
   fetchPunchesViaHost, fetchNamesViaHost, ZK_API_BASE,
   hasDirectDbConfig, preferredSource,
   getZkPool, zkNameMap, queryPunches, ZK_ROW_CAP,
@@ -87,7 +87,7 @@ async function viaSqlDirect({ start, end, branch, emp }) {
 
 // ชื่อทาง -> ตัวรัน, ป้ายที่ใช้ในข้อความ error และ error code ที่คู่กัน
 const WAYS = {
-  office: { run: viaOfficeServer, label: () => `office-server (${ZK_OFFICE_API_BASE})`, code: 'ZK_OFFICE_UNREACHABLE' },
+  office: { run: viaOfficeServer, label: () => 'office-server', code: 'ZK_OFFICE_UNREACHABLE' },
   host:   { run: viaHostApi,      label: () => `host API (${ZK_API_BASE})`,             code: 'ZK_HOST_UNREACHABLE' },
   sql:    { run: viaSqlDirect,    label: () => 'ต่อ SQL ตรง',                            code: 'ZK_CONNECT_FAILED' },
 };
