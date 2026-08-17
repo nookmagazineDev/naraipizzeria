@@ -1,17 +1,19 @@
-// ประวัติสแกนหน้า/สแกนนิ้ว — ต่อฐาน ZKBio Time 9 (SQL Server) โดยตรง
-// ข้อมูลชุดเดียวกับหน้า "สแกนเข้า-ออก" ของโปรเจค Narai-branch (ที่นั่น office-server เป็นตัวต่อ DB ให้)
+// ประวัติสแกนหน้า/สแกนนิ้ว จากเครื่องสแกน ZKBio Time 9
 //
 //   GET /api/attendance?start=YYYY-MM-DD&end=YYYY-MM-DD[&branch=รหัสสาขา][&emp=รหัสพนักงาน]
-//   → { status:'success', branch, start, end, count, truncated, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
+//   → { status:'success', branch, start, end, count, truncated, source, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
 //
-// การเชื่อมต่อ/คิวรี่อยู่ใน lib/zkDb.js (ตั้งค่าผ่าน env ZK_DB_*)
-//
-// ดึงผ่าน host API (/zk/transactions) ที่รันบนเครื่องออฟฟิศเครื่องเดียวกับ SQL Server
-// เป็นทางหลัก — ทางเดียวกับ /api/sales และ AI NARAI ที่ใช้งานได้อยู่แล้ว จึงไม่ต้อง
-// เปิดพอร์ต SQL ออกอินเทอร์เน็ต ถ้ามีการตั้ง ZK_DB_USER/ZK_DB_PASSWORD ไว้
-// จะลองต่อ SQL ตรงเป็นทางสำรองให้อีกชั้น
+// มีสามทางให้ดึง ลองทีละทางจนกว่าจะได้ (การเชื่อมต่อ/คิวรี่อยู่ใน lib/zkDb.js):
+//   office-server — /attendance ที่ storenarai.dyndns.tv:8787 ← ทางหลัก
+//                   ตัวเดียวกับที่หน้า usage ใช้ และเป็นทางที่ Narai-branch ใช้มาตลอด
+//   host API      — /zk/transactions ที่ api.khanoykorshabu.com
+//   SQL ตรง       — ต่อ ZKBio9 ตรงจาก Vercel ใช้ได้เมื่อตั้ง ZK_DB_USER/ZK_DB_PASSWORD
+//                   และเปิดพอร์ต SQL ให้เข้าจากภายนอกได้
+// เลือกทางที่ลองก่อนได้ด้วย env ZK_SOURCE = office (default) | host | sql
 import {
-  fetchPunchesViaHost, fetchNamesViaHost, hasDirectDbConfig, ZK_API_BASE,
+  fetchAttendanceViaOffice, ZK_OFFICE_API_BASE,
+  fetchPunchesViaHost, fetchNamesViaHost, ZK_API_BASE,
+  hasDirectDbConfig, preferredSource,
   getZkPool, zkNameMap, queryPunches, ZK_ROW_CAP,
 } from '../../lib/zkDb';
 
@@ -59,44 +61,67 @@ function fail(code, message) {
   return e;
 }
 
+/** ทางที่ 1: office-server /attendance — ฝั่งนั้นแปลงรูปมาให้ครบแล้ว ใช้ได้เลย */
+async function viaOfficeServer(args) {
+  return fetchAttendanceViaOffice(args);
+}
+
+/** ทางที่ 2: host API /zk/transactions (ได้แถวดิบ + ชื่อพนักงานแยกกัน) */
+async function viaHostApi({ start, end, branch, emp }) {
+  const [rows, nameOf] = await Promise.all([
+    fetchPunchesViaHost({ start, end, branch, emp }),
+    fetchNamesViaHost(), // ดึงชื่อไม่ได้ก็คืน {} ให้ ไม่ทำให้ทั้งคำขอล้ม
+  ]);
+  return mapPunchRows(rows, nameOf);
+}
+
+/** ทางที่ 3: ต่อ SQL Server ของ ZKBio ตรง (ต้องเปิดพอร์ตออกเน็ต + ตั้ง ZK_DB_USER/PASSWORD) */
+async function viaSqlDirect({ start, end, branch, emp }) {
+  const pool = await getZkPool();
+  const [rows, nameOf] = await Promise.all([
+    queryPunches(pool, { start, endExclusive: exclusiveEnd(end), branch, emp }),
+    zkNameMap(pool),
+  ]);
+  return mapPunchRows(rows, nameOf);
+}
+
+// ชื่อทาง -> ตัวรัน, ป้ายที่ใช้ในข้อความ error และ error code ที่คู่กัน
+const WAYS = {
+  office: { run: viaOfficeServer, label: () => `office-server (${ZK_OFFICE_API_BASE})`, code: 'ZK_OFFICE_UNREACHABLE' },
+  host:   { run: viaHostApi,      label: () => `host API (${ZK_API_BASE})`,             code: 'ZK_HOST_UNREACHABLE' },
+  sql:    { run: viaSqlDirect,    label: () => 'ต่อ SQL ตรง',                            code: 'ZK_CONNECT_FAILED' },
+};
+
 /**
- * ดึงรายการสแกน: host API ก่อน ถ้าไม่ได้ค่อยลองต่อ SQL ตรง (เมื่อตั้งรหัสไว้)
- * คืน { rows, nameOf, source } — source ไว้ดูว่าข้อมูลรอบนี้มาจากทางไหน
- * โยน error ที่รวมสาเหตุของทั้งสองทางไว้ เพื่อให้รู้ว่าต้องไปแก้ตรงไหน
+ * ดึงรายการสแกน — ลองทีละทางตามลำดับ ได้ทางไหนก่อนใช้ทางนั้น
+ * ทางแรกเลือกด้วย env ZK_SOURCE (default office) ที่เหลือเป็นทางสำรองเรียงตามเดิม
+ * คืน { data, source } — source ไว้ดูว่าข้อมูลรอบนี้มาจากทางไหน
+ * ถ้าล้มหมด โยน error ที่รวมสาเหตุของทุกทางไว้ เพื่อให้รู้ว่าต้องไปแก้ตรงไหน
  */
-async function loadPunches({ start, end, branch, emp }) {
-  let hostErr;
-  try {
-    const [rows, nameOf] = await Promise.all([
-      fetchPunchesViaHost({ start, end, branch, emp }),
-      fetchNamesViaHost(), // ดึงชื่อไม่ได้ก็คืน {} ให้ ไม่ทำให้ทั้งคำขอล้ม
-    ]);
-    return { rows, nameOf, source: 'host-api' };
-  } catch (e) {
-    hostErr = e;
+async function loadPunches(args) {
+  const first = preferredSource();
+  const order = ['office', 'host', 'sql'].filter((n) => n !== first);
+  order.unshift(first);
+  // ต่อ SQL ตรงต้องมีรหัสก่อน ไม่งั้นข้ามไปเลย จะได้ไม่ขึ้น error เรื่อง env ที่ไม่เกี่ยว
+  const names = order.filter((n) => n !== 'sql' || hasDirectDbConfig());
+
+  const errs = {};
+  for (const name of names) {
+    try {
+      return { data: await WAYS[name].run(args), source: name };
+    } catch (e) {
+      errs[name] = e;
+    }
   }
 
-  if (!hasDirectDbConfig()) {
-    throw fail('ZK_HOST_UNREACHABLE',
-      `ต่อ host API (${ZK_API_BASE}/zk/transactions) ไม่ได้: ${hostErr.message} — ` +
-      'ตรวจว่าเครื่องออฟฟิศเปิดอยู่และ host-server (node server.js) กับ tunnel ยังรันอยู่'
-    );
-  }
+  // คำแนะนำยึดตามทางแรกที่ตั้งไว้ เพราะนั่นคือทางที่ตั้งใจให้ใช้จริง
+  const firstErr = errs[names[0]];
+  const code = firstErr.status === 404 && names[0] === 'host'
+    ? 'ZK_HOST_OUTDATED'  // มีเซิร์ฟเวอร์ตอบ แต่ไม่รู้จัก /zk/* = server.js เก่า
+    : WAYS[names[0]].code;
 
-  try {
-    const pool = await getZkPool();
-    const [rows, nameOf] = await Promise.all([
-      queryPunches(pool, { start, endExclusive: exclusiveEnd(end), branch, emp }),
-      zkNameMap(pool),
-    ]);
-    return { rows, nameOf, source: 'sql-direct' };
-  } catch (dbErr) {
-    // ล้มทั้งคู่ = เครื่องออฟฟิศน่าจะปิด/เน็ตหลุด ชี้ไปที่ host API ซึ่งเป็นทางที่ควรใช้
-    throw fail('ZK_HOST_UNREACHABLE',
-      `ดึงข้อมูลการสแกนไม่สำเร็จทั้งสองทาง — host API (${ZK_API_BASE}): ${hostErr.message} · ` +
-      `ต่อ SQL ตรง: ${dbErr.message}`
-    );
-  }
+  const parts = names.map((n) => `${WAYS[n].label()}: ${errs[n].message}`);
+  throw fail(code, `ดึงข้อมูลการสแกนไม่สำเร็จ — ${parts.join(' · ')}`);
 }
 
 export default async function handler(req, res) {
@@ -116,11 +141,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { rows, nameOf, source } = await loadPunches({ start, end, branch, emp });
+    const { data: all, source } = await loadPunches({ start, end, branch, emp });
 
     // เกินเพดาน = ช่วงวันที่กว้างไป ตัดให้เหลือรายการล่าสุดแล้วเตือนผู้ใช้
-    const truncated = rows.length >= ZK_ROW_CAP;
-    const data = mapPunchRows(truncated ? rows.slice(0, ZK_ROW_CAP) : rows, nameOf);
+    const truncated = all.length >= ZK_ROW_CAP;
+    const data = truncated ? all.slice(0, ZK_ROW_CAP) : all;
 
     return res.status(200).json({
       status: 'success',
