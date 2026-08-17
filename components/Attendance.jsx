@@ -259,9 +259,11 @@ export default function Attendance() {
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
           <div>
             <div>{error}</div>
-            {/* คำใบ้ให้ตรงกับสาเหตุ: host API ล่ม กับต่อ SQL ตรงไม่ได้ แก้คนละจุดกัน */}
+            {/* คำใบ้ให้ตรงกับสาเหตุ: host-server เก่า / ติดต่อไม่ได้ / ต่อ SQL ตรงไม่ได้ แก้คนละจุดกัน */}
             <div className="text-xs text-rose-500 mt-1">
-              {errorCode === 'ZK_HOST_UNREACHABLE'
+              {errorCode === 'ZK_HOST_OUTDATED'
+                ? 'เครื่องออฟฟิศตอบอยู่ แต่ไม่รู้จัก /zk/* — server.js ที่รันอยู่เป็นเวอร์ชันเก่า ให้ก๊อป host-server/server.js ตัวล่าสุดไปทับแล้วรีสตาร์ท node server.js (ถ้าเปิด http://localhost:14365/zk/ping บนเครื่องนั้นแล้วได้ ok:true แปลว่า tunnel/โดเมนชี้ผิดที่แทน)'
+                : errorCode === 'ZK_HOST_UNREACHABLE'
                 ? 'ตรวจที่เครื่องออฟฟิศ: เปิดเครื่องอยู่ไหม, host-server (node server.js) รันอยู่ไหม และ tunnel/โดเมนที่ตั้งใน STORE_API_BASE ยังใช้ได้ไหม — เช็กเร็วๆ ด้วยการเปิด http://localhost:14365/zk/ping บนเครื่องนั้น'
                 : errorCode === 'ZK_CONNECT_FAILED'
                   ? 'ตรวจว่า SQL Server ของ ZKBio เปิดอยู่ และเปิดพอร์ตให้เข้าถึงจากภายนอกได้ (ปกติควรให้ดึงผ่าน host API แทน ไม่ต้องเปิดพอร์ต SQL ออกเน็ต)'

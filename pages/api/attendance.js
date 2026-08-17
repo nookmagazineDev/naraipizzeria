@@ -76,10 +76,12 @@ async function loadPunches({ start, end, branch, emp }) {
     hostErr = e;
   }
 
+  // 404 = มีเซิร์ฟเวอร์ตอบ แต่ไม่รู้จัก /zk/* → คนละปัญหากับเครื่องปิด/เน็ตหลุด
+  const hostCode = hostErr.status === 404 ? 'ZK_HOST_OUTDATED' : 'ZK_HOST_UNREACHABLE';
+
   if (!hasDirectDbConfig()) {
-    throw fail('ZK_HOST_UNREACHABLE',
-      `ต่อ host API (${ZK_API_BASE}/zk/transactions) ไม่ได้: ${hostErr.message} — ` +
-      'ตรวจว่าเครื่องออฟฟิศเปิดอยู่และ host-server (node server.js) กับ tunnel ยังรันอยู่'
+    throw fail(hostCode,
+      `ต่อ host API (${ZK_API_BASE}/zk/transactions) ไม่ได้: ${hostErr.message}`
     );
   }
 
@@ -91,8 +93,8 @@ async function loadPunches({ start, end, branch, emp }) {
     ]);
     return { rows, nameOf, source: 'sql-direct' };
   } catch (dbErr) {
-    // ล้มทั้งคู่ = เครื่องออฟฟิศน่าจะปิด/เน็ตหลุด ชี้ไปที่ host API ซึ่งเป็นทางที่ควรใช้
-    throw fail('ZK_HOST_UNREACHABLE',
+    // ล้มทั้งคู่ — คำแนะนำยังยึดตามสาเหตุฝั่ง host API ซึ่งเป็นทางที่ควรใช้
+    throw fail(hostCode,
       `ดึงข้อมูลการสแกนไม่สำเร็จทั้งสองทาง — host API (${ZK_API_BASE}): ${hostErr.message} · ` +
       `ต่อ SQL ตรง: ${dbErr.message}`
     );
