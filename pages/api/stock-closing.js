@@ -6,12 +6,12 @@
 const SHEET_ID = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
 const SHEET_NAME = 'ปิดรอบสิ้นเดือน';
 
-const COL_DATE = 0;      // A วันที่ปิดยอด
-const COL_BRANCH = 1;    // B สาขา
-const COL_ITEM = 2;      // C รหัสสินค้า
-const COL_UNIT = 4;      // E หน่วย
-const COL_BALANCE = 5;   // F ยอดคงเหลือสิ้นเดือน
-const COL_RECORDED = 9;  // J เวลาบันทึก
+// ดึงเฉพาะคอลัมน์ที่ใช้ (ตัดชื่อสินค้า/มูลค่า/ผู้บันทึกทิ้ง) เพื่อลดขนาดที่ต้องโหลดลงมาก
+// ถ้า gviz ไม่รับ query ด้วยเหตุใดก็ตาม ถอยไปดึงทั้งชีทแล้วอ่านตามตำแหน่งคอลัมน์เดิม
+const LAYOUTS = [
+  { tq: 'select A,B,C,E,F,J', col: { date: 0, branch: 1, item: 2, unit: 3, balance: 4, recorded: 5 } },
+  { tq: '', col: { date: 0, branch: 1, item: 2, unit: 4, balance: 5, recorded: 9 } },
+];
 
 const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
@@ -56,19 +56,13 @@ function toSortableStamp(value) {
 // แถวปิดรอบทั้งชีท (cache 5 นาที — สาขาไหนเรียกก็ใช้ชุดเดียวกัน)
 let closingCache = { rows: null, at: 0 };
 
-async function fetchClosingRows() {
-  if (closingCache.rows && Date.now() - closingCache.at < 5 * 60 * 1000) return closingCache.rows;
-
-  const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(SHEET_NAME)}`;
-  const r = await fetch(url, { cache: 'no-store', redirect: 'follow' });
-  if (!r.ok) throw new Error(`ชีทปิดรอบสิ้นเดือน HTTP ${r.status}`);
-
+function parseRows(text, col) {
   const rows = [];
-  parseCSV(await r.text()).forEach((rw, idx) => {
-    const date = toISODate(rw[COL_DATE]);
-    const branch = String(rw[COL_BRANCH] || '').trim().toLowerCase();
-    const itemId = normalizeId(rw[COL_ITEM]);
-    const balance = parseFloat(String(rw[COL_BALANCE] ?? '').replace(/,/g, ''));
+  parseCSV(text).forEach((rw, idx) => {
+    const date = toISODate(rw[col.date]);
+    const branch = String(rw[col.branch] || '').trim().toLowerCase();
+    const itemId = normalizeId(rw[col.item]);
+    const balance = parseFloat(String(rw[col.balance] ?? '').replace(/,/g, ''));
     // ตัดหัวตาราง/แถวว่าง/แถวที่ยอดไม่ใช่ตัวเลข ออกไปในตัว
     if (!date || !branch || !itemId || isNaN(balance)) return;
     rows.push({
@@ -76,14 +70,35 @@ async function fetchClosingRows() {
       branch,
       itemId,
       balance,
-      unit: String(rw[COL_UNIT] || '').trim(),
-      recordedAt: String(rw[COL_RECORDED] || '').trim(),
-      sortKey: `${date}|${toSortableStamp(rw[COL_RECORDED])}|${String(idx).padStart(6, '0')}`,
+      unit: String(rw[col.unit] || '').trim(),
+      recordedAt: String(rw[col.recorded] || '').trim(),
+      sortKey: `${date}|${toSortableStamp(rw[col.recorded])}|${String(idx).padStart(6, '0')}`,
     });
   });
-
-  closingCache = { rows, at: Date.now() };
   return rows;
+}
+
+async function fetchClosingRows() {
+  if (closingCache.rows && Date.now() - closingCache.at < 5 * 60 * 1000) return closingCache.rows;
+
+  const base = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(SHEET_NAME)}`;
+  let lastError = null;
+
+  for (const layout of LAYOUTS) {
+    try {
+      const r = await fetch(layout.tq ? `${base}&tq=${encodeURIComponent(layout.tq)}` : base,
+        { cache: 'no-store', redirect: 'follow' });
+      if (!r.ok) throw new Error(`ชีทปิดรอบสิ้นเดือน HTTP ${r.status}`);
+      const rows = parseRows(await r.text(), layout.col);
+      if (rows.length === 0) throw new Error('ไม่พบข้อมูลในชีทปิดรอบสิ้นเดือน');
+      closingCache = { rows, at: Date.now() };
+      return rows;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError;
 }
 
 export default async function handler(req, res) {
@@ -125,6 +140,8 @@ export default async function handler(req, res) {
       if (row.date > latestDate) latestDate = row.date;
     });
 
+    // ยอดปิดรอบเปลี่ยนแค่ตอนสิ้นเดือน — ให้ CDN ตอบซ้ำได้เลย ไม่ต้องวิ่งไป Google ทุกครั้ง
+    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
     return res.status(200).json({
       status: 'success',
       data,

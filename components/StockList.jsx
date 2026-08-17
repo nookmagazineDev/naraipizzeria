@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { apiCall } from '../lib/stockApi';
 import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -11,6 +11,8 @@ export default function StockList() {
   const isAll = true;
 
   const [loading, setLoading] = useState(false);
+  const [isLoadingClosing, setIsLoadingClosing] = useState(false);
+  const branchRef = useRef('');   // สาขาที่กำลังโหลดอยู่ ใช้ทิ้งผลลัพธ์ที่มาช้าหลังเปลี่ยนสาขา
   const [items, setItems] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [branches, setBranches] = useState([]);
@@ -28,7 +30,6 @@ export default function StockList() {
   const [apiEndDate, setApiEndDate] = useState('');
   const [isFetchingApi, setIsFetchingApi] = useState(false);
   const [selectedUsageDetails, setSelectedUsageDetails] = useState(null);
-  const [recipeMap, setRecipeMap] = useState({});
   const [usageByMenu, setUsageByMenu] = useState({});
   const [expandedMenu, setExpandedMenu] = useState(null);
   const [menuTables, setMenuTables] = useState({}); // { [menuName]: { loading, rows } }
@@ -62,15 +63,10 @@ export default function StockList() {
 
   useEffect(() => {
     if (isAll) {
-      // Load branch list for the dropdown selector
+      // ตอนเปิดหน้า โหลดแค่รายชื่อสาขาสำหรับ dropdown — ข้อมูลที่เหลือรอเลือกสาขาก่อน
       apiCall('getBranches', {}).then(res => {
         if (res.status === 'success') setBranches(res.data);
       });
-      // โหลดสูตรเมนู (วัตถุดิบ -> รายชื่อเมนู) ครั้งเดียว ใช้แสดงในป๊อปอัปรายละเอียดการเบิกใช้
-      fetch('/api/recipe')
-        .then(r => r.json())
-        .then(res => { if (res.status === 'success') setRecipeMap(res.data || {}); })
-        .catch(() => {});
     } else {
       loadData(user?.branch);
     }
@@ -78,42 +74,53 @@ export default function StockList() {
 
   const loadData = async (branch) => {
     if (!branch) return;
+    branchRef.current = branch;
     setLoading(true);
     setItems([]);
-    try {
-      const [itemsRes, empRes, closingRes] = await Promise.all([
-        apiCall('getStockItems', { branch }),
-        apiCall('getScheduleEmployees', { branch }),
-        // ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ จากชีท "ปิดรอบสิ้นเดือน"
-        fetch(`/api/stock-closing?branch=${encodeURIComponent(branch)}`)
-          .then(r => r.json())
-          .catch(() => ({ status: 'error', message: 'เชื่อมต่อไม่สำเร็จ' })),
-      ]);
+    setIsLoadingClosing(true);
 
-      const closing = closingRes.status === 'success' ? (closingRes.data || {}) : {};
+    // ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ จากชีท "ปิดรอบสิ้นเดือน"
+    // ยิงคู่ไปกับรายการสินค้า แต่ไม่รอ — ตารางขึ้นก่อน แล้วค่อยเติมยอดยกมาเมื่อมาถึง
+    fetch(`/api/stock-closing?branch=${encodeURIComponent(branch)}`)
+      .then(r => r.json())
+      .catch(() => ({ status: 'error', message: 'เชื่อมต่อไม่สำเร็จ' }))
+      .then(closingRes => {
+        if (branch !== branchRef.current) return; // เปลี่ยนสาขาไปแล้ว ทิ้งผลเก่า
+        if (closingRes.status !== 'success') {
+          toast.error('ยอดยกมา (Endding): ' + (closingRes.message || 'ดึงข้อมูลปิดรอบสิ้นเดือนไม่สำเร็จ'));
+        } else {
+          const closing = closingRes.data || {};
+          setItems(prevItems => prevItems.map(item => {
+            const endding = closing[normalizeId(item.productId)];
+            return {
+              ...item,
+              previousBalance: endding ? endding.balance : '',
+              previousBalanceDate: endding ? endding.date : '',
+            };
+          }));
+        }
+        setIsLoadingClosing(false);
+      });
+
+    try {
+      const itemsRes = await apiCall('getStockItems', { branch });
+      if (branch !== branchRef.current) return; // เปลี่ยนสาขาไปแล้ว ทิ้งผลเก่า
 
       if (itemsRes.status === 'success') {
-        setItems(itemsRes.data.map(item => {
-          const endding = closing[normalizeId(item.productId)];
-          return {
-            ...item,
-            previousBalance: endding ? endding.balance : '',
-            previousBalanceDate: endding ? endding.date : '',
-            remaining: '',
-            requested: '',
-          };
-        }));
+        setItems(itemsRes.data.map(item => ({ ...item, remaining: '', requested: '' })));
       } else {
         toast.error('ไม่สามารถดึงข้อมูลรายการสินค้าได้');
       }
-      if (empRes.status === 'success') setEmployees(empRes.data);
-      if (closingRes.status !== 'success') {
-        toast.error('ยอดยกมา (Endding): ' + (closingRes.message || 'ดึงข้อมูลปิดรอบสิ้นเดือนไม่สำเร็จ'));
+
+      // รายชื่อพนักงาน (ผู้นับ/ผู้เบิก) ใช้เฉพาะโหมดสาขา — โหมดดูอย่างเดียวไม่ต้องเสียเวลาเรียก
+      if (!isAll) {
+        const empRes = await apiCall('getScheduleEmployees', { branch });
+        if (empRes.status === 'success') setEmployees(empRes.data);
       }
     } catch (err) {
       toast.error('เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์');
     } finally {
-      setLoading(false);
+      if (branch === branchRef.current) setLoading(false);
     }
   };
 
@@ -197,6 +204,7 @@ export default function StockList() {
   };
 
   const handleBranchChange = (branch) => {
+    branchRef.current = branch;
     setSelectedBranch(branch);
     setItems([]);
     setSearchTerm('');
@@ -617,7 +625,9 @@ export default function StockList() {
                           {/* ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ */}
                           <td className="px-4 py-3 text-center bg-purple-50/30">
                             <div className="font-semibold text-purple-700 text-sm">
-                              {item.previousBalance !== '' && item.previousBalance !== undefined ? item.previousBalance : '-'}
+                              {isLoadingClosing
+                                ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto text-purple-300" />
+                                : (item.previousBalance !== '' && item.previousBalance !== undefined ? item.previousBalance : '-')}
                             </div>
                             {item.previousBalanceDate && (
                               <div className="text-[10px] text-gray-400 mt-0.5" title="วันที่ปิดยอดสิ้นเดือน">
@@ -671,7 +681,7 @@ export default function StockList() {
                                   const posTotal = Number(item.apiUsage.total) || 0;
                                   const scale = (posTotal > 0 && estTotal > 0) ? posTotal / estTotal : 1;
                                   const byMenu = rawByMenu.map(r => ({ ...r, qty: Number((Number(r.qty) * scale).toFixed(2)) }));
-                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, menus: recipeMap[nid] || [], byMenu, posTotal, scaled: scale !== 1 });
+                                  setSelectedUsageDetails({ name: item.name, details: item.apiUsage.details, byMenu, posTotal, scaled: scale !== 1 });
                                 }}
                                 title="คลิกเพื่อดูรายละเอียด"
                               >
