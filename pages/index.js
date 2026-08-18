@@ -1936,6 +1936,38 @@ export default function App() {
     XLSX.writeFile(wb, `dashboard_cards_${startDate}_to_${endDate}.xlsx`);
   }
 
+  // ตารางรายไอเทมใน modal (ต้นทุน / โต๊ะเตรียม / รายการไม่นับ) → aoa สำหรับชีทรายละเอียด
+  const itemDetailAoa = (list, qtyLabel = 'จำนวน', withReason = false) => {
+    const r2 = v => Math.round((parseFloat(v) || 0) * 100) / 100;
+    const lead = withReason ? ['เหตุผล'] : [];
+    const aoa = [[...lead, 'รหัสไอเทม', 'ชื่อรายการ', qtyLabel, 'ต้นทุน/หน่วย', 'ต้นทุนรวม']];
+    list.forEach(c => aoa.push([
+      ...(withReason ? [c.reason] : []), c.itemCode, c.name, r2(c.qty), r2(c.unitCost), r2(c.totalCost),
+    ]));
+    aoa.push([
+      ...(withReason ? [''] : []), '', 'รวมทั้งหมด',
+      r2(list.reduce((t, c) => t + c.qty, 0)), '', r2(list.reduce((t, c) => t + c.totalCost, 0)),
+    ]);
+    return aoa;
+  };
+
+  // ปุ่มส่งออกในหัว modal: ชีทแยกสาขาของการ์ดนั้น + ชีทรายละเอียดที่กำลังเปิดดูอยู่ (ถ้ามี)
+  function exportDashModalXLSX(cardKey, detail) {
+    const card = DASH_CARDS.find(c => c.key === cardKey);
+    const { rows, total } = branchCardStats;
+    if (!card || !rows.length) return;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(dashCardAoa(card, rows, total));
+    ws['!cols'] = [{ wch: 14 }, ...card.cols.map(() => ({ wch: 18 }))];
+    XLSX.utils.book_append_sheet(wb, ws, sheetTitle(card.title));
+    if (detail && detail.aoa && detail.aoa.length > 2) {
+      const ws2 = XLSX.utils.aoa_to_sheet(detail.aoa);
+      ws2['!cols'] = detail.aoa[0].map(h => ({ wch: String(h) === 'ชื่อรายการ' ? 34 : 16 }));
+      XLSX.utils.book_append_sheet(wb, ws2, sheetTitle(detail.name));
+    }
+    XLSX.writeFile(wb, `dashboard_${cardKey}_${startDate}_to_${endDate}.xlsx`);
+  }
+
   function exportXLSX(data, cols, filename) {
     if (!data.length) return;
     
@@ -4007,9 +4039,18 @@ export default function App() {
                   {stats.count > 0 && ` (${(stats.memberCount / stats.count * 100).toFixed(1)}%)`}
                 </p>
               </div>
-              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setBillsModalOpen(false)}>
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => exportDashModalXLSX('bills')}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition-all"
+                  title="ส่งออก Excel (แยกสาขา)"
+                >
+                  <Download size={14} /> ส่งออก Excel
+                </button>
+                <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setBillsModalOpen(false)}>
+                  <X size={20} />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {billBranchBreakdown.length === 0 ? (
@@ -4076,9 +4117,18 @@ export default function App() {
                   {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {excludedStats.lines.toLocaleString('th-TH')} รายการ • {fmtNum(excludedStats.totalQty)} ชิ้น
                 </p>
               </div>
-              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setExcludedModalOpen(false)}>
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => exportDashModalXLSX('excluded', { name: 'รายไอเทมที่ไม่นับ', aoa: itemDetailAoa(excludedBreakdown, 'จำนวน', true) })}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition-all"
+                  title="ส่งออก Excel (แยกสาขา)"
+                >
+                  <Download size={14} /> ส่งออก Excel
+                </button>
+                <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setExcludedModalOpen(false)}>
+                  <X size={20} />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {excludedBreakdown.length === 0 ? (
@@ -4202,9 +4252,18 @@ export default function App() {
                   {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {prepStats.lines.toLocaleString('th-TH')} รายการ • {fmtNum(prepStats.totalQty)} กก.
                 </p>
               </div>
-              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setPrepModalOpen(false)}>
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => exportDashModalXLSX('prep', { name: 'รายไอเทมโต๊ะเตรียม', aoa: itemDetailAoa(prepBreakdown, 'จำนวน (กก.)') })}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition-all"
+                  title="ส่งออก Excel (แยกสาขา)"
+                >
+                  <Download size={14} /> ส่งออก Excel
+                </button>
+                <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setPrepModalOpen(false)}>
+                  <X size={20} />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {prepBreakdown.length === 0 ? (
@@ -4264,9 +4323,18 @@ export default function App() {
                   {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {costBreakdown.length.toLocaleString('th-TH')} รายการที่มีต้นทุน
                 </p>
               </div>
-              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setCostModalOpen(false)}>
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => exportDashModalXLSX('cost', { name: 'รายไอเทมต้นทุน', aoa: itemDetailAoa(costBreakdown) })}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition-all"
+                  title="ส่งออก Excel (แยกสาขา)"
+                >
+                  <Download size={14} /> ส่งออก Excel
+                </button>
+                <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setCostModalOpen(false)}>
+                  <X size={20} />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {costBreakdown.length === 0 ? (
