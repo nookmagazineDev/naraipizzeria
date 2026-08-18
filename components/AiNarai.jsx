@@ -214,8 +214,8 @@ export default function AiNarai() {
       const r = await fetch('/api/ai-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // ส่งเฉพาะ 12 ข้อความล่าสุด กัน token บวม (ตัดให้เริ่มด้วยฝั่งผู้ใช้เสมอ — Gemini ไม่รับประวัติที่ขึ้นต้นด้วย model)
-        body: JSON.stringify({ messages: trimHistory(next, 12).map(m => ({ role: m.role, text: m.text })) }),
+        // ส่งเฉพาะ 16 ข้อความล่าสุด กัน token บวม (ตัดให้เริ่มด้วยฝั่งผู้ใช้เสมอ — Gemini ไม่รับประวัติที่ขึ้นต้นด้วย model)
+        body: JSON.stringify({ messages: trimHistory(next, 16).map(m => ({ role: m.role, text: m.text })) }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);

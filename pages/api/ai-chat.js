@@ -54,12 +54,71 @@ const rowCap = (limit, dflt = 50) => {
   return Math.min(n > 0 ? n : dflt, MAX_ROWS);
 };
 
-function assertRange(start, end, maxDays = 62) {
+// เพดานช่วงวันที่: ถามยาวได้ถึง 1 ปีสำหรับข้อมูลสรุป (ตัวที่คืนรายแถวดิบมีเพดานของตัวเอง)
+// ฝั่ง host API ยังถูกยิงทีละ ≤31 วันเสมอ (ดู splitRange) ช่วงยาวแค่แบ่งก้อนให้อัตโนมัติ
+const MAX_DAYS = 366;
+
+function assertRange(start, end, maxDays = MAX_DAYS) {
   const d1 = new Date(start), d2 = new Date(end);
   if (isNaN(d1) || isNaN(d2)) throw new Error('รูปแบบวันที่ต้องเป็น YYYY-MM-DD');
   const days = (d2 - d1) / 86400000 + 1;
   if (days < 1) throw new Error('วันสิ้นสุดต้องไม่ก่อนวันเริ่ม');
-  if (days > maxDays) throw new Error(`ช่วงวันที่ยาวเกินไป (สูงสุด ${maxDays} วัน) — แบ่งช่วงถามทีละเดือน`);
+  if (days > maxDays) throw new Error(`ช่วงวันที่ยาวเกินไป (สูงสุด ${maxDays} วัน) — แบ่งช่วงถามเป็นช่วงย่อย`);
+  return Math.round(days);
+}
+
+// แบ่งช่วงวันที่ยาว ๆ เป็นก้อนละ ≤31 วัน — host API ถูกยิงด้วยขนาดเดิมที่พิสูจน์แล้วว่าไหว
+// ถามทั้งปีจึงกลายเป็น 12 คำขอย่อยที่วิ่งขนานกัน แทนที่จะต้องบอกผู้ใช้ให้ถามทีละเดือนเอง
+const CHUNK_DAYS = 31;
+function splitRange(start, end, size = CHUNK_DAYS) {
+  const out = [];
+  const day = 86400000;
+  let s = new Date(`${start}T00:00:00Z`).getTime();
+  const e = new Date(`${end}T00:00:00Z`).getTime();
+  while (s <= e) {
+    const cEnd = Math.min(s + (size - 1) * day, e);
+    out.push([new Date(s).toISOString().slice(0, 10), new Date(cEnd).toISOString().slice(0, 10)]);
+    s = cEnd + day;
+  }
+  return out;
+}
+
+// วิ่งงานพร้อมกันได้ไม่เกิน n งาน (กันยิง host API รัวเกินจนหลุด/ช้า)
+async function mapLimit(items, n, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (i < items.length) { const k = i++; out[k] = await fn(items[k]); }
+  }));
+  return out;
+}
+const FETCH_CONCURRENCY = 4;
+
+// แคชผลอ่านจาก host API ไว้ในหน่วยความจำของ instance
+// ทำไม: AI มักถามต่อเนื่องบนช่วงเดียวกัน (ยอดขาย → เมนูขายดี → ต้นทุน) ถ้าไม่แคชคือดึงซ้ำทุกครั้ง
+// คุมหน่วยความจำด้วยงบจำนวนแถวรวม — เกินงบไล่ลบก้อนที่เก่าที่สุดก่อน (Map เรียงตามลำดับที่ใส่)
+const ROW_CACHE = new Map();
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_ROW_BUDGET = 250000;
+let cacheRows = 0;
+
+async function fetchRows(path) {
+  const hit = ROW_CACHE.get(path);
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.rows;
+  const r = await fetch(`${STORE_API}${path}`);
+  if (!r.ok) throw new Error(`host API HTTP ${r.status}`);
+  const j = await r.json();
+  const rows = Array.isArray(j) ? j : j.data || [];
+  if (hit) cacheRows -= hit.rows.length;
+  ROW_CACHE.delete(path);
+  ROW_CACHE.set(path, { rows, at: Date.now() });
+  cacheRows += rows.length;
+  while (cacheRows > CACHE_ROW_BUDGET && ROW_CACHE.size > 1) {
+    const oldest = ROW_CACHE.keys().next().value;
+    cacheRows -= ROW_CACHE.get(oldest).rows.length;
+    ROW_CACHE.delete(oldest);
+  }
+  return rows;
 }
 
 function outletParam(branch) {
@@ -69,19 +128,19 @@ function outletParam(branch) {
   return `&outlet=${oid}`;
 }
 
+// บิล/รายการอาหาร: ช่วงยาวถูกหั่นเป็นก้อนละ ≤31 วันแล้วดึงขนานกัน + ผ่านแคช
 async function fetchSales(start, end, branch) {
-  const r = await fetch(`${STORE_API}/cpaidbetweendate?start=${start}&end=${end}${outletParam(branch)}`);
-  if (!r.ok) throw new Error(`host API HTTP ${r.status}`);
-  const j = await r.json();
-  return (Array.isArray(j) ? j : j.data || [])
-    .filter(b => !EXCLUDE_TABLES.includes(parseInt(b.tableID)));
+  const outlet = outletParam(branch);
+  const parts = await mapLimit(splitRange(start, end), FETCH_CONCURRENCY,
+    ([s, e]) => fetchRows(`/cpaidbetweendate?start=${s}&end=${e}${outlet}`));
+  return parts.flat().filter(b => !EXCLUDE_TABLES.includes(parseInt(b.tableID)));
 }
 
 async function fetchDetails(start, end, branch) {
-  const r = await fetch(`${STORE_API}/ctranbetweendate?start=${start}&end=${end}${outletParam(branch)}`);
-  if (!r.ok) throw new Error(`host API HTTP ${r.status}`);
-  const j = await r.json();
-  return (Array.isArray(j) ? j : j.data || []);
+  const outlet = outletParam(branch);
+  const parts = await mapLimit(splitRange(start, end), FETCH_CONCURRENCY,
+    ([s, e]) => fetchRows(`/ctranbetweendate?start=${s}&end=${e}${outlet}`));
+  return parts.flat();
 }
 
 // เรียก endpoint /zk/* (ฐานข้อมูล ZKBio Time — เครื่องสแกนนิ้ว) ผ่าน host API ตัวเดียวกัน
@@ -95,30 +154,62 @@ async function fetchZk(path) {
 
 // ── เครื่องมือที่เปิดให้ AI เรียก (read-only ทั้งหมด) ──
 const TOOL_HANDLERS = {
-  // ยอดขายสรุปรายวัน/รายสาขา
-  async get_daily_sales({ start_date, end_date, branch }) {
-    assertRange(start_date, end_date);
+  // ยอดขายสรุป — เลือกได้ว่าจะรวบเป็นรายวัน/รายเดือน/รายสาขา (ถามยาวได้ถึง 1 ปี)
+  async get_daily_sales({ start_date, end_date, branch, group_by }) {
+    const days = assertRange(start_date, end_date);
     const rows = await fetchSales(start_date, end_date, branch);
-    const g = {};
-    rows.forEach(b => {
-      let bt = num(b.billTotal) - num(b.voucher1);
-      if (bt < 0) bt = 0;
-      const date = String(b.startTime || b.date || '').slice(0, 10);
-      const name = OUTLETS[b.outletID] || String(b.outletID);
-      const k = `${date}|${name}`;
-      if (!g[k]) g[k] = { date, branch: name, bills: 0, gross: 0, vat: 0 };
-      g[k].bills++;
-      g[k].gross += bt;
-      g[k].vat += bt > 0 ? num(b.vat) : 0;
-    });
-    const out = Object.values(g).map(x => ({ ...x, gross: r2(x.gross), vat: r2(x.vat), net: r2(x.gross - x.vat) }))
-      .sort((a, b) => a.date.localeCompare(b.date) || a.branch.localeCompare(b.branch));
-    return { rows: out, note: 'gross รวม VAT แล้ว, net = ก่อน VAT, ตัดโต๊ะ 600 และหักวอเชอร์แล้ว' };
+
+    const GROUPS = ['day', 'month', 'branch', 'day_branch', 'month_branch'];
+    // ช่วงยาวเกิน ~2 เดือนแล้วไม่ระบุ → รวบเป็นรายเดือน×สาขาให้เอง (รายวันจะได้เป็นพันแถว AI อ่านไม่ไหว)
+    let gb = GROUPS.includes(group_by) ? group_by : (days > 62 ? 'month_branch' : 'day_branch');
+
+    const agg = mode => {
+      const g = {};
+      rows.forEach(b => {
+        let bt = num(b.billTotal) - num(b.voucher1);
+        if (bt < 0) bt = 0;
+        const date = String(b.startTime || b.date || '').slice(0, 10);
+        const month = date.slice(0, 7);
+        const name = OUTLETS[b.outletID] || String(b.outletID);
+        const f = mode === 'day' ? { date }
+          : mode === 'month' ? { month }
+          : mode === 'branch' ? { branch: name }
+          : mode === 'month_branch' ? { month, branch: name }
+          : { date, branch: name };
+        const k = Object.values(f).join('|');
+        if (!g[k]) g[k] = { ...f, bills: 0, gross: 0, vat: 0 };
+        g[k].bills++;
+        g[k].gross += bt;
+        g[k].vat += bt > 0 ? num(b.vat) : 0;
+      });
+      return Object.values(g)
+        .map(x => ({ ...x, gross: r2(x.gross), vat: r2(x.vat), net: r2(x.gross - x.vat) }))
+        .sort((a, b) => String(a.date || a.month || a.branch).localeCompare(String(b.date || b.month || b.branch))
+          || String(a.branch || '').localeCompare(String(b.branch || '')));
+    };
+
+    let out = agg(gb);
+    let extra = '';
+    // กันผลลัพธ์บวมจนกิน token: เกิน 1,200 แถวให้ไล่รวบขึ้นทีละขั้น
+    for (const next of ['month_branch', 'branch']) {
+      if (out.length <= 1200) break;
+      gb = next; out = agg(gb);
+      extra = ` · ผลลัพธ์เยอะเกินจึงรวบเป็น ${gb} ให้อัตโนมัติ (อยากได้ละเอียดกว่านี้ให้ถามทีละเดือน)`;
+    }
+
+    const total = out.reduce((t, x) => ({
+      bills: t.bills + x.bills, gross: r2(t.gross + x.gross), net: r2(t.net + x.net),
+    }), { bills: 0, gross: 0, net: 0 });
+
+    return {
+      range: { start: start_date, end: end_date, days }, group_by: gb, rows: out, total,
+      note: 'gross รวม VAT แล้ว, net = ก่อน VAT, ตัดโต๊ะ 600 และหักวอเชอร์แล้ว' + extra,
+    };
   },
 
   // รายการขายดี (Top N) ตามยอดเงินหรือจำนวน
   async get_top_items({ start_date, end_date, branch, limit = 20, by = 'amount' }) {
-    assertRange(start_date, end_date, 31);
+    assertRange(start_date, end_date, 366);
     const rows = await fetchDetails(start_date, end_date, branch);
     const g = {};
     rows.forEach(r => {
@@ -187,7 +278,7 @@ const TOOL_HANDLERS = {
 
   // รายการบิลแบบแยกรายใบ (เลขบิล เวลา โต๊ะ ยอด ช่องทางจ่าย)
   async get_bills({ start_date, end_date, branch, limit = 100 }) {
-    assertRange(start_date, end_date, 7); // รายใบข้อมูลเยอะ จำกัด 7 วันต่อครั้ง
+    assertRange(start_date, end_date, 31); // รายใบข้อมูลเยอะ จำกัด 31 วันต่อครั้ง
     const rows = await fetchSales(start_date, end_date, branch);
     const bills = rows.map(b => ({
       checkID: b.checkID,
@@ -209,7 +300,7 @@ const TOOL_HANDLERS = {
   // เจาะยอดขายของเมนูเดียว (ค้นด้วยรหัสหรือชื่อ) แยกตามวันหรือตามสาขา
   async get_item_sales({ item, start_date, end_date, branch, group_by = 'day' }) {
     if (!item) throw new Error('ต้องระบุ item (รหัสหรือบางส่วนของชื่อเมนู)');
-    assertRange(start_date, end_date, 31);
+    assertRange(start_date, end_date, 366);
     const rows = await fetchDetails(start_date, end_date, branch);
     const kw = String(item).trim().toLowerCase();
     const hit = rows.filter(r => {
@@ -227,16 +318,17 @@ const TOOL_HANDLERS = {
     }
     const matched = [...new Set(hit.map(r => `${r.itemCode} ${String(r.nameThai).trim()}`))].slice(0, 10);
     const g = {};
+    const field = group_by === 'branch' ? 'branch' : group_by === 'month' ? 'month' : 'date';
     hit.forEach(r => {
-      const key = group_by === 'branch'
-        ? (OUTLETS[r.outletID] || String(r.outletID))
-        : String(r.prtOrdTime || r.startTime || '').slice(0, 10);
-      if (!g[key]) g[key] = { [group_by === 'branch' ? 'branch' : 'date']: key, qty: 0, amount: 0 };
+      const date = String(r.prtOrdTime || r.startTime || '').slice(0, 10);
+      const key = field === 'branch' ? (OUTLETS[r.outletID] || String(r.outletID))
+        : field === 'month' ? date.slice(0, 7) : date;
+      if (!g[key]) g[key] = { [field]: key, qty: 0, amount: 0 };
       g[key].qty += num(r.quantity);
       g[key].amount += num(r.grossPrice);
     });
     const out = Object.values(g).map(x => ({ ...x, qty: r2(x.qty), amount: r2(x.amount) }))
-      .sort((a, b) => String(a.date || a.branch).localeCompare(String(b.date || b.branch)));
+      .sort((a, b) => String(a.date || a.month || a.branch).localeCompare(String(b.date || b.month || b.branch)));
     return {
       found: true, matchedItems: matched,
       totalQty: r2(hit.reduce((s, r) => s + num(r.quantity), 0)),
@@ -248,7 +340,7 @@ const TOOL_HANDLERS = {
 
   // ต้นทุน/กำไร: ยอดขายก่อน VAT − ต้นทุนจากชีทต้นทุนเมนู แยกรายวันหรือรายสาขา
   async get_cost_profit({ start_date, end_date, branch, group_by = 'branch' }) {
-    assertRange(start_date, end_date, 31);
+    assertRange(start_date, end_date, 366);
     const [rows, costMap] = await Promise.all([fetchDetails(start_date, end_date, branch), fetchCostMap()]);
     const g = {};
     rows.forEach(r => {
@@ -256,10 +348,11 @@ const TOOL_HANDLERS = {
       const tid = parseInt(r.tableID);
       if (EXCLUDE_TABLES.includes(tid)) return;
       if (isExcludedItem(r.itemCode)) return;
-      const key = group_by === 'day'
-        ? String(r.prtOrdTime || r.startTime || '').slice(0, 10)
+      const date = String(r.prtOrdTime || r.startTime || '').slice(0, 10);
+      const field = group_by === 'day' ? 'date' : group_by === 'month' ? 'month' : 'branch';
+      const key = field === 'date' ? date : field === 'month' ? date.slice(0, 7)
         : (OUTLETS[r.outletID] || String(r.outletID));
-      if (!g[key]) g[key] = { [group_by === 'day' ? 'date' : 'branch']: key, netSales: 0, cost: 0, prepCost: 0 };
+      if (!g[key]) g[key] = { [field]: key, netSales: 0, cost: 0, prepCost: 0 };
       const unitCost = costMap[String(r.itemCode)] || costMap[String(r.itemCode).replace(/^0+/, '')] || 0;
       // โต๊ะ 500 = เตรียมของ (ไม่มียอดขาย) — แยกเป็น prepCost ไม่รวมในต้นทุนขาย (ตรงกับหน้ารายงาน)
       if (tid === 500) { g[key].prepCost += num(r.quantity) * unitCost; return; }
@@ -270,7 +363,7 @@ const TOOL_HANDLERS = {
       ...x, netSales: r2(x.netSales), cost: r2(x.cost), prepCost: r2(x.prepCost),
       profit: r2(x.netSales - x.cost),
       costPct: x.netSales > 0 ? r2((x.cost / x.netSales) * 100) : 0,
-    })).sort((a, b) => String(a.date || a.branch).localeCompare(String(b.date || b.branch)));
+    })).sort((a, b) => String(a.date || a.month || a.branch).localeCompare(String(b.date || b.month || b.branch)));
     return {
       rows: out,
       total: {
@@ -284,7 +377,7 @@ const TOOL_HANDLERS = {
 
   // รายการยกเลิก (void): สรุปต่อสาขา + เมนูที่โดน void บ่อย
   async get_voids({ start_date, end_date, branch }) {
-    assertRange(start_date, end_date, 31);
+    assertRange(start_date, end_date, 366);
     const rows = await fetchDetails(start_date, end_date, branch);
     const voided = rows.filter(r => r.void && !EXCLUDE_TABLES.includes(parseInt(r.tableID)));
     const byBranch = {}, byItem = {}, byType = {};
@@ -310,46 +403,45 @@ const TOOL_HANDLERS = {
 
   // จำนวนลูกค้า (หัว) + ยอดใช้จ่ายต่อหัว — นับจากจานบุฟเฟต์ที่จ่ายจริง (สาขา WRM/WMT ใช้ coverAll)
   async get_covers({ start_date, end_date, branch, group_by = 'branch' }) {
-    assertRange(start_date, end_date, 31);
+    assertRange(start_date, end_date, 366);
     const BUFFET = ['101001', '101002', '101003', '101004', '101107'];
     const COVERALL_OUTLETS = [501, 503];
     const [dets, sales] = await Promise.all([
       fetchDetails(start_date, end_date, branch),
       fetchSales(start_date, end_date, branch),
     ]);
-    const keyOfD = r => group_by === 'day'
-      ? String(r.prtOrdTime || r.startTime || '').slice(0, 10)
-      : (OUTLETS[r.outletID] || String(r.outletID));
+    const field = group_by === 'day' ? 'date' : group_by === 'month' ? 'month' : 'branch';
+    const keyOf = (dateStr, outletID) => field === 'date' ? dateStr
+      : field === 'month' ? dateStr.slice(0, 7)
+      : (OUTLETS[outletID] || String(outletID));
     const g = {};
     dets.forEach(r => {
       if (r.void) return;
       if (!BUFFET.includes(String(r.itemCode))) return;
       if (COVERALL_OUTLETS.includes(parseInt(r.outletID))) return;
-      const k = keyOfD(r);
-      if (!g[k]) g[k] = { [group_by === 'day' ? 'date' : 'branch']: k, covers: 0, netSales: 0 };
+      const k = keyOf(String(r.prtOrdTime || r.startTime || '').slice(0, 10), r.outletID);
+      if (!g[k]) g[k] = { [field]: k, covers: 0, netSales: 0 };
       g[k].covers += num(r.quantity);
     });
     // สาขาที่ใช้ coverAll จากบิล + ยอดขายจากบิล (ก่อน VAT)
     sales.forEach(b => {
       const bt = num(b.billTotal) - num(b.voucher1);
       if (bt < 0) return;
-      const k = group_by === 'day'
-        ? String(b.startTime || b.date || '').slice(0, 10)
-        : (OUTLETS[b.outletID] || String(b.outletID));
-      if (!g[k]) g[k] = { [group_by === 'day' ? 'date' : 'branch']: k, covers: 0, netSales: 0 };
+      const k = keyOf(String(b.startTime || b.date || '').slice(0, 10), b.outletID);
+      if (!g[k]) g[k] = { [field]: k, covers: 0, netSales: 0 };
       g[k].netSales += bt - num(b.vat);
       if (COVERALL_OUTLETS.includes(parseInt(b.outletID))) g[k].covers += num(b.coverAll);
     });
     const out = Object.values(g).map(x => ({
       ...x, covers: r2(x.covers), netSales: r2(x.netSales),
       spendPerHead: x.covers > 0 ? r2(x.netSales / x.covers) : null,
-    })).sort((a, b) => String(a.date || a.branch).localeCompare(String(b.date || b.branch)));
+    })).sort((a, b) => String(a.date || a.month || a.branch).localeCompare(String(b.date || b.month || b.branch)));
     return { rows: out, note: 'covers = จานบุฟเฟต์ที่จ่ายจริง (ไม่รวมเด็กฟรี) · spendPerHead = ยอดก่อน VAT ÷ หัว' };
   },
 
   // ยอดขายรายชั่วโมง — ช่วงเวลาไหนขายดี
   async get_hourly_sales({ start_date, end_date, branch }) {
-    assertRange(start_date, end_date, 31);
+    const days = assertRange(start_date, end_date, 366);
     const rows = await fetchSales(start_date, end_date, branch);
     const g = {};
     rows.forEach(b => {
@@ -362,7 +454,7 @@ const TOOL_HANDLERS = {
       g[k].bills++; g[k].total += bt;
     });
     const out = Object.values(g).map(x => ({ ...x, total: r2(x.total) })).sort((a, b) => a.hour.localeCompare(b.hour));
-    return { rows: out, note: 'อิงเวลาเปิดบิล ยอดรวม VAT' };
+    return { rows: out, days, note: 'อิงเวลาเปิดบิล ยอดรวม VAT · หารด้วย days = ค่าเฉลี่ยต่อวัน' };
   },
 
   // ค่าใช้จ่ายอื่นๆ (ค่าเช่า/ไฟ/น้ำ/แก๊ส/โทรศัพท์) จากชีทที่ทีมบันทึก
@@ -410,7 +502,7 @@ const TOOL_HANDLERS = {
 
   // เวลาเข้า-ออกงานจากการสแกนนิ้ว: สแกนแรก/สแกนสุดท้ายของแต่ละคนต่อวัน
   async get_attendance({ start_date, end_date, employee, limit = 100 }) {
-    assertRange(start_date, end_date, 31);
+    assertRange(start_date, end_date, 92);
     const [punches, emps] = await Promise.all([
       fetchZk(`/zk/transactions?start=${start_date}&end=${end_date}`),
       fetchZk('/zk/employees').catch(() => []), // ดึงชื่อไม่ได้ก็ยังตอบด้วยรหัสพนักงานได้
@@ -876,20 +968,27 @@ async function gasPost(url, payload) {
 const TOOL_DECLARATIONS = [
   {
     name: 'get_daily_sales',
-    description: 'ดึงยอดขายสรุปรายวันต่อสาขา (จำนวนบิล, ยอดรวม VAT, VAT, ยอดก่อน VAT) จากฐานข้อมูลจริง',
+    description: 'ยอดขายสรุป (จำนวนบิล, ยอดรวม VAT, VAT, ยอดก่อน VAT) จากฐานข้อมูลจริง — ถามช่วงยาวได้ถึง 366 วัน ' +
+      'เช่น ทั้งปี/หลายเดือนรวดเดียว ระบบหั่นดึงเป็นก้อนให้เอง คืนยอดรวมทั้งช่วงมาในฟิลด์ total ด้วย',
     parameters: {
       type: 'OBJECT',
       properties: {
         start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
-        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD' },
+        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (สูงสุด 366 วัน)' },
         branch: { type: 'STRING', description: 'รหัสสาขา เช่น SJP, XUM (ไม่ระบุ = ทุกสาขา)' },
+        group_by: {
+          type: 'STRING',
+          description: 'ระดับการรวบ: "day_branch" รายวัน×สาขา (default เมื่อช่วง ≤62 วัน), ' +
+            '"month_branch" รายเดือน×สาขา (default เมื่อช่วงยาวกว่านั้น), "day", "month", "branch" — ' +
+            'ถามหลายเดือนให้ใช้ month หรือ month_branch จะได้ตารางอ่านง่าย',
+        },
       },
       required: ['start_date', 'end_date'],
     },
   },
   {
     name: 'get_top_items',
-    description: 'ดึงรายการอาหาร/สินค้าขายดี Top N ในช่วงวันที่ (จำนวนและยอดเงินต่อเมนู) สูงสุด 31 วันต่อครั้ง',
+    description: 'ดึงรายการอาหาร/สินค้าขายดี Top N ในช่วงวันที่ (จำนวนและยอดเงินต่อเมนู) — ถามยาวได้ถึง 366 วัน',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -930,12 +1029,12 @@ const TOOL_DECLARATIONS = [
   { name: 'get_branches', description: 'รายชื่อสาขาทั้งหมดพร้อม outletID', parameters: { type: 'OBJECT', properties: {} } },
   {
     name: 'get_bills',
-    description: 'รายการบิลแบบแยกรายใบ (เลขบิล เวลา โต๊ะ ยอด ช่องทางจ่าย) สูงสุด 7 วันต่อครั้ง — ใช้เมื่อผู้ใช้อยากไล่ดูบิลทีละใบ',
+    description: 'รายการบิลแบบแยกรายใบ (เลขบิล เวลา โต๊ะ ยอด ช่องทางจ่าย) สูงสุด 31 วันต่อครั้ง — ใช้เมื่อผู้ใช้อยากไล่ดูบิลทีละใบ',
     parameters: {
       type: 'OBJECT',
       properties: {
         start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
-        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (ห่างกันไม่เกิน 7 วัน)' },
+        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (ห่างกันไม่เกิน 31 วัน)' },
         branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
         limit: { type: 'NUMBER', description: 'จำนวนบิลสูงสุดที่แสดง (default 100) — ใส่ 0 = ทุกใบในช่วงนั้น' },
       },
@@ -950,22 +1049,22 @@ const TOOL_DECLARATIONS = [
       properties: {
         item: { type: 'STRING', description: 'รหัสเมนู หรือบางส่วนของชื่อเมนู เช่น "ริบอาย"' },
         start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
-        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (สูงสุด 31 วัน)' },
+        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (สูงสุด 366 วัน)' },
         branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
-        group_by: { type: 'STRING', description: '"day" แยกรายวัน (default) หรือ "branch" แยกรายสาขา' },
+        group_by: { type: 'STRING', description: '"day" รายวัน (default), "month" รายเดือน (แนะนำเมื่อถามหลายเดือน), "branch" รายสาขา' },
       },
       required: ['item', 'start_date', 'end_date'],
     },
   },
   {
     name: 'get_cost_profit',
-    description: 'วิเคราะห์ต้นทุนและกำไร: ยอดขายก่อน VAT, ต้นทุนวัตถุดิบ (จากชีทต้นทุนเมนู), กำไร, ต้นทุน% แยกรายวันหรือรายสาขา',
+    description: 'วิเคราะห์ต้นทุนและกำไร: ยอดขายก่อน VAT, ต้นทุนวัตถุดิบ (จากชีทต้นทุนเมนู), กำไร, ต้นทุน% แยกรายวัน/รายเดือน/รายสาขา',
     parameters: {
       type: 'OBJECT',
       properties: {
-        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 31 วัน' },
+        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 366 วัน' },
         branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
-        group_by: { type: 'STRING', description: '"branch" (default) หรือ "day"' },
+        group_by: { type: 'STRING', description: '"branch" (default), "day" หรือ "month"' },
       },
       required: ['start_date', 'end_date'],
     },
@@ -976,7 +1075,7 @@ const TOOL_DECLARATIONS = [
     parameters: {
       type: 'OBJECT',
       properties: {
-        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 31 วัน' },
+        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 366 วัน' },
         branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
       },
       required: ['start_date', 'end_date'],
@@ -988,9 +1087,9 @@ const TOOL_DECLARATIONS = [
     parameters: {
       type: 'OBJECT',
       properties: {
-        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 31 วัน' },
+        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 366 วัน' },
         branch: { type: 'STRING' },
-        group_by: { type: 'STRING', description: '"branch" (default) หรือ "day"' },
+        group_by: { type: 'STRING', description: '"branch" (default), "day" หรือ "month"' },
       },
       required: ['start_date', 'end_date'],
     },
@@ -1001,7 +1100,7 @@ const TOOL_DECLARATIONS = [
     parameters: {
       type: 'OBJECT',
       properties: {
-        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 31 วัน' },
+        start_date: { type: 'STRING' }, end_date: { type: 'STRING', description: 'สูงสุด 366 วัน' },
         branch: { type: 'STRING' },
       },
       required: ['start_date', 'end_date'],
@@ -1135,7 +1234,7 @@ const TOOL_DECLARATIONS = [
       type: 'OBJECT',
       properties: {
         start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
-        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (สูงสุด 31 วัน)' },
+        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (สูงสุด 92 วัน)' },
         employee: { type: 'STRING', description: 'รหัสพนักงานหรือบางส่วนของชื่อ (ไม่ระบุ = ทุกคน)' },
         limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 100) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
@@ -1174,6 +1273,9 @@ const TOOL_DECLARATIONS = [
   },
 ];
 
+// ถามข้ามหลายเดือน = ยิง host API หลายก้อน — ต้องขอเวลาทำงานยาวกว่าค่า default ของ Vercel (10 วิ)
+export const config = { maxDuration: 60 };
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   if (!GEMINI_KEY) {
@@ -1200,6 +1302,11 @@ export default async function handler(req, res) {
       `(3) เครื่องสแกนนิ้ว ZKBio Time — เวลาสแกนเข้า-ออกงาน (get_attendance, get_zk_employees) ` +
       `ถ้าเครื่องมือสแกนนิ้วตอบ error แปลว่าฝั่งเซิร์ฟเวอร์ร้านยังไม่ได้ตั้งค่าเชื่อม ZKBio ให้บอกผู้ใช้ตามข้อความ error ` +
       `ถ้าคำถามเกี่ยวกับข้อมูลในชีทที่ไม่มีเครื่องมือเฉพาะ ให้เรียก list_sheets ดูสารบัญก่อน แล้วใช้ read_sheet อ่านแท็บที่ต้องการ ` +
+      `ช่วงวันที่: เครื่องมือยอดขาย/ต้นทุน/ลูกค้า ถามยาวได้ถึง 366 วันในครั้งเดียว (เช่น ทั้งปี หรือ ม.ค.–มิ.ย.) ` +
+      `ห้ามตอบว่า "ดึงได้ทีละเดือน" หรือให้ผู้ใช้แบ่งช่วงเอง — ถามยาวไปเลยแล้วเลือก group_by ให้เหมาะ ` +
+      `(หลายเดือน → group_by "month" หรือ "month_branch", ในเดือนเดียว → "day_branch") ` +
+      `ยกเว้น get_bills (บิลรายใบ) สูงสุด 31 วัน และ get_attendance สูงสุด 92 วัน ` +
+      `ถ้าผู้ใช้ถามถึงหลายเดือน ให้ดึงทั้งช่วงในครั้งเดียวแล้วสรุปเทียบให้เลย ไม่ต้องถามกลับ ` +
       `ปกติให้ใส่ตัวกรอง (search/branch/ช่วงวันที่) หรือ group_by ก่อน จะได้คำตอบเร็วและตรงกว่า ` +
       `แต่ถ้าผู้ใช้ขอ "ทั้งหมด/ทุกรายการ/ครบทุกตัว" หรือคำถามต้องใช้ข้อมูลทั้งชุดจริง ๆ ` +
       `(เช่น หาผิดปกติทั้งชีท, รวมยอดทุกแถว) ให้ส่ง limit=0 เพื่อดึงทั้งหมด อย่าตอบว่าดึงไม่ได้ ` +
@@ -1236,8 +1343,8 @@ export default async function handler(req, res) {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
       const toolCalls = [];
 
-      // วนจนกว่า Gemini จะตอบข้อความ (จำกัด 6 รอบเครื่องมือ)
-      for (let round = 0; round < 6; round++) {
+      // วนจนกว่า Gemini จะตอบข้อความ (จำกัด 10 รอบเครื่องมือ — คำถามข้ามหลายเดือน/หลายแหล่งต้องใช้หลายรอบ)
+      for (let round = 0; round < 10; round++) {
         const body = {
           systemInstruction: { parts: [{ text: systemText }] },
           contents,
@@ -1248,7 +1355,7 @@ export default async function handler(req, res) {
           // → ชั้นบนจะสั่งให้ลองซ้ำแบบไม่ส่ง thinkingConfig
           generationConfig: {
             temperature: 0.2,
-            maxOutputTokens: 4096,
+            maxOutputTokens: 8192,
             ...(noThinkingConfig ? {} : { thinkingConfig: { thinkingBudget: 0 } }),
           },
         };
@@ -1298,7 +1405,7 @@ export default async function handler(req, res) {
         }
         contents.push({ role: 'user', parts: responses });
       }
-      return { text: 'ขออภัย คำถามนี้ซับซ้อนเกินไป (เรียกข้อมูลหลายรอบเกินกำหนด) ลองแบ่งถามเป็นส่วนย่อยครับ', toolCalls };
+      return { text: 'ขออภัย คำถามนี้ต้องดึงข้อมูลหลายรอบเกินกำหนด (10 รอบ) ลองแบ่งถามเป็นส่วนย่อยครับ', toolCalls };
     }
 
     // ลองตามลำดับโมเดล — โควตาเต็ม (429) หรือโมเดลไม่รับคำขอ (400/404) ค่อยขยับไปตัวถัดไป
