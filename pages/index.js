@@ -213,6 +213,13 @@ const fmtNum = v => {
   return isNaN(n) ? String(v) : n.toLocaleString('th-TH');
 };
 
+// บิลที่ผูกกับสมาชิก: ช่อง MemberTel (เลขที่สมาชิก) มีค่าจริง
+// POS ปล่อยว่าง/ขีด/เลขศูนย์ล้วนมาได้เมื่อไม่ได้กรอก จึงไม่นับพวกนี้เป็นสมาชิก
+const hasMemberTel = row => {
+  const v = String(row.memberTel ?? row.MemberTel ?? '').trim();
+  return v !== '' && v !== '-' && !/^0+$/.test(v);
+};
+
 const outletLabel = id => {
   const name = OUTLETS[parseInt(id)];
   return name ? `${id} · ${name}` : (id != null ? String(id) : '-');
@@ -625,6 +632,7 @@ export default function App() {
   const [dailyCostModal, setDailyCostModal] = useState({ open: false, type: 'cost', date: null, outletID: null });
   const [excludedRaw, setExcludedRaw] = useState([]);
   const [excludedModalOpen, setExcludedModalOpen] = useState(false);
+  const [billsModalOpen, setBillsModalOpen] = useState(false);
 
   // Comparison State
   const [compareOutlets, setCompareOutlets] = useState([]); // Array of outlet IDs
@@ -1393,6 +1401,7 @@ export default function App() {
       : detailRaw;
 
     const count = sales.length;
+    const memberCount = sales.reduce((n, r) => n + (hasMemberTel(r) ? 1 : 0), 0);
     const sumAmount = sales.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
     const sumBill = sales.reduce((s, r) => s + (parseFloat(r.billTotal) || 0), 0);
     const sumVat = sales.reduce((s, r) => s + (parseFloat(r.vat || r.Vat || 0) || 0), 0);
@@ -1415,8 +1424,27 @@ export default function App() {
 
     const sumProfit = sumBeforeVat - sumCost;
 
-    return { count, sumAmount, sumBill, sumVat, sumBeforeVat, sumCover, avgBill, sumCost, sumPrepCost, sumProfit };
+    return { count, memberCount, sumAmount, sumBill, sumVat, sumBeforeVat, sumCover, avgBill, sumCost, sumPrepCost, sumProfit };
   }, [salesRaw, detailRaw, selectedOutlet, costMap]);
+
+  // การ์ด "จำนวนบิลทั้งหมด" กดแล้วดูได้ว่าสาขาไหนกี่บิล และมีบิลสมาชิกกี่ใบ
+  const billBranchBreakdown = useMemo(() => {
+    const sales = selectedOutlet
+      ? salesRaw.filter(r => String(r.outletID) === String(selectedOutlet))
+      : salesRaw;
+    const g = {};
+    sales.forEach(r => {
+      const oid = r.outletID ?? r.OutletID;
+      const k = String(oid);
+      if (!g[k]) g[k] = { outletID: oid, name: OUTLETS[parseInt(oid)] || k, bills: 0, memberBills: 0, sumBill: 0 };
+      g[k].bills += 1;
+      if (hasMemberTel(r)) g[k].memberBills += 1;
+      g[k].sumBill += parseFloat(r.billTotal) || 0;
+    });
+    return Object.values(g)
+      .map(x => ({ ...x, memberPct: x.bills ? (x.memberBills / x.bills) * 100 : 0 }))
+      .sort((a, b) => b.bills - a.bills);
+  }, [salesRaw, selectedOutlet]);
 
   // การ์ดแดชบอร์ด: แสดงเป็นตัวเงิน หรือ % ของยอดขาย(ก่อน VAT) ตามโหมดที่เลือก
   const dashMoney = (v) => {
@@ -2579,17 +2607,21 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Card 4: Total Bills */}
-                      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+                      {/* Card 4: Total Bills (กดดูรายสาขาได้) */}
+                      <button type="button" onClick={() => setBillsModalOpen(true)} className="w-full text-left bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:border-amber-300 hover:shadow-md transition-all">
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">จำนวนบิลทั้งหมด</span>
                           <h3 className="text-lg font-bold text-slate-800 truncate">{fmtNum(stats.count)}</h3>
-                          <p className="text-[10px] text-slate-400">ใบเสร็จรับเงิน</p>
+                          <p className="text-[10px] text-slate-400">
+                            สมาชิก <span className="font-bold text-violet-600">{fmtNum(stats.memberCount)}</span> บิล
+                            {stats.count > 0 && ` (${(stats.memberCount / stats.count * 100).toFixed(1)}%)`}
+                          </p>
+                          <p className="text-[10px] text-amber-500 font-semibold">คลิกดูรายสาขา →</p>
                         </div>
                         <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500 flex-shrink-0">
                           <Receipt size={20} />
                         </div>
-                      </div>
+                      </button>
 
                       {/* Card 5: Avg Bill Value */}
                       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
@@ -3781,6 +3813,77 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {/* จำนวนบิลแยกตามสาขา + บิลที่มีเลขที่สมาชิก */}
+      {billsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setBillsModalOpen(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <Receipt size={18} className="text-amber-400" />
+                  <span>จำนวนบิลแยกตามสาขา</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {fmtNum(stats.count)} บิล •
+                  {' '}บิลสมาชิก {fmtNum(stats.memberCount)} บิล
+                  {stats.count > 0 && ` (${(stats.memberCount / stats.count * 100).toFixed(1)}%)`}
+                </p>
+              </div>
+              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setBillsModalOpen(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              {billBranchBreakdown.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                  <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
+                  <p className="text-sm">ไม่มีบิลในช่วงที่เลือก</p>
+                </div>
+              ) : (
+                <div className="overflow-auto max-h-[55vh] border border-slate-100 rounded-xl">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="text-slate-500 font-bold">
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">สาขา</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">จำนวนบิล</th>
+                        <th className="px-4 py-3 text-violet-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">บิลมีเลขที่สมาชิก</th>
+                        <th className="px-4 py-3 text-violet-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">% สมาชิก</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ยอดขาย (รวม VAT)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {billBranchBreakdown.map(b => (
+                        <tr key={b.outletID} className="hover:bg-slate-50/50">
+                          <td className="px-4 py-2.5 font-semibold text-slate-800 whitespace-nowrap">{outletLabel(b.outletID)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono font-bold">{fmtNum(b.bills)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-violet-600 font-bold">{fmtNum(b.memberBills)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-violet-500">{b.memberPct.toFixed(1)}%</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-500">{fmtMoney(b.sumBill)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-slate-100 border-t-2 border-slate-400 font-bold text-slate-800 sticky bottom-0">
+                        <td className="px-4 py-3">รวมทั้งหมด</td>
+                        <td className="px-4 py-3 text-right font-mono">{fmtNum(stats.count)}</td>
+                        <td className="px-4 py-3 text-right font-mono text-violet-700">{fmtNum(stats.memberCount)}</td>
+                        <td className="px-4 py-3 text-right font-mono text-violet-700">
+                          {stats.count > 0 ? `${(stats.memberCount / stats.count * 100).toFixed(1)}%` : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono">{fmtMoney(stats.sumBill)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+              <p className="text-[11px] text-slate-400 mt-3">
+                บิลสมาชิก = บิลที่มีเลขที่สมาชิก (MemberTel) บันทึกไว้ใน POS · ตัวเลขนี้ตัดโต๊ะ 600 และบิลยอดเหมาออกแล้ว เท่ากับที่ใช้คำนวณในแดชบอร์ด
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* BILL DETAILS MODAL */}
       {excludedModalOpen && (
