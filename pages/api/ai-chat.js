@@ -1212,12 +1212,27 @@ export default async function handler(req, res) {
       `เทียบหลายค่าได้ด้วยหลาย series เช่น [{"key":"xum","name":"XUM"},{"key":"sjp","name":"SJP"}] แล้ว data แต่ละจุดมี key ครบ · ` +
       `เขียนสรุปข้อความสั้น ๆ ประกอบกราฟด้วยเสมอ`;
 
-    // รันบทสนทนากับโมเดลหนึ่งตัว — คืน { text, toolCalls } หรือ throw (e.rateLimited = โควตาเต็ม)
-    async function runChat(model) {
-      const contents = messages.map(m => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        parts: [{ text: String(m.text || '') }],
-      }));
+    // แปลงบทสนทนาจากหน้าเว็บเป็น contents ของ Gemini
+    // กันสาเหตุยอดฮิตของ 400 "Request contains an invalid argument.":
+    //   1) part ที่ข้อความว่าง (Gemini ไม่รับ text: "")
+    //   2) ประวัติที่ถูกตัดหัวจนเริ่มด้วยฝั่ง model — ต้องเริ่มด้วย user เสมอ
+    function buildContents() {
+      const c = messages
+        .map(m => ({
+          role: m.role === 'user' ? 'user' : 'model',
+          text: String(m.text ?? '').trim(),
+        }))
+        .filter(m => m.text);
+      while (c.length && c[0].role !== 'user') c.shift();
+      if (!c.length) throw new Error('ไม่มีข้อความให้ AI อ่าน — พิมพ์คำถามใหม่อีกครั้งครับ');
+      return c.map(m => ({ role: m.role, parts: [{ text: m.text }] }));
+    }
+
+    // รันบทสนทนากับโมเดลหนึ่งตัว — คืน { text, toolCalls } หรือ throw
+    // (e.rateLimited = โควตาเต็ม, e.badRequest = โมเดลไม่รับคำขอ/พารามิเตอร์)
+    // noThinkingConfig = true → ไม่ส่ง thinkingConfig (โมเดลบางรุ่นปิดโหมดคิดไม่ได้ จะตอบ 400)
+    async function runChat(model, noThinkingConfig = false) {
+      const contents = buildContents();
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
       const toolCalls = [];
 
@@ -1229,7 +1244,13 @@ export default async function handler(req, res) {
           tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
           // thinkingBudget 0 = ปิดโหมด "คิดก่อนตอบ" (เร็วขึ้น + กัน thought ภาษาอังกฤษหลุดมาในคำตอบ
           // และกันความคิดกินโควตา token จนคำตอบจริงถูกตัด)
-          generationConfig: { temperature: 0.2, maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 0 } },
+          // แต่บางรุ่น (เช่นสายที่บังคับให้คิด) ไม่รับค่านี้ แล้วตอบ 400 invalid argument
+          // → ชั้นบนจะสั่งให้ลองซ้ำแบบไม่ส่ง thinkingConfig
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 4096,
+            ...(noThinkingConfig ? {} : { thinkingConfig: { thinkingBudget: 0 } }),
+          },
         };
         const gr = await fetch(url, {
           method: 'POST',
@@ -1239,7 +1260,11 @@ export default async function handler(req, res) {
         const gj = await gr.json();
         if (!gr.ok) {
           const err = new Error(gj?.error?.message || `Gemini HTTP ${gr.status}`);
+          err.status = gr.status;
           err.rateLimited = gr.status === 429;
+          // 400 = คำขอไม่ผ่าน (พารามิเตอร์/ประวัติสนทนา), 404 = ไม่มีโมเดลนี้ → ลองรุ่นถัดไปได้
+          err.badRequest = gr.status === 400 || gr.status === 404;
+          console.error(`Gemini ${model} HTTP ${gr.status}: ${err.message}`);
           throw err;
         }
 
@@ -1276,20 +1301,42 @@ export default async function handler(req, res) {
       return { text: 'ขออภัย คำถามนี้ซับซ้อนเกินไป (เรียกข้อมูลหลายรอบเกินกำหนด) ลองแบ่งถามเป็นส่วนย่อยครับ', toolCalls };
     }
 
-    // ลองตามลำดับโมเดล — โควตาเต็ม (429) ค่อยขยับไปตัวถัดไป
+    // ลองตามลำดับโมเดล — โควตาเต็ม (429) หรือโมเดลไม่รับคำขอ (400/404) ค่อยขยับไปตัวถัดไป
+    // 400 ครั้งแรกของแต่ละโมเดล ลองซ้ำแบบไม่ส่ง thinkingConfig ก่อน (บางรุ่นปิดโหมดคิดไม่ได้)
     let lastErr = null;
     for (const model of MODEL_CHAIN) {
-      try {
-        const out = await runChat(model);
-        return res.status(200).json({ ...out, model });
-      } catch (e) {
-        if (e.rateLimited) { lastErr = e; continue; }
-        throw e;
+      for (const noThinkingConfig of [false, true]) {
+        try {
+          const out = await runChat(model, noThinkingConfig);
+          return res.status(200).json({ ...out, model });
+        } catch (e) {
+          lastErr = e;
+          if (e.badRequest && !noThinkingConfig) continue;   // ลองรุ่นเดิมอีกครั้งแบบไม่ปิดโหมดคิด
+          if (e.rateLimited || e.badRequest) break;          // ไปโมเดลถัดไป
+          throw e;
+        }
       }
     }
-    return res.status(502).json({ error: 'โควตา AI เต็มชั่วคราวทุกโมเดล — รอสัก 1 นาทีแล้วลองใหม่ครับ' + (lastErr ? '' : '') });
+    return res.status(502).json({ error: friendlyError(lastErr) });
   } catch (err) {
     console.error('AI chat error:', err.message);
-    return res.status(502).json({ error: err.message });
+    return res.status(502).json({ error: friendlyError(err) });
   }
+}
+
+// แปลง error ดิบจาก Gemini เป็นข้อความที่ผู้ใช้อ่านแล้วรู้ว่าต้องทำอะไรต่อ
+// (เดิมโชว์ดิบ ๆ อย่าง "Request contains an invalid argument." ซึ่งไม่บอกอะไรเลย)
+function friendlyError(err) {
+  const msg = String(err?.message || 'เกิดข้อผิดพลาดที่ไม่รู้จัก');
+  if (err?.rateLimited || /quota|rate limit|RESOURCE_EXHAUSTED/i.test(msg)) {
+    return 'โควตา AI เต็มชั่วคราวทุกโมเดล — รอสัก 1 นาทีแล้วถามใหม่ครับ';
+  }
+  if (/invalid argument|INVALID_ARGUMENT|400/i.test(msg)) {
+    return 'AI ไม่รับคำขอนี้ (invalid argument) — มักเกิดตอนบทสนทนายาวมากหรือคำตอบก่อนหน้ามีตารางใหญ่ ' +
+      `ลองกด "ล้างบทสนทนา" แล้วถามใหม่เป็นคำถามเดียวจบครับ (รายละเอียด: ${msg})`;
+  }
+  if (/not found|NOT_FOUND|404/i.test(msg)) {
+    return `ไม่พบโมเดล AI ที่ตั้งไว้ — ตรวจค่า GEMINI_MODEL ใน Environment Variables ครับ (รายละเอียด: ${msg})`;
+  }
+  return msg;
 }
