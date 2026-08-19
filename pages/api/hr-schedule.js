@@ -3,9 +3,9 @@
 //   GET /api/hr-schedule?start=YYYY-MM-DD&end=YYYY-MM-DD[&branch=รหัสสาขา][&branches=a,b,c]
 //   → { status:'success', start, end, branches, count, data:[...], failed:[...] }
 //
-// ไม่ระบุสาขา = ดึงทุกสาขาที่มีในฐานข้อมูล HR
-// ระบุ branches มา = ดึงเฉพาะสาขาในรายการนั้น — หน้า "ดูสแกนหน้า" ส่งเฉพาะสาขาที่มีคนสแกนจริง
-// ในช่วงวันที่เลือกมาให้ จะได้ไม่ต้องยิงครบทุกสาขาทิ้งเปล่าๆ
+// ไม่ระบุสาขา = ดึงทุกสาขาที่มีในฐานข้อมูล HR (หน้า "ดูสแกนหน้า" ใช้ทางนี้ตอนเลือก "ทุกสาขา"
+// เพราะสาขาที่หยุดทั้งสาขาจะไม่มีสแกนเลย ถ้าเดารายชื่อสาขาจากข้อมูลสแกนก็จะมองไม่เห็นวันหยุดนั้น)
+// ระบุ branches มา = ดึงเฉพาะสาขาในรายการนั้น
 //
 // รหัสสาขาที่เครื่องสแกนส่งมา (area_alias) เป็นตัวพิมพ์ใหญ่ ส่วนในฐาน HR เก็บตามที่หน้าเว็บ
 // ของสาขาใช้ (ตัวพิมพ์เล็ก) จึงเทียบแบบไม่สนตัวพิมพ์ แล้วส่งตัวสะกดที่เก็บจริงไปคิวรี่
@@ -13,6 +13,10 @@ import { fetchScheduleBranches, fetchTimesheet, fetchTimesheetMany } from '../..
 
 // ยิงทีละสาขาหลายรอบ — เผื่อเวลาให้พอเหมือน /api/attendance
 export const config = { maxDuration: 60 };
+
+// เพดานเดียวกับ ZK_ROW_CAP ของ /api/attendance — ทุกสาขา x ทั้งเดือนได้หลักหมื่นแถว
+// ถ้าปล่อยไม่จำกัด หน้าเว็บต้องวาดตารางใหญ่มากจนหน่วง ชนเพดานเมื่อไหร่ = ช่วงวันที่กว้างเกิน
+const ROW_CAP = 20000;
 
 const txt = (v) => (v == null ? '' : String(v).trim());
 const isYmd = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -67,6 +71,7 @@ export default async function handler(req, res) {
         branches: [],
         unknown,
         count: 0,
+        truncated: false,
         failed: [],
         data: [],
       });
@@ -76,14 +81,21 @@ export default async function handler(req, res) {
       ? { rows: await fetchTimesheet({ branch: resolved[0], start, end }), failed: [] }
       : await fetchTimesheetMany({ branches: resolved, start, end });
 
+    const truncated = rows.length > ROW_CAP;
+    const data = truncated ? rows.slice(0, ROW_CAP) : rows;
+
     return res.status(200).json({
       status: 'success',
       start, end,
       branches: resolved,
       unknown,
-      count: rows.length,
+      count: data.length,
+      truncated,
       failed,
-      data: rows,
+      ...(truncated
+        ? { message: `ตารางงานถูกตัดที่ ${ROW_CAP.toLocaleString()} แถว — ช่วงวันที่กว้างเกินไป กรุณาแคบช่วงลงหรือเลือกสาขา` }
+        : {}),
+      data,
     });
   } catch (err) {
     console.error('hr-schedule API error:', err.message);
