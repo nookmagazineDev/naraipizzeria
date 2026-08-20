@@ -3,6 +3,10 @@
 //   เช่น สันคอหมูสไลด์ 1 จาน ใช้ 33 กรัม, ตัวแปลง 1000 → 0.033 กก.
 // คืนรูปแบบเดียวกับ /api/usage: { normalizedItemCode: { total, details: { 'YYYY-MM-DD': qty } } }
 
+// ยิง ctranbetweendate ตัวเดียวกับ /api/detail ซึ่งเป็นข้อมูลระดับไอเทม (หนักกว่ายอดบิลหลายเท่า)
+// ค่า default ของ Vercel คือ 10 วินาที ซึ่งไม่พอ — ตั้งเท่ากับ /api/detail และ /api/sales
+export const config = { maxDuration: 60 };
+
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 const BOM_SHEET = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
 const BOM_GID = '419926693';
@@ -77,7 +81,13 @@ export default async function handler(req, res) {
   try {
     const [bom, detRes] = await Promise.all([
       fetchBom(),
-      fetch(`${STORE_API}/ctranbetweendate?start=${startDate}&end=${endDate}&outlet=${oid}`),
+      // ตัดจบเองที่ 55 วิ ให้ทันคืน error ที่อ่านรู้เรื่องก่อน maxDuration 60 จะฆ่า function
+      // header ngrok: ถ้า host API อยู่หลัง tunnel จะได้ JSON ไม่ใช่หน้าเตือนของ ngrok ที่เป็น HTML
+      fetch(`${STORE_API}/ctranbetweendate?start=${startDate}&end=${endDate}&outlet=${oid}`, {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(55000),
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+      }),
     ]);
     if (!detRes.ok) throw new Error(`host API HTTP ${detRes.status}`);
     const dj = await detRes.json();

@@ -1,5 +1,9 @@
 import mysql from 'mysql2/promise';
 
+// connectTimeout ของ pool ตั้งไว้ 15 วิ ซึ่งยาวกว่า default 10 วิของ Vercel — ถ้าไม่ตั้งตรงนี้
+// function จะถูกฆ่าก่อน MySQL จะ timeout ด้วยซ้ำ แล้วฝั่งเว็บได้ HTML แทน JSON
+export const config = { maxDuration: 60 };
+
 // ใบรับ (ยอดรับเข้าสาขา) — ดึงตรงจาก MySQL: inventory.dyndns.tv / myfbdata.trans
 // ของที่รับเข้าสาขาถูกบันทึกเป็น Trn_Type IN ('TRF','RCV') โดยปลายทาง Trn_To = เลขสาขา
 // (ต้องกรอง type เพราะ SLS = การขาย ก็มี Trn_To = สาขาเช่นกัน)

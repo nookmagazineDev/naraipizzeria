@@ -4,6 +4,25 @@ import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
 import { apiCall } from '../lib/stockApi';
 
+// ต้องตรงกับ normalizeId ใน /api/usage-bom เป๊ะ ไม่งั้นคีย์รหัสสินค้าจับคู่กันไม่ติด
+const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
+
+// ยิงทีละชุดแทนการยิงทุกสาขาพร้อมกัน — host API ช้าลงมากเมื่อโดนหลายสาขาพร้อมกัน
+// และเบราว์เซอร์เองก็คิวคำขอเกิน ~6 ตัวต่อโดเมนอยู่แล้ว ยิงรวดเดียวจึงไม่ได้เร็วขึ้นจริง
+const BRANCH_BATCH = 5;
+async function fetchInBatches(list, makeUrl) {
+  const out = [];
+  for (let i = 0; i < list.length; i += BRANCH_BATCH) {
+    const results = await Promise.all(list.slice(i, i + BRANCH_BATCH).map(b =>
+      fetch(makeUrl(b))
+        .then(r => r.json())
+        .catch(err => ({ status: 'error', message: err.message }))
+    ));
+    out.push(...results);
+  }
+  return out;
+}
+
 export default function StockTotalList() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -58,153 +77,67 @@ export default function StockTotalList() {
 
     setIsFetchingApi(true);
     try {
-      // 1. Fetch Total Stock from Apps Script (absolute latest count, ignoring UI dates)
-      const stockResPromise = apiCall('getStockTotal', { endDate: '' });
-
-      // Determine earliest count date across all items and branches
-      let earliestCountDateStr = null;
-      stockResPromise.then(res => {
-        if (res.status === 'success') {
-          res.data.forEach(item => {
-            if (item.branchDetails) {
-              item.branchDetails.forEach(bd => {
-                if (bd.date) {
-                  const parts = bd.date.split(' ')[0].split('/'); // [dd, MM, yyyy]
-                  if (parts.length === 3) {
-                    const ymd = `${parts[2]}-${parts[1]}-${parts[0]}`;
-                    if (!earliestCountDateStr || ymd < earliestCountDateStr) {
-                      earliestCountDateStr = ymd;
-                    }
-                  }
-                }
-              });
-            }
-          });
-        }
-      }).catch(() => {});
-
-      const stockRes = await stockResPromise;
+      // ยอดนับล่าสุด — ส่ง endDate ว่างเสมอ เพราะชีทเก็บยอดนับครั้งล่าสุดของแต่ละสาขาไว้อยู่แล้ว
+      // ช่วงวันที่ด้านบนมีผลกับ "ยอดใช้รวม" เท่านั้น
+      const stockRes = await apiCall('getStockTotal', { endDate: '' });
       if (stockRes.status !== 'success') {
         toast.error('ไม่สามารถดึงยอดคงเหลือได้');
-        setIsFetchingApi(false);
         return;
       }
 
-      let fetchStartDate = earliestCountDateStr;
-      if (!fetchStartDate || fetchStartDate > apiStartDate) {
-        fetchStartDate = apiStartDate;
-      }
-
-      const todayYMD = new Date(new Date().getTime() - (new Date().getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-      let fetchEndDate = apiEndDate;
-      if (todayYMD > fetchEndDate) {
-        fetchEndDate = todayYMD;
-      }
-
       const validBranches = branches.filter(b => b.outletId);
-      
-      const usagePromises = validBranches.map(b => 
-        // ยอดใช้คำนวณสดจาก ยอดขายจริง × สูตร BOM (เดิมอ่านชีท UsageHistory ที่หยุดอัปเดต 24 มิ.ย.)
-        fetch(`/api/usage-bom?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
-        .then(r => r.json()).catch(() => ({ status: 'error' }))
+      if (validBranches.length === 0) {
+        setItems(stockRes.data);
+        toast.error('ไม่พบสาขาที่มีรหัส outlet — ดึงยอดใช้ไม่ได้');
+        return;
+      }
+
+      // ยิงเฉพาะช่วงที่ผู้ใช้เลือกจริง
+      // เดิมยิงย้อนไปถึง "วันนับที่เก่าที่สุดของทุกสาขา" (อาจหลายเดือน) แล้วค่อยกรองทิ้งตอนรวมยอด
+      // ทำให้ host API หมดเวลาก่อนตอบ ยอดใช้เลยขึ้นเป็น "-" ทั้งคอลัมน์
+      const usageResults = await fetchInBatches(validBranches, b =>
+        `/api/usage-bom?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}` +
+        `&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`
       );
-      
-      const receivedPromises = validBranches.map(b => 
-        fetch(`/api/orderd?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}&startDate=${encodeURIComponent(fetchStartDate)}&endDate=${encodeURIComponent(fetchEndDate)}`)
-        .then(r => r.json()).catch(() => ({ status: 'error' }))
-      );
 
-      const [usageResults, receivedResults] = await Promise.all([
-        Promise.all(usagePromises),
-        Promise.all(receivedPromises)
-      ]);
-
-      let baseItems = stockRes.data;
-
-      // Aggregate Usage
       const branchUsageMap = {};
+      const failedBranches = [];
       usageResults.forEach((res, idx) => {
-        const bName = String(validBranches[idx].name).toLowerCase();
-        branchUsageMap[bName] = res.status === 'success' && res.data ? res.data : {};
+        const b = validBranches[idx];
+        const bName = String(b.name).toLowerCase();
+        if (res.status === 'success' && res.data) {
+          branchUsageMap[bName] = res.data;
+        } else {
+          branchUsageMap[bName] = {};
+          failedBranches.push(String(b.name).toUpperCase());
+        }
       });
 
-      // Aggregate Received
-      const branchReceivedMap = {};
-      receivedResults.forEach((res, idx) => {
-        const bName = String(validBranches[idx].name).toLowerCase();
-        branchReceivedMap[bName] = res.status === 'success' && res.data ? res.data : {};
-      });
-
-      // Merge and Calculate
-      const mergedItems = baseItems.map(item => {
-        const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
-        
+      const mergedItems = stockRes.data.map(item => {
+        const normId = normalizeId(item.productId);
         let uiTotalUsage = 0;
-        let calculatedTotalRemaining = 0;
-        let newBranchDetails = [];
-
-        // 1. Calculate UI Total Usage (within apiStartDate and apiEndDate)
         validBranches.forEach(b => {
-          const bName = String(b.name).toLowerCase();
-          const bUsageDetails = branchUsageMap[bName]?.[normId]?.details || {};
-          Object.entries(bUsageDetails).forEach(([dateKey, qty]) => {
-            if (dateKey >= apiStartDate && dateKey <= apiEndDate) {
-              uiTotalUsage += qty;
-            }
+          const details = branchUsageMap[String(b.name).toLowerCase()]?.[normId]?.details || {};
+          Object.entries(details).forEach(([dateKey, qty]) => {
+            if (dateKey >= apiStartDate && dateKey <= apiEndDate) uiTotalUsage += qty;
           });
         });
-
-        // 2. Calculate System Balance Per Branch
-        if (item.branchDetails && item.branchDetails.length > 0) {
-          item.branchDetails.forEach(bd => {
-            const bName = String(bd.branch).toLowerCase();
-            let branchRemaining = parseFloat(bd.remaining);
-            if (isNaN(branchRemaining)) branchRemaining = 0;
-
-            let usageSinceCount = 0;
-            let receivedSinceCount = 0;
-
-            if (bd.date) {
-              const parts = bd.date.split(' ')[0].split('/'); // [dd, MM, yyyy]
-              if (parts.length === 3) {
-                const countDateKey = `${parts[2]}-${parts[1]}-${parts[0]}`; // YYYY-MM-DD
-                
-                const bUsageDetails = branchUsageMap[bName]?.[normId]?.details || {};
-                const bReceivedDetails = branchReceivedMap[bName]?.[normId]?.details || {};
-                
-                // Add received and subtract usage strictly *after* the count date
-                Object.entries(bUsageDetails).forEach(([dateKey, qty]) => {
-                  if (dateKey > countDateKey) usageSinceCount += qty;
-                });
-                Object.entries(bReceivedDetails).forEach(([dateKey, qty]) => {
-                  if (dateKey > countDateKey) receivedSinceCount += qty;
-                });
-              }
-            }
-
-            const branchSystemBalance = Number((branchRemaining + receivedSinceCount - usageSinceCount).toFixed(2));
-            calculatedTotalRemaining += branchSystemBalance;
-
-            newBranchDetails.push({
-              ...bd,
-              calculatedRemaining: branchSystemBalance,
-              usageSinceCount,
-              receivedSinceCount
-            });
-          });
-        }
-
-        return {
-          ...item,
-          uiTotalUsage: Number(uiTotalUsage.toFixed(2)),
-          calculatedTotalRemaining: item.branchDetails && item.branchDetails.length > 0 ? Number(calculatedTotalRemaining.toFixed(2)) : '',
-          newBranchDetails
-        };
+        return { ...item, uiTotalUsage: Number(uiTotalUsage.toFixed(2)) };
       });
 
       setItems(mergedItems);
-      toast.success('ดึงข้อมูลยอดรวมสำเร็จ');
 
+      // บอกให้ชัดว่าสาขาไหนดึงไม่ได้ — เดิมขึ้น "สำเร็จ" เสมอ ต่อให้ล้มทุกสาขา
+      if (failedBranches.length === 0) {
+        toast.success('ดึงข้อมูลยอดรวมสำเร็จ');
+      } else if (failedBranches.length === validBranches.length) {
+        toast.error(`ดึงยอดใช้ไม่สำเร็จทั้ง ${validBranches.length} สาขา — ยอดใช้รวมจะขึ้นเป็น "-"`, { duration: 7000 });
+      } else {
+        const shown = failedBranches.slice(0, 5).join(', ');
+        const more = failedBranches.length > 5 ? ` และอีก ${failedBranches.length - 5} สาขา` : '';
+        toast(`ดึงยอดใช้ไม่สำเร็จ ${failedBranches.length}/${validBranches.length} สาขา: ${shown}${more}`,
+          { icon: '⚠️', duration: 7000 });
+      }
     } catch (error) {
       toast.error('เกิดข้อผิดพลาดในการดึงข้อมูล');
     } finally {
@@ -332,7 +265,7 @@ export default function StockTotalList() {
           </div>
           ดูยอดรวมทุกสาขา
         </h1>
-        <p className="text-gray-500 mt-1 ml-11">ดูยอดคงเหลือรวม ยอดรับ และยอดใช้ ของทุกสาขาแบบเรียลไทม์</p>
+        <p className="text-gray-500 mt-1 ml-11">ยอดคงเหลือรวม = ยอดนับล่าสุดของทุกสาขา · ยอดใช้รวม = ตามช่วงวันที่ที่เลือก</p>
       </div>
 
       <div className="flex flex-col md:flex-row gap-4 mb-4">
