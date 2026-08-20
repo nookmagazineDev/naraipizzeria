@@ -40,7 +40,10 @@ function parseCSV(text) {
   return rows;
 }
 
-// สูตร BOM: menuCode -> [{ ing, perServe, converter }]  (cache 10 นาที กันโหลดชีทซ้ำทุกสาขา)
+// สูตร BOM: menuCode -> { รหัสวัตถุดิบ(normalize): ยอดใช้ต่อ 1 จาน (หน่วยซื้อ) }
+// รวมบรรทัดของวัตถุดิบตัวเดียวกันในเมนูเดียวกันไว้เป็นตัวเดียว (สูตรอาจแตกเป็นหลายบรรทัด)
+// สำคัญ: ถ้าปล่อยให้เป็นหลายบรรทัด เวลานับ "จำนวนที่ขาย" ต่อเมนูจะถูกนับซ้ำตามจำนวนบรรทัด
+// (cache 10 นาที กันโหลดชีทซ้ำทุกสาขา)
 let bomCache = { map: null, at: 0 };
 async function fetchBom() {
   if (bomCache.map && Date.now() - bomCache.at < 10 * 60 * 1000) return bomCache.map;
@@ -55,7 +58,11 @@ async function fetchBom() {
     const perServe = parseFloat(rw[5]);         // F = ยอดใช้ต่อจาน (หน่วยเล็ก)
     const conv = parseFloat(rw[7]);             // H = ตัวแปลงหน่วย
     if (!menu || !ing || isNaN(perServe)) return;
-    (map[menu] = map[menu] || []).push({ ing, perServe, converter: (isNaN(conv) || !conv) ? 1 : conv });
+    const k = normalizeId(ing);
+    if (!k) return;
+    const perUnit = perServe / ((isNaN(conv) || !conv) ? 1 : conv);
+    map[menu] = map[menu] || {};
+    map[menu][k] = (map[menu][k] || 0) + perUnit;
   });
   bomCache = { map, at: Date.now() };
   return map;
@@ -84,6 +91,9 @@ export default async function handler(req, res) {
     const rows = Array.isArray(dj) ? dj : dj.data || [];
 
     const usageMap = {};
+    // ยอดใช้แยกตามเมนู: { รหัสวัตถุดิบ: { เลขเมนู: { menu, menuCode, sold, qty } } }
+    // นับจากบรรทัดขายชุดเดียวกับ usageMap เพื่อให้ "ขาย" กับ "ปริมาณใช้" มาจากฐานเดียวกันเสมอ
+    const byMenu = {};
     let soldLines = 0, matchedLines = 0;
     const missingMenus = new Set();
 
@@ -104,14 +114,28 @@ export default async function handler(req, res) {
       const dateKey = String(r.prtOrdTime || r.startTime || '').slice(0, 10);
       if (!dateKey) return;
 
-      recipe.forEach(ing => {
-        const used = qty * ing.perServe / ing.converter;
-        const k = normalizeId(ing.ing);
-        if (!k) return;
+      const menuName = String(r.nameThai || r.nameEng || code).trim();
+
+      Object.keys(recipe).forEach(k => {
+        const used = qty * recipe[k];
         if (!usageMap[k]) usageMap[k] = { total: 0, details: {} };
         usageMap[k].total += used;
         usageMap[k].details[dateKey] = (usageMap[k].details[dateKey] || 0) + used;
+
+        const perItem = byMenu[k] = byMenu[k] || {};
+        const entry = perItem[code] = perItem[code] || { menu: menuName, menuCode: code, sold: 0, qty: 0 };
+        entry.sold += qty;   // นับ 1 ครั้งต่อบรรทัดขาย (วัตถุดิบถูกยุบเป็นตัวเดียวแล้วใน fetchBom)
+        entry.qty += used;
       });
+    });
+
+    // แปลงเป็น array + เรียงจากเมนูที่ใช้วัตถุดิบเยอะสุด
+    const byMenuOut = {};
+    Object.keys(byMenu).forEach(k => {
+      byMenuOut[k] = Object.values(byMenu[k])
+        .map(e => ({ ...e, sold: Number(e.sold.toFixed(2)), qty: Number(e.qty.toFixed(2)) }))
+        .filter(e => e.qty > 0)
+        .sort((a, b) => b.qty - a.qty);
     });
 
     // ปัดทศนิยมกันค่า floating point
@@ -125,6 +149,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       status: 'success',
       data: usageMap,
+      byMenu: byMenuOut,
       meta: {
         source: 'bom',
         soldLines,
