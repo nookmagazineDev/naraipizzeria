@@ -95,6 +95,27 @@ $env:ZK_DB_NAME     = 'ZKBio9'                 # ชื่อ DB ของ ZKBio
   `personnel_department`) ให้ดูชื่อจริงจาก `/zk/tables` แล้วตั้ง env
   `ZK_TRANS_TABLE` / `ZK_EMP_TABLE` / `ZK_DEPT_TABLE`
 
+## QC/RD (เมนู · สูตร BOM · วัตถุดิบ) — ฐาน InventoryNarai
+
+`server.js` ต่อฐานข้อมูลตัวที่สาม (`InventoryNarai` บน `localhost\SQLEXPRESS` — ฐานเดียวกับหน้านับสต๊อก)
+เพื่อให้หน้า QC/RD บน Dashboard เลิกอ่าน/เขียน Google Sheets
+
+ตารางและขั้นตอนย้ายข้อมูลอยู่ใน [`docs/qcrd-sql-migration.md`](../docs/qcrd-sql-migration.md)
+ตรรกะทั้งหมดอยู่ใน `host-server/qcrd-db.js` (ตัวที่มาแทน `qcrd-apps-script.gs`)
+
+```powershell
+$env:QCRD_DB_SERVER   = 'localhost\SQLEXPRESS'   # ไม่ตั้ง = ใช้ DB_SERVER
+$env:QCRD_DB_NAME     = 'InventoryNarai'
+$env:QCRD_DB_USER     = '<user>'                 # ไม่ตั้ง = ใช้ DB_USER/DB_PASSWORD เดิม
+$env:QCRD_DB_PASSWORD = '<รหัสผ่าน>'
+$env:QCRD_WRITE_KEY   = '<สุ่มข้อความยาว ๆ>'      # ไม่ตั้ง = ปิดการเขียน (อ่านได้อย่างเดียว)
+```
+
+- ต่อฐานแบบ lazy เหมือน ZKBio — ยังไม่ได้ย้ายข้อมูลก็ไม่กระทบ endpoint ยอดขาย
+- เช็กว่าพร้อมไหม: `http://localhost:14365/qcrd/ping`
+- **`QCRD_WRITE_KEY` ต้องตั้งให้ตรงกับ env ชื่อเดียวกันบน Vercel** ไม่งั้นหน้าเว็บบันทึกไม่ได้
+  (API ตัวนี้เปิดออกเน็ตและไม่มีระบบล็อกอิน กุญแจนี้คือด่านเดียวที่กันคนอื่นเขียนทับข้อมูล)
+
 ## endpoint ทั้งหมด
 
 | Method | Path | คำอธิบาย |
@@ -109,6 +130,9 @@ $env:ZK_DB_NAME     = 'ZKBio9'                 # ชื่อ DB ของ ZKBio
 | GET | `/zk/employees` | พนักงานในเครื่องสแกน + แผนก |
 | GET | `/zk/ping` | เช็กการเชื่อมต่อฐาน ZKBio |
 | GET | `/zk/tables` `/zk/columns?table=…` `/zk/sample?table=…` | debug schema ฝั่ง ZKBio |
+| GET | `/qcrd/menu` `/qcrd/bom` `/qcrd/item` `/qcrd/menugroup` | ข้อมูล QC/RD จากฐาน InventoryNarai |
+| POST | `/qcrd/save` | เพิ่ม/แก้/ลบ ของ QC/RD (ต้องมี header `x-api-key`) |
+| GET | `/qcrd/ping` | เช็กการเชื่อมต่อฐาน QC/RD + เขียนได้ไหม |
 
 ทุก endpoint คืน `{ data: [...] }` (ยกเว้น debug) โดยชื่อคอลัมน์แปลงเป็นตัวพิมพ์เล็กตัวแรก
 ให้ตรงกับที่ frontend ใช้

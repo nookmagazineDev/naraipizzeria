@@ -11,6 +11,10 @@
 //    GET /zk/transactions?start=YYYY-MM-DD&end=YYYY-MM-DD[&emp=รหัส][&area=รหัสสาขา] → log สแกนนิ้ว
 //    GET /zk/employees           → รายชื่อพนักงานในเครื่องสแกน + แผนก
 //    GET /zk/ping /zk/tables /zk/columns /zk/sample → debug ฐาน ZKBio
+//  endpoint QC/RD (เมนู/สูตร BOM/วัตถุดิบ — ฐาน InventoryNarai ตัวเดียวกับหน้านับสต๊อก):
+//    GET  /qcrd/menu | /qcrd/bom | /qcrd/item | /qcrd/menugroup → ข้อมูลที่หน้า QC/RD ใช้
+//    POST /qcrd/save  { action, ... }  → เพิ่ม/แก้/ลบ (ต้องมี header x-api-key = QCRD_WRITE_KEY)
+//    GET  /qcrd/ping             → เช็กว่าต่อฐาน InventoryNarai ได้ไหม + เขียนได้ไหม
 //  endpoint ช่วย debug:
 //    GET /tables                 → รายชื่อตารางทั้งหมด
 //    GET /columns?table=ชื่อ      → คอลัมน์ของตาราง (default = Ctrans)
@@ -23,6 +27,7 @@ const express = require('express');
 const sql = require('mssql');
 const cors = require('cors');
 const compression = require('compression'); // บีบ JSON ด้วย gzip → ส่งผ่าน ngrok เร็วขึ้นมาก
+const { mountQcrd } = require('./qcrd-db'); // QC/RD บน InventoryNarai (ดู docs/schema-qcrd.sql)
 
 const app = express();
 app.use(compression()); // ต้องมาก่อน route
@@ -398,6 +403,10 @@ app.get('/zk/sample', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ── QC/RD: เมนู · สูตร BOM · วัตถุดิบ · หมวดหมู่เมนู (ฐาน InventoryNarai) ──
+//    ต่อฐานแบบ lazy เหมือน ZKBio — ยังไม่ได้ย้ายข้อมูลก็ไม่กระทบ endpoint อื่น
+mountQcrd(app);
 
 // ── เช็กว่า API ยังมีชีวิต ──
 app.get('/ping', (req, res) => res.json({ ok: true, time: new Date() }));

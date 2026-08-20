@@ -1,7 +1,13 @@
-// QC/RD — อ่านข้อมูลจากชีทต้นทุนเมนู (1v8WRT…) 3 แท็บ: menu / BOM / item
-// ตัวอ่านชีท/เลขแท็บอยู่ใน lib/qcrdSheet.js — ใช้ร่วมกับ /api/usage-bom
-// ส่วน "เขียน" ใช้ /api/qcrd-gas (Apps Script)
+// QC/RD — อ่านเมนู / สูตร BOM / วัตถุดิบ / หมวดหมู่เมนู
+//
+// มีสองทาง เลือกด้วย env QCRD_SOURCE:
+//   sheet (ค่าเริ่มต้น) — ชีทต้นทุนเมนู 1v8WRT… ผ่าน lib/qcrdSheet.js (ใช้ร่วมกับ /api/usage-bom)
+//   sql                — ตาราง qcrd_* / stock_item ในฐาน InventoryNarai ผ่าน host API
+//                        (host-server/qcrd-db.js · โครงตารางใน docs/schema-qcrd.sql)
+// โหมด sql ถ้าเรียก host API ไม่ได้ จะถอยไปอ่านชีทให้ แล้วแนบ warning มากับผลลัพธ์
+// ส่วน "เขียน" ใช้ /api/qcrd-save (ไปที่ SQL หรือ Apps Script ตาม QCRD_SOURCE เหมือนกัน)
 import { fetchQcrdSheet as fetchSheet, TRUTHY } from '../../lib/qcrdSheet';
+import { usingSql, fetchQcrdSql } from '../../lib/qcrdSource';
 
 // ---------- วิเคราะห์หน่วยจากชื่อวัตถุดิบ ----------
 // ชื่อในชีท item มักลงท้ายด้วยหน่วยซื้อ เช่น "...(1ถุง/1กก.) กก." หรือ "...(กิโล)"
@@ -92,8 +98,38 @@ export function findYieldCols(header = []) {
   return [at(/ปริมาณ|yield/i, YIELD_COL), at(/หน่วย|unit/i, YIELD_UNIT_COL)];
 }
 
+/** เติมหน่วยที่วิเคราะห์จากชื่อให้รายการที่ยังไม่มีหน่วย (กติกาเดียวกับตอนอ่านจากชีท) */
+function withInferredUnit(items) {
+  return (items || []).map((it) => {
+    const unit = (it.unit || '').trim();
+    return { ...it, unit: unit || inferUnit(it.name), unitSource: unit ? 'sql' : 'auto' };
+  });
+}
+
+/** อ่านจาก SQL — คืนรูปแบบเดียวกับฝั่งชีททุกช่อง หน้าเว็บจึงไม่ต้องรู้ว่าข้อมูลมาจากไหน */
+async function readFromSql(sheet) {
+  if (sheet === 'menu') return fetchQcrdSql('menu');
+  if (sheet === 'bom') return fetchQcrdSql('bom');
+  if (sheet === 'menugroup') return fetchQcrdSql('menugroup');
+  if (sheet === 'item') return withInferredUnit(await fetchQcrdSql('item'));
+  return null;
+}
+
 export default async function handler(req, res) {
   const { sheet } = req.query;
+
+  // โหมด SQL: ลอง host API ก่อน ไม่ได้ค่อยถอยไปอ่านชีท (ข้อมูลอาจเก่ากว่า จึงบอกไว้ใน warning)
+  let warning = '';
+  if (usingSql() && ['menu', 'bom', 'item', 'menugroup'].includes(sheet)) {
+    try {
+      const data = await readFromSql(sheet);
+      return res.status(200).json({ status: 'success', source: 'sql', data });
+    } catch (err) {
+      console.error('QC/RD SQL error:', err.message);
+      warning = `อ่านจาก SQL ไม่ได้ (${err.message}) — แสดงข้อมูลจากชีทแทน การแก้ไขล่าสุดอาจยังไม่ขึ้น`;
+    }
+  }
+
   try {
     if (sheet === 'menu') {
       // ดึงชื่อหมวดมาด้วย เพื่อแปลง MenuCode (คอลัมน์ C) เป็นชื่อหมวดให้หน้าเว็บ
@@ -123,7 +159,7 @@ export default async function handler(req, res) {
             yieldUnit: (r[yieldUnitCol] || '').trim(),
           };
         });
-      return res.status(200).json({ status: 'success', data });
+      return res.status(200).json({ status: 'success', source: 'sheet', warning, data });
     }
 
     if (sheet === 'bom') {
@@ -185,7 +221,7 @@ export default async function handler(req, res) {
             _row: row,
           };
         });
-      return res.status(200).json({ status: 'success', data });
+      return res.status(200).json({ status: 'success', source: 'sheet', warning, data });
     }
 
     if (sheet === 'menugroup') {
@@ -195,7 +231,7 @@ export default async function handler(req, res) {
         .filter(r => (r[0] || '').trim())
         .map(r => ({ code: (r[0] || '').trim(), name: (r[1] || '').trim() }))
         .filter(g => g.name);
-      return res.status(200).json({ status: 'success', data });
+      return res.status(200).json({ status: 'success', source: 'sheet', warning, data });
     }
 
     return res.status(400).json({ status: 'error', message: 'ระบุ ?sheet=menu|bom|item|menugroup' });
