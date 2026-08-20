@@ -213,6 +213,52 @@ const fmtNum = v => {
   return isNaN(n) ? String(v) : n.toLocaleString('th-TH');
 };
 
+// บิลที่ผูกกับสมาชิก: ช่อง MemberTel (เลขที่สมาชิก) มีค่าจริง
+// POS ปล่อยว่าง/ขีด/เลขศูนย์ล้วนมาได้เมื่อไม่ได้กรอก จึงไม่นับพวกนี้เป็นสมาชิก
+const hasMemberTel = row => {
+  const v = String(row.memberTel ?? row.MemberTel ?? '').trim();
+  return v !== '' && v !== '-' && !/^0+$/.test(v);
+};
+
+// การ์ดแดชบอร์ดแต่ละใบ → คอลัมน์ที่จะส่งออก Excel (ทุกใบส่งออกแบบ "แยกสาขา" เหมือนกันหมด)
+// key ตรงกับฟิลด์ใน branchCardStats.rows
+const DASH_CARDS = [
+  { key: 'sales', title: 'ยอดขายรวมทั้งหมด',
+    cols: [['ยอดขายก่อน VAT', 'beforeVat'], ['ยอดรวม VAT', 'gross'], ['VAT', 'vat'], ['จำนวนบิล', 'bills']] },
+  { key: 'cost', title: 'ต้นทุนรวมทั้งหมด',
+    cols: [['ต้นทุนรวม', 'cost'], ['ยอดขายก่อน VAT', 'beforeVat'], ['ต้นทุน %', 'costPct']] },
+  { key: 'prep', title: 'ต้นทุนโต๊ะเตรียม(กก)',
+    cols: [['ต้นทุนโต๊ะเตรียม', 'prepCost'], ['จำนวน (กก.)', 'prepQty']] },
+  { key: 'profit', title: 'กำไร ขาดทุนสุทธิ',
+    cols: [['ยอดขายก่อน VAT', 'beforeVat'], ['ต้นทุนรวม', 'cost'], ['กำไรสุทธิ', 'profit'], ['อัตรากำไร %', 'profitPct']] },
+  { key: 'bills', title: 'จำนวนบิลทั้งหมด',
+    cols: [['จำนวนบิล', 'bills'], ['บิลมีเลขที่สมาชิก', 'memberBills'], ['% สมาชิก', 'memberPct'], ['ยอดรวม VAT', 'gross']] },
+  { key: 'avgBill', title: 'ยอดเฉลี่ยต่อบิล',
+    cols: [['ยอดเฉลี่ยต่อบิล', 'avgBill'], ['จำนวนบิล', 'bills'], ['ยอดรวม VAT', 'gross']] },
+  { key: 'covers', title: 'จำนวนลูกค้าทั้งหมด',
+    cols: [['จำนวนลูกค้า (คน)', 'covers'], ['ยอดขายก่อน VAT', 'beforeVat'], ['ยอดใช้จ่ายต่อหัว', 'spendPerHead']] },
+  { key: 'excluded', title: 'รายการไม่นับคำนวณ',
+    cols: [['ต้นทุนที่ไม่นับ', 'excludedCost'], ['จำนวนชิ้น', 'excludedQty']] },
+];
+
+// ปุ่มส่งออกเล็ก ๆ มุมการ์ด — ใช้ span เพราะการ์ดบางใบทั้งใบเป็นปุ่มอยู่แล้ว (ห้ามซ้อนปุ่มในปุ่ม)
+const CardExportButton = ({ onExport, className = 'hover:text-slate-600' }) => {
+  // กันไม่ให้คลิกปุ่มนี้ไปเปิด modal ของการ์ดที่ตัวเองอยู่ (การ์ดบางใบทั้งใบเป็นปุ่ม)
+  const fire = e => { e.preventDefault(); e.stopPropagation(); onExport(); };
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      title="ส่งออก Excel (แยกสาขา)"
+      onClick={fire}
+      onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && fire(e)}
+      className={`text-slate-300 cursor-pointer transition-colors ${className}`}
+    >
+      <Download size={13} />
+    </span>
+  );
+};
+
 const outletLabel = id => {
   const name = OUTLETS[parseInt(id)];
   return name ? `${id} · ${name}` : (id != null ? String(id) : '-');
@@ -625,6 +671,7 @@ export default function App() {
   const [dailyCostModal, setDailyCostModal] = useState({ open: false, type: 'cost', date: null, outletID: null });
   const [excludedRaw, setExcludedRaw] = useState([]);
   const [excludedModalOpen, setExcludedModalOpen] = useState(false);
+  const [billsModalOpen, setBillsModalOpen] = useState(false);
 
   // Comparison State
   const [compareOutlets, setCompareOutlets] = useState([]); // Array of outlet IDs
@@ -1393,6 +1440,7 @@ export default function App() {
       : detailRaw;
 
     const count = sales.length;
+    const memberCount = sales.reduce((n, r) => n + (hasMemberTel(r) ? 1 : 0), 0);
     const sumAmount = sales.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
     const sumBill = sales.reduce((s, r) => s + (parseFloat(r.billTotal) || 0), 0);
     const sumVat = sales.reduce((s, r) => s + (parseFloat(r.vat || r.Vat || 0) || 0), 0);
@@ -1415,8 +1463,82 @@ export default function App() {
 
     const sumProfit = sumBeforeVat - sumCost;
 
-    return { count, sumAmount, sumBill, sumVat, sumBeforeVat, sumCover, avgBill, sumCost, sumPrepCost, sumProfit };
+    return { count, memberCount, sumAmount, sumBill, sumVat, sumBeforeVat, sumCover, avgBill, sumCost, sumPrepCost, sumProfit };
   }, [salesRaw, detailRaw, selectedOutlet, costMap]);
+
+  // ตัวเลขของ "ทุกการ์ดแดชบอร์ด" แยกตามสาขา — ใช้ทั้งใน modal จำนวนบิลและปุ่มส่งออก Excel ของทุกการ์ด
+  // เคารพตัวกรองสาขาที่เลือกอยู่ และใช้ชุดข้อมูล/กติกาเดียวกับ stats เป๊ะ (แถวรวมท้ายตารางจึงตรงกับหน้าการ์ด)
+  const branchCardStats = useMemo(() => {
+    const pick = arr => selectedOutlet ? arr.filter(r => String(r.outletID) === String(selectedOutlet)) : arr;
+    const g = {};
+    const rowOf = oid => {
+      const k = String(oid);
+      if (!g[k]) g[k] = {
+        outletID: oid, name: OUTLETS[parseInt(oid)] || k,
+        bills: 0, memberBills: 0, gross: 0, vat: 0,
+        cost: 0, prepCost: 0, prepQty: 0, covers: 0, excludedQty: 0, excludedCost: 0,
+      };
+      return g[k];
+    };
+
+    pick(salesRaw).forEach(r => {
+      const x = rowOf(r.outletID ?? r.OutletID);
+      x.bills += 1;
+      if (hasMemberTel(r)) x.memberBills += 1;
+      x.gross += parseFloat(r.billTotal) || 0;
+      x.vat += parseFloat(r.vat || r.Vat || 0) || 0;
+    });
+
+    pick(detailRaw).forEach(r => {
+      if (r.void) return;
+      const x = rowOf(r.outletID ?? r.OutletID);
+      const qty = parseFloat(r.quantity) || 0;
+      const c = (costMap[r.itemCode] ?? 0) * qty;
+      if (isPrepKgItem(r.itemCode)) { x.prepCost += c; x.prepQty += qty; }
+      else x.cost += c;
+      if (COVER_ITEMS.indexOf(parseInt(r.itemCode)) >= 0) x.covers += qty;
+    });
+
+    pick(excludedRaw).forEach(r => {
+      if (r.void) return;
+      const x = rowOf(r.outletID ?? r.OutletID);
+      const qty = parseFloat(r.quantity) || 0;
+      x.excludedQty += qty;
+      x.excludedCost += (costMap[r.itemCode] ?? 0) * qty;
+    });
+
+    // ค่าที่คำนวณต่อ (%, ค่าเฉลี่ย) ต้องหาใหม่จากยอดรวม ไม่ใช่เฉลี่ยของสาขา — แถวรวมจึงถูกต้อง
+    const derive = x => {
+      const beforeVat = x.gross - x.vat;
+      return {
+        ...x, beforeVat,
+        profit: beforeVat - x.cost,
+        costPct: beforeVat > 0 ? (x.cost / beforeVat) * 100 : 0,
+        profitPct: beforeVat > 0 ? ((beforeVat - x.cost) / beforeVat) * 100 : 0,
+        avgBill: x.bills ? x.gross / x.bills : 0,
+        memberPct: x.bills ? (x.memberBills / x.bills) * 100 : 0,
+        spendPerHead: x.covers > 0 ? beforeVat / x.covers : 0,
+      };
+    };
+
+    const raws = Object.values(g);
+    const SUM_KEYS = ['bills', 'memberBills', 'gross', 'vat', 'cost', 'prepCost', 'prepQty', 'covers', 'excludedQty', 'excludedCost'];
+    const totalRaw = raws.reduce((t, x) => {
+      SUM_KEYS.forEach(k => { t[k] += x[k]; });
+      return t;
+    }, { outletID: '', name: 'รวมทั้งหมด', ...Object.fromEntries(SUM_KEYS.map(k => [k, 0])) });
+
+    return {
+      rows: raws.map(derive).sort((a, b) => b.beforeVat - a.beforeVat),
+      total: derive(totalRaw),
+    };
+  }, [salesRaw, detailRaw, excludedRaw, selectedOutlet, costMap]);
+
+  // การ์ด "จำนวนบิลทั้งหมด" กดแล้วดูได้ว่าสาขาไหนกี่บิล และมีบิลสมาชิกกี่ใบ (เรียงบิลมาก→น้อย)
+  const billBranchBreakdown = useMemo(
+    () => [...branchCardStats.rows].sort((a, b) => b.bills - a.bills),
+    [branchCardStats]
+  );
 
   // การ์ดแดชบอร์ด: แสดงเป็นตัวเงิน หรือ % ของยอดขาย(ก่อน VAT) ตามโหมดที่เลือก
   const dashMoney = (v) => {
@@ -1762,6 +1884,90 @@ export default function App() {
   }, [salesRaw, compareOutlets]);
 
   // Export functions for each chart
+  // ── ส่งออกการ์ดแดชบอร์ดเป็น Excel (แยกสาขาเสมอ) ──
+  // ปุ่มบนการ์ด = ชีทเดียวเฉพาะการ์ดนั้น · ปุ่มด้านบน = ชีทรวมทุกการ์ดในไฟล์เดียว
+  const dashCardAoa = (card, rows, total) => {
+    const aoa = [
+      [card.title, `${selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • ${startDate} ถึง ${endDate}`],
+      [],
+      ['สาขา', ...card.cols.map(c => c[0])],
+    ];
+    const r2 = v => Math.round((parseFloat(v) || 0) * 100) / 100;
+    rows.forEach(b => aoa.push([outletLabel(b.outletID), ...card.cols.map(c => r2(b[c[1]]))]));
+    aoa.push(['รวมทั้งหมด', ...card.cols.map(c => r2(total[c[1]]))]);
+    return aoa;
+  };
+
+  const sheetTitle = t => String(t).replace(/[:\\/?*[\]]/g, ' ').trim().slice(0, 31);
+
+  function exportDashCardXLSX(cardKey) {
+    const card = DASH_CARDS.find(c => c.key === cardKey);
+    const { rows, total } = branchCardStats;
+    if (!card || !rows.length) return;
+    const ws = XLSX.utils.aoa_to_sheet(dashCardAoa(card, rows, total));
+    ws['!cols'] = [{ wch: 14 }, ...card.cols.map(() => ({ wch: 18 }))];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetTitle(card.title));
+    XLSX.writeFile(wb, `dashboard_${cardKey}_${startDate}_to_${endDate}.xlsx`);
+  }
+
+  function exportAllDashCardsXLSX() {
+    const { rows, total } = branchCardStats;
+    if (!rows.length) return;
+    const wb = XLSX.utils.book_new();
+
+    // ชีทแรก: ทุกตัวเลขของทุกการ์ดในตารางเดียว (คอลัมน์ซ้ำจะถูกตัดออก)
+    const allCols = [];
+    DASH_CARDS.forEach(c => c.cols.forEach(col => {
+      if (!allCols.some(x => x[1] === col[1])) allCols.push(col);
+    }));
+    const summary = { key: 'all', title: 'ทุกการ์ดแยกสาขา', cols: allCols };
+    const wsAll = XLSX.utils.aoa_to_sheet(dashCardAoa(summary, rows, total));
+    wsAll['!cols'] = [{ wch: 14 }, ...allCols.map(() => ({ wch: 18 }))];
+    XLSX.utils.book_append_sheet(wb, wsAll, 'ทุกการ์ดแยกสาขา');
+
+    // แล้วแยกชีทของแต่ละการ์ดไว้ให้ส่งต่อทีละใบได้
+    DASH_CARDS.forEach(card => {
+      const ws = XLSX.utils.aoa_to_sheet(dashCardAoa(card, rows, total));
+      ws['!cols'] = [{ wch: 14 }, ...card.cols.map(() => ({ wch: 18 }))];
+      XLSX.utils.book_append_sheet(wb, ws, sheetTitle(card.title));
+    });
+
+    XLSX.writeFile(wb, `dashboard_cards_${startDate}_to_${endDate}.xlsx`);
+  }
+
+  // ตารางรายไอเทมใน modal (ต้นทุน / โต๊ะเตรียม / รายการไม่นับ) → aoa สำหรับชีทรายละเอียด
+  const itemDetailAoa = (list, qtyLabel = 'จำนวน', withReason = false) => {
+    const r2 = v => Math.round((parseFloat(v) || 0) * 100) / 100;
+    const lead = withReason ? ['เหตุผล'] : [];
+    const aoa = [[...lead, 'รหัสไอเทม', 'ชื่อรายการ', qtyLabel, 'ต้นทุน/หน่วย', 'ต้นทุนรวม']];
+    list.forEach(c => aoa.push([
+      ...(withReason ? [c.reason] : []), c.itemCode, c.name, r2(c.qty), r2(c.unitCost), r2(c.totalCost),
+    ]));
+    aoa.push([
+      ...(withReason ? [''] : []), '', 'รวมทั้งหมด',
+      r2(list.reduce((t, c) => t + c.qty, 0)), '', r2(list.reduce((t, c) => t + c.totalCost, 0)),
+    ]);
+    return aoa;
+  };
+
+  // ปุ่มส่งออกในหัว modal: ชีทแยกสาขาของการ์ดนั้น + ชีทรายละเอียดที่กำลังเปิดดูอยู่ (ถ้ามี)
+  function exportDashModalXLSX(cardKey, detail) {
+    const card = DASH_CARDS.find(c => c.key === cardKey);
+    const { rows, total } = branchCardStats;
+    if (!card || !rows.length) return;
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(dashCardAoa(card, rows, total));
+    ws['!cols'] = [{ wch: 14 }, ...card.cols.map(() => ({ wch: 18 }))];
+    XLSX.utils.book_append_sheet(wb, ws, sheetTitle(card.title));
+    if (detail && detail.aoa && detail.aoa.length > 2) {
+      const ws2 = XLSX.utils.aoa_to_sheet(detail.aoa);
+      ws2['!cols'] = detail.aoa[0].map(h => ({ wch: String(h) === 'ชื่อรายการ' ? 34 : 16 }));
+      XLSX.utils.book_append_sheet(wb, ws2, sheetTitle(detail.name));
+    }
+    XLSX.writeFile(wb, `dashboard_${cardKey}_${startDate}_to_${endDate}.xlsx`);
+  }
+
   function exportXLSX(data, cols, filename) {
     if (!data.length) return;
     
@@ -2513,8 +2719,15 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="space-y-6">
-                    {/* Toggle: ตัวเงิน / เปอร์เซ็นต์ (สัดส่วนต่อยอดขาย) */}
-                    <div className="flex items-center justify-end gap-2">
+                    {/* Toggle: ตัวเงิน / เปอร์เซ็นต์ (สัดส่วนต่อยอดขาย) + ส่งออกทุกการ์ด */}
+                    <div className="flex items-center justify-end gap-2 flex-wrap">
+                      <button
+                        onClick={exportAllDashCardsXLSX}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50 hover:text-slate-800 transition-colors"
+                        title="ไฟล์เดียว: ชีทรวมทุกการ์ด + ชีทแยกของแต่ละการ์ด (แยกสาขาทั้งหมด)"
+                      >
+                        <Download size={14} /> ส่งออกทุกการ์ด (แยกสาขา)
+                      </button>
                       <span className="text-[11px] text-slate-400 font-semibold">มุมมองการ์ด:</span>
                       <div className="inline-flex items-center gap-1 bg-slate-100 rounded-xl p-1 text-xs font-semibold">
                         <button
@@ -2536,8 +2749,11 @@ export default function App() {
                           <h3 className="text-lg font-bold text-emerald-600 truncate">{dashMoney(stats.sumBeforeVat)}</h3>
                           <p className="text-[10px] text-slate-400">{dashValueMode === 'percent' ? 'ฐาน 100% ของยอดขาย' : 'ก่อน VAT (Bill − VAT)'}</p>
                         </div>
-                        <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-500 flex-shrink-0">
-                          <DollarSign size={20} />
+                        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                          <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-500">
+                            <DollarSign size={20} />
+                          </div>
+                          <CardExportButton onExport={() => exportDashCardXLSX('sales')} className="hover:text-emerald-600" />
                         </div>
                       </div>
 
@@ -2548,8 +2764,11 @@ export default function App() {
                           <h3 className="text-lg font-bold text-rose-600 truncate">{dashMoney(stats.sumCost)}</h3>
                           <p className="text-[10px] text-rose-500 font-semibold">{dashValueMode === 'percent' ? '% ของยอดขาย • คลิกดู →' : 'คลิกดูรายละเอียด →'}</p>
                         </div>
-                        <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center text-rose-500 flex-shrink-0">
-                          <Layers size={20} />
+                        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                          <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center text-rose-500">
+                            <Layers size={20} />
+                          </div>
+                          <CardExportButton onExport={() => exportDashCardXLSX('cost')} className="hover:text-rose-600" />
                         </div>
                       </button>
 
@@ -2560,8 +2779,11 @@ export default function App() {
                           <h3 className="text-lg font-bold text-orange-500 truncate">{dashMoney(stats.sumPrepCost)}</h3>
                           <p className="text-[10px] text-orange-500 font-semibold">{fmtNum(prepStats.totalQty)} กก. • คลิกดู →</p>
                         </div>
-                        <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center text-orange-500 flex-shrink-0">
-                          <Layers size={20} />
+                        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                          <div className="w-10 h-10 rounded-xl bg-orange-50 flex items-center justify-center text-orange-500">
+                            <Layers size={20} />
+                          </div>
+                          <CardExportButton onExport={() => exportDashCardXLSX('prep')} className="hover:text-orange-600" />
                         </div>
                       </button>
 
@@ -2574,22 +2796,32 @@ export default function App() {
                           </h3>
                           <p className="text-[10px] text-slate-400">{dashValueMode === 'percent' ? 'อัตรากำไร (% ของยอดขาย)' : 'ผลกำไรสุทธิ'}</p>
                         </div>
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${stats.sumProfit >= 0 ? 'bg-emerald-50 text-emerald-500' : 'bg-rose-50 text-rose-500'}`}>
-                          <TrendingUp size={20} />
+                        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${stats.sumProfit >= 0 ? 'bg-emerald-50 text-emerald-500' : 'bg-rose-50 text-rose-500'}`}>
+                            <TrendingUp size={20} />
+                          </div>
+                          <CardExportButton onExport={() => exportDashCardXLSX('profit')} className="hover:text-emerald-600" />
                         </div>
                       </div>
 
-                      {/* Card 4: Total Bills */}
-                      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+                      {/* Card 4: Total Bills (กดดูรายสาขาได้) */}
+                      <button type="button" onClick={() => setBillsModalOpen(true)} className="w-full text-left bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between cursor-pointer hover:border-amber-300 hover:shadow-md transition-all">
                         <div className="space-y-1">
                           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">จำนวนบิลทั้งหมด</span>
                           <h3 className="text-lg font-bold text-slate-800 truncate">{fmtNum(stats.count)}</h3>
-                          <p className="text-[10px] text-slate-400">ใบเสร็จรับเงิน</p>
+                          <p className="text-[10px] text-slate-400">
+                            สมาชิก <span className="font-bold text-violet-600">{fmtNum(stats.memberCount)}</span> บิล
+                            {stats.count > 0 && ` (${(stats.memberCount / stats.count * 100).toFixed(1)}%)`}
+                          </p>
+                          <p className="text-[10px] text-amber-500 font-semibold">คลิกดูรายสาขา →</p>
                         </div>
-                        <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500 flex-shrink-0">
-                          <Receipt size={20} />
+                        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                          <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500">
+                            <Receipt size={20} />
+                          </div>
+                          <CardExportButton onExport={() => exportDashCardXLSX('bills')} className="hover:text-amber-600" />
                         </div>
-                      </div>
+                      </button>
 
                       {/* Card 5: Avg Bill Value */}
                       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
@@ -2598,8 +2830,11 @@ export default function App() {
                           <h3 className="text-lg font-bold text-amber-600 truncate">{fmtMoney(stats.avgBill)}</h3>
                           <p className="text-[10px] text-slate-400">เฉลี่ยต่อบิล</p>
                         </div>
-                        <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500 flex-shrink-0">
-                          <TrendingUp size={20} />
+                        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                          <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500">
+                            <TrendingUp size={20} />
+                          </div>
+                          <CardExportButton onExport={() => exportDashCardXLSX('avgBill')} className="hover:text-amber-600" />
                         </div>
                       </div>
 
@@ -2610,8 +2845,11 @@ export default function App() {
                           <h3 className="text-lg font-bold text-slate-800 truncate">{fmtNum(stats.sumCover)}</h3>
                           <p className="text-[10px] text-slate-400">คน (Covers)</p>
                         </div>
-                        <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500 flex-shrink-0">
-                          <Users size={20} />
+                        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                          <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-500">
+                            <Users size={20} />
+                          </div>
+                          <CardExportButton onExport={() => exportDashCardXLSX('covers')} className="hover:text-amber-600" />
                         </div>
                       </div>
 
@@ -2622,8 +2860,11 @@ export default function App() {
                           <h3 className="text-lg font-bold text-slate-500 truncate">{dashMoney(excludedStats.totalCost)}</h3>
                           <p className="text-[10px] text-slate-500 font-semibold">{fmtNum(excludedStats.totalQty)} ชิ้น • คลิกดู →</p>
                         </div>
-                        <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400 flex-shrink-0">
-                          <Layers size={20} />
+                        <div className="flex flex-col items-center gap-1.5 flex-shrink-0">
+                          <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400">
+                            <Layers size={20} />
+                          </div>
+                          <CardExportButton onExport={() => exportDashCardXLSX('excluded')} className="hover:text-slate-600" />
                         </div>
                       </button>
                     </div>
@@ -3782,6 +4023,86 @@ export default function App() {
         </main>
       </div>
 
+      {/* จำนวนบิลแยกตามสาขา + บิลที่มีเลขที่สมาชิก */}
+      {billsModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setBillsModalOpen(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-scale-up" onClick={e => e.stopPropagation()}>
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <Receipt size={18} className="text-amber-400" />
+                  <span>จำนวนบิลแยกตามสาขา</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {fmtNum(stats.count)} บิล •
+                  {' '}บิลสมาชิก {fmtNum(stats.memberCount)} บิล
+                  {stats.count > 0 && ` (${(stats.memberCount / stats.count * 100).toFixed(1)}%)`}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => exportDashModalXLSX('bills')}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition-all"
+                  title="ส่งออก Excel (แยกสาขา)"
+                >
+                  <Download size={14} /> ส่งออก Excel
+                </button>
+                <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setBillsModalOpen(false)}>
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              {billBranchBreakdown.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                  <HelpCircle size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
+                  <p className="text-sm">ไม่มีบิลในช่วงที่เลือก</p>
+                </div>
+              ) : (
+                <div className="overflow-auto max-h-[55vh] border border-slate-100 rounded-xl">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="text-slate-500 font-bold">
+                        <th className="px-4 py-3 text-slate-600 sticky top-0 bg-slate-50 z-20 border-b border-slate-200">สาขา</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">จำนวนบิล</th>
+                        <th className="px-4 py-3 text-violet-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">บิลมีเลขที่สมาชิก</th>
+                        <th className="px-4 py-3 text-violet-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">% สมาชิก</th>
+                        <th className="px-4 py-3 text-slate-600 text-right sticky top-0 bg-slate-50 z-20 border-b border-slate-200">ยอดขาย (รวม VAT)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-slate-700">
+                      {billBranchBreakdown.map(b => (
+                        <tr key={b.outletID} className="hover:bg-slate-50/50">
+                          <td className="px-4 py-2.5 font-semibold text-slate-800 whitespace-nowrap">{outletLabel(b.outletID)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono font-bold">{fmtNum(b.bills)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-violet-600 font-bold">{fmtNum(b.memberBills)}</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-violet-500">{b.memberPct.toFixed(1)}%</td>
+                          <td className="px-4 py-2.5 text-right font-mono text-slate-500">{fmtMoney(b.gross)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-slate-100 border-t-2 border-slate-400 font-bold text-slate-800 sticky bottom-0">
+                        <td className="px-4 py-3">รวมทั้งหมด</td>
+                        <td className="px-4 py-3 text-right font-mono">{fmtNum(stats.count)}</td>
+                        <td className="px-4 py-3 text-right font-mono text-violet-700">{fmtNum(stats.memberCount)}</td>
+                        <td className="px-4 py-3 text-right font-mono text-violet-700">
+                          {stats.count > 0 ? `${(stats.memberCount / stats.count * 100).toFixed(1)}%` : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-right font-mono">{fmtMoney(stats.sumBill)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+              <p className="text-[11px] text-slate-400 mt-3">
+                บิลสมาชิก = บิลที่มีเลขที่สมาชิก (MemberTel) บันทึกไว้ใน POS · ตัวเลขนี้ตัดโต๊ะ 600 และบิลยอดเหมาออกแล้ว เท่ากับที่ใช้คำนวณในแดชบอร์ด
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* BILL DETAILS MODAL */}
       {excludedModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in" onClick={() => setExcludedModalOpen(false)}>
@@ -3796,9 +4117,18 @@ export default function App() {
                   {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {excludedStats.lines.toLocaleString('th-TH')} รายการ • {fmtNum(excludedStats.totalQty)} ชิ้น
                 </p>
               </div>
-              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setExcludedModalOpen(false)}>
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => exportDashModalXLSX('excluded', { name: 'รายไอเทมที่ไม่นับ', aoa: itemDetailAoa(excludedBreakdown, 'จำนวน', true) })}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition-all"
+                  title="ส่งออก Excel (แยกสาขา)"
+                >
+                  <Download size={14} /> ส่งออก Excel
+                </button>
+                <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setExcludedModalOpen(false)}>
+                  <X size={20} />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {excludedBreakdown.length === 0 ? (
@@ -3922,9 +4252,18 @@ export default function App() {
                   {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {prepStats.lines.toLocaleString('th-TH')} รายการ • {fmtNum(prepStats.totalQty)} กก.
                 </p>
               </div>
-              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setPrepModalOpen(false)}>
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => exportDashModalXLSX('prep', { name: 'รายไอเทมโต๊ะเตรียม', aoa: itemDetailAoa(prepBreakdown, 'จำนวน (กก.)') })}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition-all"
+                  title="ส่งออก Excel (แยกสาขา)"
+                >
+                  <Download size={14} /> ส่งออก Excel
+                </button>
+                <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setPrepModalOpen(false)}>
+                  <X size={20} />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {prepBreakdown.length === 0 ? (
@@ -3984,9 +4323,18 @@ export default function App() {
                   {selectedOutlet ? `สาขา ${outletLabel(selectedOutlet)}` : 'ทุกสาขา'} • {costBreakdown.length.toLocaleString('th-TH')} รายการที่มีต้นทุน
                 </p>
               </div>
-              <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setCostModalOpen(false)}>
-                <X size={20} />
-              </button>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => exportDashModalXLSX('cost', { name: 'รายไอเทมต้นทุน', aoa: itemDetailAoa(costBreakdown) })}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-800 transition-all"
+                  title="ส่งออก Excel (แยกสาขา)"
+                >
+                  <Download size={14} /> ส่งออก Excel
+                </button>
+                <button className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-all" onClick={() => setCostModalOpen(false)}>
+                  <X size={20} />
+                </button>
+              </div>
             </div>
             <div className="flex-1 overflow-y-auto p-6">
               {costBreakdown.length === 0 ? (

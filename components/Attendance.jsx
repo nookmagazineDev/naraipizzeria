@@ -2,9 +2,9 @@ import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import {
   Fingerprint, Loader2, Search, CalendarDays, ListOrdered,
-  Building2, Download, AlertCircle, RefreshCw
+  Building2, Download, AlertCircle, RefreshCw, CalendarClock
 } from 'lucide-react';
-import { hhmm, summarizeDaily } from '../lib/attendance';
+import { hhmm, summarizeDaily, attachSchedule } from '../lib/attendance';
 
 /*
  * NARAI OFFICE — ดูสแกนหน้า (เข้า-ออกงาน)
@@ -14,6 +14,10 @@ import { hhmm, summarizeDaily } from '../lib/attendance';
  * "เข้า/ออก" คิดจากลำดับเวลาสแกนของวัน (เข้างาน → ออกเบรค → เข้าเบรค → ออกงาน)
  * ไม่ได้อิง punch_state เพราะการตั้งค่าปุ่มของเครื่องสแกนแต่ละตัวไม่เหมือนกัน
  * (แสดง punch_state ไว้ในตาราง "ทุกครั้งที่สแกน" แทน)
+ *
+ * ตารางสรุปรายวันวางคู่กันสองฝั่ง: เวลาที่สาขา "ลงตารางไว้" (dbo.hr_timesheet ผ่าน
+ * /api/hr-schedule) กับเวลาที่ "สแกนจริง" แล้วสรุปส่วนต่างให้ว่าเข้าสาย/เบรคสาย/ออกก่อนกี่นาที
+ * ตารางงานเป็นข้อมูลเสริม — ดึงไม่ได้ก็ยังเห็นเวลาสแกนตามปกติ
  */
 
 // รหัสสาขาเดียวกับที่ใช้ทั้งระบบ — ZKBio เก็บรหัสนี้ไว้ที่ area_alias ของเครื่องสแกน
@@ -25,6 +29,27 @@ const BRANCHES = [
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const num2 = (v) => (v != null ? v.toFixed(2) : '-');
+
+const Dash = () => <span className="text-slate-300">—</span>;
+/** ช่องเวลา 'HH:mm' — ว่าง = ไม่มีข้อมูลฝั่งนั้น */
+const timeCell = (t, cls = '') => (t ? <span className={`font-mono ${cls}`}>{t}</span> : <Dash />);
+/** จำนวนนาทีที่สาย — 0 = ตรงเวลา (เขียว), เกินนั้นเน้นแดง, null = เทียบไม่ได้ */
+const lateCell = (v) => {
+  if (v == null) return <Dash />;
+  if (v <= 0) return <span className="font-mono text-emerald-600">0</span>;
+  return <span className="font-mono font-semibold text-rose-600">{v}</span>;
+};
+
+const Chip = ({ cls, children }) => (
+  <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold leading-tight ${cls}`}>{children}</span>
+);
+
+/** สถานะของวันนั้นเป็นข้อความสั้นๆ — ใช้ทั้งในไฟล์ Excel และเป็น title ของแถว */
+const statusText = (d) => {
+  if (!d.plan) return 'ไม่มีในตารางงาน';
+  if (d.plan.isOff) return d.offScanned ? `${d.plan.offLabel} (แต่มีสแกน)` : d.plan.offLabel;
+  return d.noScan ? 'มาทำงาน (ไม่มีสแกน)' : 'มาทำงาน';
+};
 
 // ช่วงวันที่สำเร็จรูป — คิดจาก "วันนี้" ตามเวลาเครื่องผู้ใช้
 // สัปดาห์นี้ = จันทร์ถึงวันนี้ · เดือนนี้ = วันที่ 1 ถึงวันนี้ · เดือนที่แล้ว = ทั้งเดือน
@@ -69,9 +94,12 @@ export default function Attendance() {
   const [errorCode, setErrorCode] = useState('');   // แยกสาเหตุ เพื่อขึ้นวิธีแก้ให้ตรงจุด
   const [warning, setWarning] = useState('');        // เตือนตอนข้อมูลถูกตัดเพราะช่วงกว้างเกิน
   const [rows, setRows] = useState(null);            // null = ยังไม่เคยดึง
+  const [schedRows, setSchedRows] = useState([]);    // ตารางงานที่สาขาลงไว้ ในช่วงวันเดียวกัน
+  const [schedNote, setSchedNote] = useState('');    // ดึงตารางงานไม่ได้/ได้ไม่ครบทุกสาขา
   const [loadedInfo, setLoadedInfo] = useState('');
   const [search, setSearch] = useState('');
   const [view, setView] = useState('daily');         // 'daily' = สรุปรายวัน | 'raw' = ทุกครั้งที่สแกน
+  const [showPlan, setShowPlan] = useState(true);    // เทียบกับตารางงานที่ลงไว้ (ปิดได้เพื่อดูตารางแบบสั้น)
 
   // รับวันที่/สาขามาเป็นพารามิเตอร์ได้ เพื่อให้ปุ่มช่วงสำเร็จรูปกดแล้วดึงได้เลย
   // (ไม่ต้องรอ state รอบถัดไป)
@@ -94,17 +122,55 @@ export default function Attendance() {
         e.code = json && json.code;
         throw e;
       }
-      setRows(json.data || []);
+      const punches = json.data || [];
+      setRows(punches);
       setWarning(json.truncated ? (json.message || 'ข้อมูลถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
       const range = s === e ? s : `${s} ถึง ${e}`;
       setLoadedInfo(`${range} · ${b || 'ทุกสาขา'} · ${json.count || 0} ครั้ง`);
+
+      // ตารางงานเป็นข้อมูลเสริม ดึงต่อจากเวลาสแกนเสมอ (คนละฐานข้อมูลกัน)
+      await loadSchedule({ start: s, end: e, branch: b });
     } catch (err) {
       setRows(null);
+      setSchedRows([]);
+      setSchedNote('');
       setWarning('');
       setError(err.message || 'ดึงข้อมูลไม่สำเร็จ');
       setErrorCode(err.code || '');
     } finally {
       setLoading(false);
+    }
+  };
+
+  /**
+   * ตารางงานที่สาขาลงไว้ในช่วงเดียวกัน — ดึงไม่ได้ก็ไม่ทำให้ทั้งหน้าล้ม
+   * แค่ขึ้นหมายเหตุแล้วแสดงเฉพาะเวลาสแกนเหมือนเดิม
+   */
+  const loadSchedule = async ({ start: s, end: e, branch: b }) => {
+    try {
+      // เลือกสาขาไว้ = ขอสาขานั้นสาขาเดียว · ดูทุกสาขา = ไม่ส่ง branches ให้ฝั่ง API เอาทุกสาขาเอง
+      //
+      // เคยกรองเหลือเฉพาะสาขาที่มีคนสแกนเพื่อประหยัดคำขอ แต่ใช้ไม่ได้แล้วเมื่อต้องแสดงวันหยุด/วันลา
+      // เพราะสาขาที่หยุดทั้งสาขาจะไม่มีสแกนเลยสักครั้ง แล้วก็จะหายไปจากตารางทั้งที่นั่นคือข้อมูลที่อยากดู
+      const p = new URLSearchParams({ start: s, end: e });
+      if (b) p.set('branches', b);
+      const res = await fetch(`/api/hr-schedule?${p.toString()}`);
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json || json.status !== 'success') {
+        throw new Error((json && json.message) || `ดึงตารางงานไม่สำเร็จ (${res.status})`);
+      }
+      setSchedRows(json.data || []);
+
+      // สาขาที่ฐาน HR ไม่รู้จัก / ดึงไม่สำเร็จบางสาขา — บอกให้รู้ว่าคอลัมน์ตารางงานจะว่าง
+      const notes = [];
+      if (json.unknown?.length) notes.push(`ไม่มีสาขา ${json.unknown.join(', ')} ในฐานข้อมูลตารางงาน`);
+      if (json.failed?.length) notes.push(`ดึงตารางงานไม่ได้: ${json.failed.map((f) => f.branch).join(', ')}`);
+      if (json.truncated) notes.push(json.message || 'ตารางงานถูกตัดเพราะช่วงวันที่กว้างเกินไป');
+      if (json.count === 0 && notes.length === 0) notes.push('ช่วงวันที่นี้ยังไม่มีใครลงตารางงานไว้');
+      setSchedNote(notes.join(' · '));
+    } catch (err) {
+      setSchedRows([]);
+      setSchedNote(`${err.message || 'ดึงตารางงานไม่สำเร็จ'} — แสดงเฉพาะเวลาสแกน`);
     }
   };
 
@@ -130,18 +196,60 @@ export default function Attendance() {
     );
   }, [rows, search]);
 
-  // สรุปรายวัน: พนักงาน 1 คน x 1 วัน = 1 แถว
-  const daily = useMemo(() => summarizeDaily(filtered), [filtered]);
+  // สรุปรายวัน: พนักงาน 1 คน x 1 วัน = 1 แถว (เข้า = สแกนแรก, ออก = สแกนสุดท้าย)
+  // แล้วเทียบกับตารางงานที่สาขาลงไว้ เพื่อคิดว่าสาย/ออกก่อนเวลากี่นาที
+  //
+  // เปิดเทียบตารางงานไว้ = ดึงคนที่ลงตารางไว้แต่ไม่มีสแกนขึ้นมาด้วย ไม่งั้นวันหยุด/วันลา
+  // จะไม่โผล่ในตารางเลย เพราะวันพวกนั้นไม่มีใครไปสแกน
+  const merged = useMemo(
+    () => attachSchedule(summarizeDaily(filtered), schedRows, { includeUnscanned: showPlan }),
+    [filtered, schedRows, showPlan]
+  );
+
+  // แถวที่มาจากตารางงานล้วน (ไม่มีสแกน) ยังไม่ผ่านช่องค้นหา จึงกรองอีกรอบตรงนี้
+  // แถวที่มาจากการสแกนถูกกรองไปแล้วใน filtered — กรองซ้ำก็ได้ผลเดิม
+  const daily = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return merged;
+    return merged.filter((d) =>
+      String(d.empCode).toLowerCase().includes(q) || String(d.name || '').toLowerCase().includes(q)
+    );
+  }, [merged, search]);
+
   const people = useMemo(() => new Set(daily.map((d) => d.empCode)).size, [daily]);
+
+  // สรุปให้เห็นภาพรวมของช่วงที่ดึงมา — ใช้บอกผู้ใช้ว่าคอลัมน์ฝั่งตารางงานมาจากไหน
+  const planStats = useMemo(() => ({
+    withPlan: daily.filter((d) => d.plan).length,
+    off: daily.filter((d) => d.plan?.isOff).length,
+    noScan: daily.filter((d) => d.noScan).length,
+    offScanned: daily.filter((d) => d.offScanned).length,
+  }), [daily]);
 
   const exportExcel = () => {
     const tag = `${branch || 'ALL'}_${startDate}${startDate === endDate ? '' : `_${endDate}`}`;
+    // เปิดเทียบตารางงานไว้ = ใส่ฝั่ง "ที่ลงไว้" กับนาทีที่สายลงไฟล์ด้วย
+    const planHead = showPlan
+      ? ['ลงไว้ เข้า', 'ลงไว้ ออกเบรค', 'ลงไว้ เข้าเบรค', 'ลงไว้ ออก', 'สถานะ', 'หมายเหตุตารางงาน']
+      : [];
+    const lateHead = showPlan ? ['เข้าสาย (นาที)', 'เบรคสาย (นาที)', 'ออกก่อน (นาที)'] : [];
+    const planCells = (d) => (showPlan
+      ? [
+          d.plan?.in || '', d.plan?.breakOut || '', d.plan?.breakIn || '', d.plan?.out || '',
+          statusText(d),
+          [...(d.plan?.reasons || []), ...(d.plan?.notes || [])].join(', '),
+        ]
+      : []);
+    const lateCells = (d) => (showPlan ? [d.lateIn ?? '', d.lateBreakIn ?? '', d.earlyOut ?? ''] : []);
+
     const aoa = view === 'daily'
       ? [
-          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'รวม (ชม.)', 'พัก (ชม.)', 'สุทธิ (ชม.)', 'จำนวนสแกน'],
+          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...lateHead, 'รวม (ชม.)', 'พัก (ชม.)', 'สุทธิ (ชม.)', 'จำนวนสแกน'],
           ...daily.map((d) => [
             d.date, d.empCode, d.name, d.branch,
+            ...planCells(d),
             hhmm(d.first), d.breakOut ? hhmm(d.breakOut) : '', d.breakIn ? hhmm(d.breakIn) : '', d.last ? hhmm(d.last) : '',
+            ...lateCells(d),
             d.hours != null ? +d.hours.toFixed(2) : '',
             d.breakHours != null ? +d.breakHours.toFixed(2) : '',
             d.netHours != null ? +d.netHours.toFixed(2) : '',
@@ -181,6 +289,7 @@ export default function Attendance() {
             <h2 className="text-xl font-bold text-slate-800">ดูสแกนหน้า</h2>
             <p className="text-xs text-slate-500">
               เวลาสแกนหน้าจากเครื่องสแกนของสาขา (ZKBio Time) • เข้า = สแกนแรกของวัน, ออก = สแกนสุดท้าย
+              • เทียบกับตารางงานที่สาขาลงไว้ให้ด้วย
             </p>
           </div>
         </div>
@@ -282,6 +391,14 @@ export default function Attendance() {
         </div>
       )}
 
+      {/* ตารางงานเป็นข้อมูลเสริม — ดึงไม่ได้/ไม่ครบก็ยังดูเวลาสแกนได้ตามปกติ บอกไว้เฉยๆ ว่าทำไมช่องฝั่งซ้ายว่าง */}
+      {schedNote && !loading && rows !== null && (
+        <div className="p-3 bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-xl text-sm flex items-start gap-2">
+          <CalendarClock size={18} className="mt-0.5 flex-shrink-0" />
+          <span>ตารางงาน: {schedNote}</span>
+        </div>
+      )}
+
       {rows !== null && (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
           {/* แถบเครื่องมือ */}
@@ -309,8 +426,23 @@ export default function Attendance() {
               />
             </div>
             <div className="flex items-center gap-2">
+              {view === 'daily' && (
+                <button
+                  onClick={() => setShowPlan((v) => !v)}
+                  title="แสดง/ซ่อนเวลาที่สาขาลงตารางไว้ และนาทีที่สาย"
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                    showPlan
+                      ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                      : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                  }`}
+                >
+                  <CalendarClock size={14} /> เทียบตารางงาน
+                </button>
+              )}
               <span className="text-xs text-slate-400">
-                {view === 'daily' ? `${daily.length} แถว • ${people} คน` : `${filtered.length} ครั้ง`}
+                {view === 'daily'
+                  ? `${daily.length} แถว • ${people} คน${showPlan ? ` • หยุด/ลา ${planStats.off} • ไม่มีสแกน ${planStats.noScan}` : ''}`
+                  : `${filtered.length} ครั้ง`}
               </span>
               <button
                 onClick={exportExcel}
@@ -322,7 +454,8 @@ export default function Attendance() {
             </div>
           </div>
 
-          {rows.length === 0 ? (
+          {/* ไม่มีทั้งสแกนและตารางงาน = ไม่มีอะไรให้ดูจริงๆ (ถ้าทั้งสาขาหยุด จะไม่มีสแกนแต่ยังมีตารางงาน) */}
+          {rows.length === 0 && daily.length === 0 ? (
             <div className="py-16 px-6 text-center text-sm space-y-1">
               <p className="text-amber-600 font-medium">ไม่พบการสแกนในช่วงวันที่ที่เลือก</p>
               <p className="text-slate-400 text-xs">
@@ -330,53 +463,173 @@ export default function Attendance() {
                 · ถ้ายังไม่มีข้อมูล ให้ตรวจว่าเครื่องสแกนของสาขาส่งข้อมูลเข้าระบบแล้วหรือยัง
               </p>
             </div>
-          ) : filtered.length === 0 ? (
-            <div className="py-16 text-center text-slate-400 text-sm">ไม่พบพนักงานที่ค้นหา</div>
+          ) : (view === 'daily' ? daily.length === 0 : filtered.length === 0) ? (
+            <div className="py-16 text-center text-slate-400 text-sm">
+              {search.trim() ? 'ไม่พบพนักงานที่ค้นหา' : 'ไม่มีการสแกนในช่วงวันที่ที่เลือก'}
+            </div>
           ) : view === 'daily' ? (
             <div className="overflow-auto max-h-[65vh]">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="text-slate-600 text-xs">
-                    {['วันที่', 'รหัส', 'ชื่อ', 'สาขา'].map((h) => (
-                      <th key={h} className="px-4 py-2.5 text-left sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
-                    ))}
-                    {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก'].map((h) => (
-                      <th key={h} className="px-4 py-2.5 text-center sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
-                    ))}
-                    {['รวม', 'พัก', 'สุทธิ', 'สแกน'].map((h) => (
-                      <th key={h} className="px-4 py-2.5 text-right sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
+              {/* 20 คอลัมน์ตอนเปิดเทียบตารางงาน — บังคับความกว้างขั้นต่ำไว้ให้เลื่อนแนวนอนแทนที่จะบีบจนอ่านไม่ออก */}
+              <table className={`w-full text-sm border-collapse${showPlan ? ' min-w-max' : ''}`}>
+                {/* เปิดเทียบตารางงาน = หัวตารางสองชั้น แยกให้เห็นชัดว่าฝั่งไหนคือเวลาที่สาขาลงไว้
+                    ฝั่งไหนคือเวลาที่สแกนจริง · ปิดไว้ = ตารางสั้นแบบเดิม */}
+                {showPlan ? (
+                  <thead className="text-[11px] text-slate-600">
+                    <tr>
+                      {['วันที่', 'รหัส', 'ชื่อ', 'สาขา'].map((h) => (
+                        <th key={h} rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
+                      ))}
+                      <th colSpan={5} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
+                      <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-emerald-100 text-emerald-800 border-b border-l border-slate-200 font-semibold">สแกนจริง</th>
+                      <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-slate-200 font-semibold">สาย (นาที)</th>
+                      <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200 font-semibold">เวลาทำงาน (ชม.)</th>
+                      <th rowSpan={2} className="h-8 px-3 text-right sticky top-0 bg-slate-50 border-b border-l border-slate-200">สแกน</th>
+                    </tr>
+                    <tr>
+                      {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'สถานะ / ลา'].map((h, i) => (
+                        <th key={`p${h}`} className={`px-3 py-1.5 text-center sticky top-8 bg-indigo-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
+                      ))}
+                      {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก'].map((h, i) => (
+                        <th key={`a${h}`} className={`px-3 py-1.5 text-center sticky top-8 bg-emerald-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
+                      ))}
+                      {['เข้าสาย', 'เบรคสาย', 'ออกก่อน'].map((h, i) => (
+                        <th key={h} className={`px-3 py-1.5 text-center sticky top-8 bg-rose-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
+                      ))}
+                      {['รวม', 'พัก', 'สุทธิ'].map((h, i) => (
+                        <th key={h} className={`px-3 py-1.5 text-right sticky top-8 bg-slate-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                ) : (
+                  <thead>
+                    <tr className="text-slate-600 text-xs">
+                      {['วันที่', 'รหัส', 'ชื่อ', 'สาขา'].map((h) => (
+                        <th key={h} className="px-4 py-2.5 text-left sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
+                      ))}
+                      {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก'].map((h) => (
+                        <th key={h} className="px-4 py-2.5 text-center sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
+                      ))}
+                      {['รวม', 'พัก', 'สุทธิ', 'สแกน'].map((h) => (
+                        <th key={h} className="px-4 py-2.5 text-right sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                )}
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {daily.map((d) => (
-                    <tr key={`${d.date}|${d.empCode}`} className="hover:bg-amber-50/40">
-                      <td className="px-4 py-2 font-medium text-slate-800 whitespace-nowrap">{d.date}</td>
-                      <td className="px-4 py-2 font-mono text-xs text-slate-500">{d.empCode}</td>
-                      <td className="px-4 py-2 whitespace-nowrap">{d.name || <span className="text-slate-300">—</span>}</td>
-                      <td className="px-4 py-2 text-xs text-slate-400">{d.branch || <span className="text-slate-300">—</span>}</td>
-                      <td className="px-4 py-2 text-center font-mono font-semibold text-emerald-700">{hhmm(d.first)}</td>
-                      <td className="px-4 py-2 text-center font-mono text-amber-600">
-                        {d.breakOut ? hhmm(d.breakOut) : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-4 py-2 text-center font-mono text-amber-600">
-                        {d.breakIn ? hhmm(d.breakIn) : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-4 py-2 text-center font-mono font-semibold text-rose-700">
-                        {d.last ? hhmm(d.last) : <span className="text-slate-300">—</span>}
-                      </td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-500">{num2(d.hours)}</td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-400">{num2(d.breakHours)}</td>
-                      <td className="px-4 py-2 text-right font-mono font-bold text-slate-800">{num2(d.netHours)}</td>
-                      <td className="px-4 py-2 text-right font-mono text-slate-400">{d.count}</td>
+                    <tr
+                      key={`${d.date}|${d.empCode}`}
+                      title={statusText(d)}
+                      className={`hover:bg-amber-50/40${d.noScan ? ' bg-slate-50/60 text-slate-500' : ''}`}
+                    >
+                      <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{d.date}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-500">{d.empCode}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{d.name || <Dash />}</td>
+                      <td className="px-3 py-2 text-xs text-slate-400">{d.branch || <Dash />}</td>
+
+                      {/* ฝั่งตารางงานที่สาขาลงไว้ — วันหยุด/วันลาไม่มีเวลาให้แสดง จึงรวมสี่ช่องเป็นช่องเดียว
+                          แล้วบอกไปเลยว่าวันนั้นลงไว้ว่าอะไร (เหมือนช่องหยุดในหน้าลงตารางของ Narai-branch) */}
+                      {showPlan && (d.plan?.isOff ? (
+                        <td colSpan={4} className={`px-3 py-2 text-center border-l border-slate-200 ${d.plan.offPaid ? 'bg-amber-50' : 'bg-rose-50/60'}`}>
+                          <span className={`font-semibold ${d.plan.offPaid ? 'text-amber-700' : 'text-rose-700'}`}>⊖ {d.plan.offLabel}</span>
+                        </td>
+                      ) : (
+                        <>
+                          <td className="px-3 py-2 text-center bg-indigo-50/40 border-l border-slate-200">{timeCell(d.plan?.in, 'text-indigo-700')}</td>
+                          <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.breakOut, 'text-indigo-500')}</td>
+                          <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.breakIn, 'text-indigo-500')}</td>
+                          <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.out, 'text-indigo-700')}</td>
+                        </>
+                      ))}
+
+                      {/* สถานะ / เหตุผลการลา / หมายเหตุของวันนั้น */}
+                      {showPlan && (
+                        <td className={`px-3 py-2 text-center ${d.plan?.isOff ? (d.plan.offPaid ? 'bg-amber-50' : 'bg-rose-50/60') : 'bg-indigo-50/40'}`}>
+                          <div className="flex flex-wrap gap-1 justify-center">
+                            {/* เหตุผลของวันหยุด/วันลา เช่น '13 ป่วย', '23 ขาดงาน' */}
+                            {d.plan?.reasons.map((r) => (
+                              <Chip key={r} cls={d.plan.offPaid ? 'bg-amber-500 text-white' : 'bg-rose-500 text-white'}>{r}</Chip>
+                            ))}
+                            {/* หมายเหตุของวันที่ยังต้องมาทำงาน เช่น OT, ลาเป็นชั่วโมง */}
+                            {d.plan?.notes.map((n) => (
+                              <Chip key={n} cls="bg-slate-200 text-slate-700">{n}</Chip>
+                            ))}
+                            {/* ลงไว้ว่าหยุด/ลา แต่ดันมีสแกน — ให้ไปตรวจว่าลืมแก้ตาราง หรือมาทำงานแทนคนอื่น */}
+                            {d.offScanned && <Chip cls="bg-orange-500 text-white">แต่มีสแกน</Chip>}
+                            {/* ลงตารางว่าให้มาทำงาน แต่ไม่มีสแกนเลยทั้งวัน */}
+                            {d.noScan && !d.plan?.isOff && <Chip cls="bg-slate-700 text-white">ไม่มีสแกน</Chip>}
+                            {!d.plan && <Chip cls="bg-slate-100 text-slate-400">ไม่มีในตารางงาน</Chip>}
+                            {d.plan && !d.plan.isOff && d.plan.reasons.length === 0 && d.plan.notes.length === 0 && !d.noScan && <Dash />}
+                          </div>
+                        </td>
+                      )}
+
+                      {/* ฝั่งที่สแกนจริง */}
+                      <td className={`px-3 py-2 text-center${showPlan ? ' border-l border-slate-200' : ''}`}>{timeCell(hhmm(d.first), 'font-semibold text-emerald-700')}</td>
+                      <td className="px-3 py-2 text-center">{timeCell(d.breakOut ? hhmm(d.breakOut) : '', 'text-amber-600')}</td>
+                      <td className="px-3 py-2 text-center">{timeCell(d.breakIn ? hhmm(d.breakIn) : '', 'text-amber-600')}</td>
+                      <td className="px-3 py-2 text-center">{timeCell(d.last ? hhmm(d.last) : '', 'font-semibold text-rose-700')}</td>
+
+                      {/* สรุปส่วนต่าง */}
+                      {showPlan && (
+                        <>
+                          <td className="px-3 py-2 text-center bg-rose-50/30 border-l border-slate-200">{lateCell(d.lateIn)}</td>
+                          <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.lateBreakIn)}</td>
+                          <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.earlyOut)}</td>
+                        </>
+                      )}
+
+                      {/* เวลาทำงาน */}
+                      <td className={`px-3 py-2 text-right font-mono text-slate-500${showPlan ? ' border-l border-slate-200' : ''}`}>{num2(d.hours)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-400">{num2(d.breakHours)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">{num2(d.netHours)}</td>
+                      <td className={`px-3 py-2 text-right font-mono text-slate-400${showPlan ? ' border-l border-slate-200' : ''}`}>{d.count}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <p className="px-4 py-3 text-xs text-slate-400 border-t border-slate-100">
-                อ่านจากลำดับการสแกน 4 รอบ: เข้างาน → ออกเบรค → เข้าเบรค → ออกงาน ·
-                <span className="font-medium"> สุทธิ</span> = ชั่วโมงรวมหักเวลาพักแล้ว · ช่องที่เป็น — คือวันนั้นสแกนไม่ครบ 4 รอบ
-              </p>
+              <div className="px-4 py-3 text-xs text-slate-400 border-t border-slate-100 space-y-1">
+                <p>
+                  {showPlan && (
+                    <>
+                      <span className="font-medium text-indigo-600">ตารางงานที่ลงไว้</span> = เวลาที่สาขากรอกในหน้าลงตารางรายสัปดาห์ (ระบบ Narai-branch) ·{' '}
+                    </>
+                  )}
+                  <span className="font-medium text-emerald-600">สแกนจริง</span> อ่านจากลำดับการสแกน 4 รอบ: เข้างาน → ออกเบรค → เข้าเบรค → ออกงาน ·
+                  ช่องที่เป็น — คือไม่มีข้อมูลฝั่งนั้น (ยังไม่ได้ลงตาราง หรือวันนั้นสแกนไม่ครบ)
+                </p>
+                {showPlan && (
+                  <p>
+                    <span className="font-medium text-rose-600">เข้าสาย</span> = สแกนเข้า − เวลาเข้าที่ลงไว้ ·
+                    <span className="font-medium text-rose-600"> เบรคสาย</span> = สแกนเข้าเบรค − เวลาสิ้นสุดเบรคที่ลงไว้
+                    (ถ้าไม่ได้ลงช่วงเบรคไว้ จะเทียบกับ ออกเบรคจริง + ระยะเบรคที่อนุญาตแทน) ·
+                    <span className="font-medium text-rose-600"> ออกก่อน</span> = เวลาออกที่ลงไว้ − สแกนออก ·
+                    นับเฉพาะที่เกิน 0 นาที มาก่อนเวลาไม่ถือว่าติดลบ ·
+                    วันที่ลงไว้ว่าหยุด/ลา ไม่คิดว่าสาย เพราะวันนั้นไม่ได้นัดให้มา
+                  </p>
+                )}
+                {showPlan && (
+                  <p className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5">
+                    <span className="inline-flex items-center gap-1">
+                      <Chip cls="bg-amber-500 text-white">⊖ ลา</Chip> ลาแบบรับค่าแรง (เช่น 13 ป่วย, 14 กิจ)
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <Chip cls="bg-rose-500 text-white">⊖ หยุด</Chip> หยุด/ไม่รับค่าแรง (เช่น 21 ป่วย, 23 ขาดงาน)
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <Chip cls="bg-slate-700 text-white">ไม่มีสแกน</Chip> ลงตารางให้มาทำงาน แต่ไม่มีสแกนทั้งวัน
+                    </span>
+                    <span className="inline-flex items-center gap-1">
+                      <Chip cls="bg-orange-500 text-white">แต่มีสแกน</Chip> ลงไว้ว่าหยุด/ลา แต่มีการสแกน
+                    </span>
+                  </p>
+                )}
+                <p>
+                  <span className="font-medium">สุทธิ</span> = ชั่วโมงรวมหักเวลาพักแล้ว
+                  {showPlan && ' · จับคู่กับตารางงานด้วยรหัสพนักงานก่อน ถ้ารหัสไม่ตรงจะลองจับด้วยชื่อในวันเดียวกัน'}
+                  {showPlan && ' · แถวพื้นเทาคือคนที่มีในตารางงานแต่ไม่มีการสแกนเลย (ปิดปุ่ม "เทียบตารางงาน" เพื่อดูเฉพาะคนที่สแกนจริง)'}
+                </p>
+              </div>
             </div>
           ) : (
             <div className="overflow-auto max-h-[65vh]">

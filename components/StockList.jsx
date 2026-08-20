@@ -35,14 +35,18 @@ export default function StockList() {
   const [usageByMenu, setUsageByMenu] = useState({});
   const [expandedMenu, setExpandedMenu] = useState(null);
   const [menuTables, setMenuTables] = useState({}); // { [menuName]: { loading, rows } }
+  const apiOutletIdRef = useRef('');   // outletId ของสาขาที่ดึงยอดใช้ล่าสุด — ใช้ตอนกดดูโต๊ะ
 
-  const toggleMenuTables = async (menuName) => {
+  // key ของ menuTables ใช้ชื่อเมนู แต่ยิง API ด้วยรหัส POS (ชื่อซ้ำกันได้ รหัสไม่ซ้ำ)
+  const toggleMenuTables = async (menuName, menuCode) => {
     if (expandedMenu === menuName) { setExpandedMenu(null); return; }
     setExpandedMenu(menuName);
     if (menuTables[menuName]) return; // โหลดแล้ว
     setMenuTables(prev => ({ ...prev, [menuName]: { loading: true, rows: [] } }));
     try {
-      const qs = `branch=${encodeURIComponent(effectiveBranch)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}&menu=${encodeURIComponent(menuName)}`;
+      const qs = `branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(apiOutletIdRef.current || '')}`
+        + `&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`
+        + `&menu=${encodeURIComponent(menuName)}&menuCode=${encodeURIComponent(menuCode || '')}`;
       const res = await fetch(`/api/usagebytable?${qs}`).then(r => r.json());
       setMenuTables(prev => ({ ...prev, [menuName]: { loading: false, rows: res.status === 'success' ? (res.data || []) : [] } }));
     } catch {
@@ -156,15 +160,16 @@ export default function StockList() {
     setIsFetchingApi(true);
     try {
       const qs = `branch=${encodeURIComponent(effectiveBranch)}&outletId=${encodeURIComponent(currentOutletId)}&startDate=${encodeURIComponent(apiStartDate)}&endDate=${encodeURIComponent(apiEndDate)}`;
-      const [usageRes, receivedRes, usageMenuRes] = await Promise.all([
+      apiOutletIdRef.current = currentOutletId;
+      const [usageRes, receivedRes] = await Promise.all([
         // ยอดใช้คำนวณสดจาก ยอดขายจริง × สูตร BOM (เดิมอ่านชีท UsageHistory ที่หยุดอัปเดต)
         fetch(`/api/usage-bom?${qs}`).then(r => r.json()),
         fetch(`/api/orderd?${qs}`).then(r => r.json()),
-        fetch(`/api/usagemenu?${qs}`).then(r => r.json()).catch(() => ({ status: 'error' })),
       ]);
 
-      // ยอดใช้แยกตามเมนูที่ขายจริง (Method 2) — ถ้าไม่มีข้อมูลจะเป็น {}
-      setUsageByMenu(usageMenuRes.status === 'success' ? (usageMenuRes.data || {}) : {});
+      // ยอดใช้แยกตามเมนู มาจากคำตอบเดียวกับยอดใช้รวม → "ขาย" กับ "ปริมาณใช้" ตรงกันเสมอ
+      setUsageByMenu(usageRes.status === 'success' ? (usageRes.byMenu || {}) : {});
+      setMenuTables({});   // ช่วงวันที่/สาขาเปลี่ยน โต๊ะที่เคยโหลดไว้ใช้ไม่ได้แล้ว
 
       setItems(prevItems => prevItems.map(item => {
         const normId = String(item.productId).replace(/^0+/, '').toLowerCase();
@@ -691,7 +696,8 @@ export default function StockList() {
                                 onClick={() => {
                                   const nid = String(item.productId).replace(/^0+/, '').toLowerCase();
                                   setExpandedMenu(null);
-                                  // ปรับยอดแยกเมนู (ประมาณจากสูตร) ให้ผลรวม = ยอดใช้จากระบบ (POS) โดยคงสัดส่วนเมนูเดิม
+                                  // ปกติยอดแยกเมนูมาจาก /api/usage-bom ชุดเดียวกับยอดรวม → scale = 1
+                                  // เหลือไว้กันกรณีข้อมูลคนละรอบ (ผลรวมจะได้เท่ายอดใช้จากระบบเสมอ)
                                   const rawByMenu = usageByMenu[nid] || [];
                                   const estTotal = rawByMenu.reduce((s, r) => s + (Number(r.qty) || 0), 0);
                                   const posTotal = Number(item.apiUsage.total) || 0;
@@ -849,7 +855,7 @@ export default function StockList() {
                           const tbl = menuTables[row.menu];
                           return (
                             <React.Fragment key={idx}>
-                              <tr className="hover:bg-emerald-50/50 cursor-pointer" onClick={() => toggleMenuTables(row.menu)}>
+                              <tr className="hover:bg-emerald-50/50 cursor-pointer" onClick={() => toggleMenuTables(row.menu, row.menuCode)}>
                                 <td className="px-3 py-2 text-emerald-700">
                                   <span className="inline-block w-3 text-emerald-400">{isOpen ? '▾' : '▸'}</span> {row.menu}
                                 </td>
@@ -862,10 +868,22 @@ export default function StockList() {
                                     {tbl && tbl.loading && <div className="text-xs text-gray-400">กำลังโหลดโต๊ะ...</div>}
                                     {tbl && !tbl.loading && tbl.rows.length > 0 && (() => {
                                       const sumQty = tbl.rows.reduce((s, t) => s + (Number(t.qty) || 0), 0);
+                                      // ใช้ต่อ 1 จาน = ปริมาณใช้ของเมนู ÷ จำนวนที่ขายของเมนู
+                                      // (เดิมหารด้วยผลรวมโต๊ะ ถ้าสองค่านี้ไม่ตรงกันตัวเลขต่อโต๊ะจะเพี้ยนทันที)
+                                      const sold = Number(row.sold) || 0;
+                                      const perUnit = sold > 0 ? Number(row.qty) / sold
+                                        : (sumQty > 0 ? Number(row.qty) / sumQty : 0);
+                                      const diff = sold > 0 ? Math.abs(sumQty - sold) : 0;
                                       return (
+                                        <>
+                                        {diff > 0.01 && (
+                                          <div className="text-[11px] text-amber-600 mb-1">
+                                            ผลรวมโต๊ะ {sumQty.toFixed(2)} ไม่ตรงกับยอดขายของเมนู {sold.toFixed(2)} — อาจมีบิลที่ไม่มีเลขโต๊ะ
+                                          </div>
+                                        )}
                                         <div className="flex flex-wrap gap-1.5">
                                           {tbl.rows.map((t, i) => {
-                                            const kg = sumQty > 0 ? (Number(row.qty) * (Number(t.qty) || 0) / sumQty) : 0;
+                                            const kg = perUnit * (Number(t.qty) || 0);
                                             return (
                                               <span key={i} className="text-xs bg-white border border-emerald-200 rounded px-2 py-0.5 text-gray-600">
                                                 โต๊ะ {t.table}
@@ -875,6 +893,7 @@ export default function StockList() {
                                             );
                                           })}
                                         </div>
+                                        </>
                                       );
                                     })()}
                                     {tbl && !tbl.loading && tbl.rows.length === 0 && <div className="text-xs text-gray-400">ไม่พบข้อมูลโต๊ะ</div>}

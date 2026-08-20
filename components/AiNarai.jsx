@@ -98,7 +98,7 @@ function ChartBlock({ spec }) {
   );
 }
 
-// แปลง markdown แบบเบา ๆ: **หนา**, ตาราง | a | b |, บรรทัดใหม่ (ไม่มี dependency เพิ่ม)
+// แปลง markdown แบบเบา ๆ: **หนา**, ตาราง | a | b |, บรรทัดอ้างอิง > ..., บรรทัดใหม่ (ไม่มี dependency เพิ่ม)
 function renderLite(text) {
   const lines = String(text || '').split('\n');
   const blocks = [];
@@ -116,7 +116,9 @@ function renderLite(text) {
       table.push(cells);
     } else {
       flushTable();
-      blocks.push({ type: 'line', text: line });
+      // "> หมายเหตุ…" = blockquote ของ markdown — เดิมโชว์เครื่องหมาย > ดิบ ๆ
+      if (t.startsWith('>')) blocks.push({ type: 'quote', text: t.replace(/^>+\s?/, '') });
+      else blocks.push({ type: 'line', text: line });
     }
   });
   flushTable();
@@ -183,6 +185,14 @@ function exportSheetsToExcel(sheets) {
   XLSX.writeFile(wb, `ai_narai_${stamp}.xlsx`);
 }
 
+// ตัดประวัติสนทนาเหลือ n ข้อความท้ายสุด แล้วเลื่อนหัวจนเริ่มด้วยข้อความของผู้ใช้
+// (slice(-12) เฉย ๆ จะได้ประวัติที่ขึ้นต้นด้วยคำตอบ AI ซึ่งทำให้ Gemini ตอบ 400 invalid argument)
+function trimHistory(list, n) {
+  const cut = list.slice(-n);
+  const i = cut.findIndex(m => m.role === 'user');
+  return i > 0 ? cut.slice(i) : cut;
+}
+
 export default function AiNarai() {
   const [messages, setMessages] = useState([]); // {role:'user'|'model', text, tools?}
   const [input, setInput] = useState('');
@@ -204,8 +214,8 @@ export default function AiNarai() {
       const r = await fetch('/api/ai-chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // ส่งเฉพาะ 12 ข้อความล่าสุด กัน token บวม
-        body: JSON.stringify({ messages: next.slice(-12).map(m => ({ role: m.role, text: m.text })) }),
+        // ส่งเฉพาะ 16 ข้อความล่าสุด กัน token บวม (ตัดให้เริ่มด้วยฝั่งผู้ใช้เสมอ — Gemini ไม่รับประวัติที่ขึ้นต้นด้วย model)
+        body: JSON.stringify({ messages: trimHistory(next, 16).map(m => ({ role: m.role, text: m.text })) }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -281,6 +291,10 @@ export default function AiNarai() {
                           </tbody>
                         </table>
                       </div>
+                        ) : b.type === 'quote' ? (
+                          <p key={bi} className="border-l-2 border-violet-200 pl-2 text-slate-500 italic">
+                            <Bold text={b.text} />
+                          </p>
                         ) : (
                           <p key={bi} className={b.text.trim() ? '' : 'h-1'}><Bold text={b.text} /></p>
                         ))}
