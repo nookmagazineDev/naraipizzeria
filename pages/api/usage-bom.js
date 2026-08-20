@@ -1,11 +1,13 @@
 // ยอดใช้วัตถุดิบ = ยอดขายจริง × สูตร BOM  (แทนการอ่านชีท UsageHistory ที่ต้องรออัปเดต)
 // สูตร: ใช้ไป(หน่วยซื้อ) = จำนวนเมนูที่ขาย × ยอดใช้ต่อจาน(BOM คอลัมน์ F) ÷ ตัวแปลงหน่วย(คอลัมน์ H)
 //   เช่น สันคอหมูสไลด์ 1 จาน ใช้ 33 กรัม, ตัวแปลง 1000 → 0.033 กก.
+// สูตรอ่านจากแท็บ BOM ของชีท QC/RD ผ่าน lib/qcrdSheet.js — ตัวเดียวกับที่หน้า QC/RD ใช้
+// จึงเห็นสูตรที่แก้จากหน้า QC/RD ทันที (ช้าสุด 10 นาทีตามแคช) และเคารพธง "ไม่ตัด BOM" ด้วย
 // คืนรูปแบบเดียวกับ /api/usage: { normalizedItemCode: { total, details: { 'YYYY-MM-DD': qty } } }
 
+import { fetchQcrdSheet, TRUTHY, DEFAULT_CONVERTER } from '../../lib/qcrdSheet';
+
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
-const BOM_SHEET = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
-const BOM_GID = '419926693';
 
 const BRANCH_OUTLET = {
   sjp: 7, zjp: 7, crm: 12, xcm: 19, slr: 37, sum: 51, xum: 59, scs: 61,
@@ -23,49 +25,36 @@ const isExcludedItem = c => {
 
 const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
-function parseCSV(text) {
-  const rows = [];
-  let row = [], field = '', inQ = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQ) {
-      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
-      else field += c;
-    } else if (c === '"') inQ = true;
-    else if (c === ',') { row.push(field); field = ''; }
-    else if (c === '\n') { row.push(field); field = ''; rows.push(row); row = []; }
-    else if (c !== '\r') field += c;
-  }
-  if (field.length || row.length) { row.push(field); rows.push(row); }
-  return rows;
-}
-
 // สูตร BOM: menuCode -> { รหัสวัตถุดิบ(normalize): ยอดใช้ต่อ 1 จาน (หน่วยซื้อ) }
 // รวมบรรทัดของวัตถุดิบตัวเดียวกันในเมนูเดียวกันไว้เป็นตัวเดียว (สูตรอาจแตกเป็นหลายบรรทัด)
 // สำคัญ: ถ้าปล่อยให้เป็นหลายบรรทัด เวลานับ "จำนวนที่ขาย" ต่อเมนูจะถูกนับซ้ำตามจำนวนบรรทัด
 // (cache 10 นาที กันโหลดชีทซ้ำทุกสาขา)
-let bomCache = { map: null, at: 0 };
+let bomCache = { map: null, stats: null, at: 0 };
 async function fetchBom() {
-  if (bomCache.map && Date.now() - bomCache.at < 10 * 60 * 1000) return bomCache.map;
-  const r = await fetch(`https://docs.google.com/spreadsheets/d/${BOM_SHEET}/export?format=csv&gid=${BOM_GID}`,
-    { cache: 'no-store', redirect: 'follow' });
-  if (!r.ok) throw new Error(`BOM sheet HTTP ${r.status}`);
-  const rows = parseCSV(await r.text());
+  if (bomCache.map && Date.now() - bomCache.at < 10 * 60 * 1000) return bomCache;
+  const rows = await fetchQcrdSheet('BOM');
   const map = {};
+  const stats = { rows: 0, noDeduct: 0, noConverter: 0 };
   rows.slice(1).forEach(rw => {
     const menu = (rw[0] || '').trim();          // A = เลข POS ของเมนู
     const ing = (rw[3] || '').trim();           // D = รหัสวัตถุดิบ
     const perServe = parseFloat(rw[5]);         // F = ยอดใช้ต่อจาน (หน่วยเล็ก)
     const conv = parseFloat(rw[7]);             // H = ตัวแปลงหน่วย
     if (!menu || !ing || isNaN(perServe)) return;
+    // T = "ไม่ตัด BOM" ที่ติ๊กไว้ในหน้า QC/RD → ยังคิดต้นทุนปกติ แต่ไม่ตัดสต็อกตามสูตร
+    if (TRUTHY.test((rw[19] || '').trim())) { stats.noDeduct++; return; }
     const k = normalizeId(ing);
     if (!k) return;
-    const perUnit = perServe / ((isNaN(conv) || !conv) ? 1 : conv);
-    map[menu] = map[menu] || {};
-    map[menu][k] = (map[menu][k] || 0) + perUnit;
+    if (isNaN(conv) || !conv) stats.noConverter++;
+    const perUnit = perServe / ((isNaN(conv) || !conv) ? DEFAULT_CONVERTER : conv);
+    // รหัสเมนูเก็บแบบ normalize ด้วย เผื่อชีทพิมพ์ 0 นำหน้าไม่ตรงกับที่ POS ส่งมา
+    const mk = normalizeId(menu);
+    map[mk] = map[mk] || {};
+    map[mk][k] = (map[mk][k] || 0) + perUnit;
+    stats.rows++;
   });
-  bomCache = { map, at: Date.now() };
-  return map;
+  bomCache = { map, stats, at: Date.now() };
+  return bomCache;
 }
 
 export default async function handler(req, res) {
@@ -82,7 +71,7 @@ export default async function handler(req, res) {
   if (!oid) return res.status(400).json({ status: 'error', message: `ไม่รู้จักสาขา ${branch}` });
 
   try {
-    const [bom, detRes] = await Promise.all([
+    const [{ map: bom, stats: bomStats }, detRes] = await Promise.all([
       fetchBom(),
       fetch(`${STORE_API}/ctranbetweendate?start=${startDate}&end=${endDate}&outlet=${oid}`),
     ]);
@@ -104,7 +93,7 @@ export default async function handler(req, res) {
       soldLines++;
 
       const code = String(r.itemCode).trim();
-      const recipe = bom[code] || bom[normalizeId(code)];
+      const recipe = bom[normalizeId(code)] || bom[code];
       if (!recipe) { missingMenus.add(code); return; }
       matchedLines++;
 
@@ -152,6 +141,10 @@ export default async function handler(req, res) {
       byMenu: byMenuOut,
       meta: {
         source: 'bom',
+        bomSheet: 'BOM (ชีท QC/RD)',
+        bomRows: bomStats.rows,
+        bomRowsNoDeduct: bomStats.noDeduct,        // แถวที่ติ๊ก "ไม่ตัด BOM" — ไม่นับเป็นยอดใช้
+        bomRowsNoConverter: bomStats.noConverter,  // แถวที่ไม่มีตัวแปลงหน่วย (ใช้ค่าเริ่มต้น 1000)
         soldLines,
         matchedLines,
         coveragePct: soldLines ? Number((matchedLines / soldLines * 100).toFixed(1)) : 0,
