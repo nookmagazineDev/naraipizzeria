@@ -6,6 +6,7 @@
 // คืนรูปแบบเดียวกับ /api/usage: { normalizedItemCode: { total, details: { 'YYYY-MM-DD': qty } } }
 
 import { fetchQcrdSheet, TRUTHY, DEFAULT_CONVERTER } from '../../lib/qcrdSheet';
+import { usingSql, fetchQcrdSql } from '../../lib/qcrdSource';
 
 // ยิง ctranbetweendate ตัวเดียวกับ /api/detail ซึ่งเป็นข้อมูลระดับไอเทม (หนักกว่ายอดบิลหลายเท่า)
 // ค่า default ของ Vercel คือ 10 วินาที ซึ่งไม่พอ — ตั้งเท่ากับ /api/detail และ /api/sales
@@ -34,8 +35,42 @@ const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '
 // สำคัญ: ถ้าปล่อยให้เป็นหลายบรรทัด เวลานับ "จำนวนที่ขาย" ต่อเมนูจะถูกนับซ้ำตามจำนวนบรรทัด
 // (cache 10 นาที กันโหลดชีทซ้ำทุกสาขา)
 let bomCache = { map: null, stats: null, at: 0 };
+
+/* สูตรจาก SQL (ตาราง qcrd_bom) — รูปแบบ { รหัสเมนู: { items: [...] } } ตัวเดียวกับที่หน้า QC/RD ใช้
+   คิดยอดใช้ด้วยกติกาเดียวกับฝั่งชีททุกข้อ (ข้ามแถวที่ติด "ไม่ตัด BOM", converter ว่าง = 1000) */
+function bomMapFromSql(data) {
+  const map = {};
+  const stats = { rows: 0, noDeduct: 0, noConverter: 0 };
+  Object.entries(data || {}).forEach(([menu, entry]) => {
+    const mk = normalizeId(menu);
+    if (!mk) return;
+    (entry.items || []).forEach(it => {
+      const perServe = parseFloat(it.qty);
+      const k = normalizeId(it.itemCode);
+      if (!k || isNaN(perServe)) return;
+      if (it.noDeduct) { stats.noDeduct++; return; }
+      const conv = parseFloat(it.converter);
+      if (isNaN(conv) || !conv) stats.noConverter++;
+      map[mk] = map[mk] || {};
+      map[mk][k] = (map[mk][k] || 0) + perServe / ((isNaN(conv) || !conv) ? DEFAULT_CONVERTER : conv);
+      stats.rows++;
+    });
+  });
+  return { map, stats };
+}
+
 async function fetchBom() {
   if (bomCache.map && Date.now() - bomCache.at < 10 * 60 * 1000) return bomCache;
+  // โหมด SQL: อ่านสูตรจากฐาน InventoryNarai — ล้มเมื่อไหร่ค่อยถอยไปอ่านชีทเหมือนเดิม
+  if (usingSql()) {
+    try {
+      const { map, stats } = bomMapFromSql(await fetchQcrdSql('bom'));
+      bomCache = { map, stats, at: Date.now() };
+      return bomCache;
+    } catch (err) {
+      console.error('usage-bom SQL error:', err.message);
+    }
+  }
   const rows = await fetchQcrdSheet('BOM');
   const map = {};
   const stats = { rows: 0, noDeduct: 0, noConverter: 0 };

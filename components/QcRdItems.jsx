@@ -3,12 +3,14 @@ import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, P
 import { apiCall } from '../lib/qcrdApi';
 
 /*
- * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน / หมวดสโตร์ จากชีท item (1v8WRT…)
- * - หน่วย (คอลัมน์ D) ว่าง → วิเคราะห์จากชื่ออัตโนมัติ (badge "วิเคราะห์") + ปุ่มเขียนลงชีท
+ * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน / หมวดสโตร์
+ * ข้อมูลมาจากชีท item (1v8WRT…) หรือจากตาราง stock_item ใน SQL Server ตาม env QCRD_SOURCE
+ * — /api/qcrd คืนรูปแบบเดียวกันทั้งสองทาง หน้านี้จึงไม่ต้องรู้ว่าอ่านมาจากไหน
+ * - หน่วย (คอลัมน์ D) ว่าง → วิเคราะห์จากชื่ออัตโนมัติ (badge "วิเคราะห์") + ปุ่มบันทึกกลับ
  * - แก้ไขได้: ชื่อ (B), ราคา (C), สถานะ (E), ไอเทมทดแทนสูงสุด 3 ตัว (F–H), ตัวแปลงหน่วย (I),
  *   สาขาที่ใช้ (J), หมวดสโตร์ (N — ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
- *   ลบได้ (ทั้งแถว) — ใช้ _row (เลขแถวจริงในชีท) ระบุแถวให้แม่นยำ เผื่อรหัสซ้ำกันหลายแถว
- *   ผ่าน Apps Script action: saveItem / addItem / deleteItem
+ *   ลบได้ (ทั้งแถว) — โหมดชีทใช้ _row ระบุแถวเผื่อรหัสซ้ำ, โหมด SQL คีย์ด้วยรหัสจึงไม่มีแถวซ้ำ
+ *   ผ่าน action: saveItem / addItem / deleteItem (ดู lib/qcrdApi.js)
  */
 
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -48,13 +50,21 @@ export default function QcRdItems() {
   const [savingItem, setSavingItem] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null); // { code, name, row }
   const [deleting, setDeleting] = useState(false);
+  const [source, setSource] = useState('sheet');   // ข้อมูลชุดนี้มาจากชีทหรือ SQL
 
   const load = () => {
     setLoading(true);
     fetch('/api/qcrd?sheet=item')
       .then(r => r.json())
       .then(res => {
-        if (res.status === 'success') { setItems(res.data || []); setError(''); }
+        if (res.status === 'success') {
+          setItems(res.data || []);
+          setSource(res.source || 'sheet');
+          setError('');
+          // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ต้องบอก ไม่งั้นแก้ไปแล้วเห็นข้อมูลเก่าจะงง
+          // (ตั้งเฉพาะตอนมี warning จริง ไม่งั้นจะไปลบข้อความ "บันทึกสำเร็จ" ที่เพิ่งขึ้นมา)
+          if (res.warning) setToast({ ok: false, msg: res.warning });
+        }
         else setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
       })
       .catch(err => setError(err.message))
@@ -106,7 +116,7 @@ export default function QcRdItems() {
     try {
       const units = items.filter(i => i.unitSource === 'auto' && i.unit).map(i => ({ code: i.code, unit: i.unit }));
       const res = await apiCall('updateItemUnits', { units });
-      setToast({ ok: true, msg: `บันทึกหน่วยลงชีทแล้ว ${res.data?.updated ?? 0} รายการ` });
+      setToast({ ok: true, msg: `บันทึกหน่วยแล้ว ${res.data?.updated ?? 0} รายการ` });
       load();
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
@@ -189,7 +199,7 @@ export default function QcRdItems() {
             <div>
               <h2 className="text-xl font-bold text-slate-800">วัตถุดิบ (QC/RD)</h2>
               <p className="text-sm text-slate-500 mt-0.5">
-                {items.length.toLocaleString()} รายการจากชีท item
+                {items.length.toLocaleString()} รายการจาก{source === 'sql' ? 'ฐานข้อมูล SQL' : 'ชีท item'}
                 {autoCount > 0 && ` · หน่วยวิเคราะห์อัตโนมัติ ${autoCount.toLocaleString()}`}
                 {inactiveCount > 0 && ` · ปิดการใช้งาน ${inactiveCount}`}
                 {duplicateCodes.size > 0 && (
@@ -213,10 +223,10 @@ export default function QcRdItems() {
             </button>
             {autoCount > 0 && (
               <button onClick={saveUnits} disabled={saving}
-                title="เขียนหน่วยที่วิเคราะห์ได้ลงคอลัมน์ D ของชีท (เฉพาะช่องที่ยังว่าง)"
+                title="บันทึกหน่วยที่วิเคราะห์ได้ลงช่องหน่วยของวัตถุดิบ (เฉพาะช่องที่ยังว่าง)"
                 className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                บันทึกหน่วยลงชีท ({autoCount})
+                บันทึกหน่วยที่วิเคราะห์ ({autoCount})
               </button>
             )}
           </div>
@@ -304,7 +314,7 @@ export default function QcRdItems() {
                   </td>
                   <td className="px-4 py-2 text-center whitespace-nowrap">
                     {i.unit ? (
-                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${i.unitSource === 'sheet' ? 'bg-slate-100 text-slate-600' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${i.unitSource === 'auto' ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-600'}`}>
                         {i.unit}{i.unitSource === 'auto' && <span className="text-[9px] opacity-70">วิเคราะห์</span>}
                       </span>
                     ) : <span className="text-slate-300">—</span>}

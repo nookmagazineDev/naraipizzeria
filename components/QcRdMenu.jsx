@@ -3,10 +3,11 @@ import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, T
 import { apiCall } from '../lib/qcrdApi';
 
 /*
- * QC/RD — เมนู: รายชื่อเมนูจากชีท menu + สูตร (BOM) ของแต่ละเมนู
+ * QC/RD — เมนู: รายชื่อเมนู + สูตร (BOM) ของแต่ละเมนู
  * กดแถวเพื่อดูสูตร · ปุ่ม "เพิ่มเมนู" / "แก้ไข" เปิดฟอร์มจัดการวัตถุดิบในสูตร
- * ในฟอร์มเลือกหมวดหมู่ได้ (ชีท menucodegroup) และ "ดึงสูตรจากเมนูอื่น" เพื่อรวมวัตถุดิบของเมนูนั้นเข้ามา
- * บันทึกผ่าน Apps Script (action: saveMenu / saveMenuGroup) — ต้อง deploy qcrd-apps-script.gs ก่อน
+ * ในฟอร์มเลือกหมวดหมู่ได้ และ "ดึงสูตรจากเมนูอื่น" เพื่อรวมวัตถุดิบของเมนูนั้นเข้ามา
+ * ข้อมูลอ่าน/บันทึกผ่าน /api/qcrd + /api/qcrd-save ซึ่งวิ่งไป SQL Server หรือ Apps Script
+ * ตาม env QCRD_SOURCE (ดู docs/qcrd-sql-migration.md) — action ชื่อเดียวกันทั้งสองทาง
  */
 
 const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -55,7 +56,9 @@ export default function QcRdMenu() {
       fetch('/api/qcrd?sheet=item').then(r => r.json()),
       fetch('/api/qcrd?sheet=menugroup').then(r => r.json()),
     ]).then(([m, b, it, g]) => {
-      if (m.status === 'success') setMenus(m.data || []); else setError(m.message || 'โหลดชีท menu ไม่สำเร็จ');
+      if (m.status === 'success') setMenus(m.data || []); else setError(m.message || 'โหลดรายการเมนูไม่สำเร็จ');
+      // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ขึ้นเตือนไว้ ไม่งั้นจะนึกว่าที่แก้ไปหายไป
+      if (m.warning) setToast({ ok: false, msg: m.warning });
       if (b.status === 'success') setBom(b.data || {});
       if (it.status === 'success') setItems(it.data || []);
       if (g.status === 'success') setGroups(g.data || []);
