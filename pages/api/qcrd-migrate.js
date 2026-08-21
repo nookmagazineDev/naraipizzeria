@@ -21,7 +21,7 @@
 // ให้เรียกซ้ำต่อจากเดิม (ตอบ done:false = ยังไม่จบ, done:true = ชุดนั้นครบแล้ว)
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { probeEndpoints } from '../../lib/sqlProbe.mjs';
+import { probeEndpoints, extraTargets } from '../../lib/sqlProbe.mjs';
 import { fetchQcrdSheet } from '../../lib/qcrdSheet';
 import { isConfigured as hasDirectDb, describeTarget, runQuery, credentials } from '../../lib/qcrdPool';
 import {
@@ -75,8 +75,8 @@ async function writeBatched(records, buildStmt, { deadline, startAt = 0, describ
   return { done, batches, finished: true };
 }
 
-async function runStep(step, { confirm, offset, deadline }) {
-  if (step === 'probe') return probeEndpoints();
+async function runStep(step, { confirm, offset, deadline, extra = [] }) {
+  if (step === 'probe') return probeEndpoints(extra);
 
   if (step === 'schema') {
     // อ่านไฟล์สคีมาจากรีโป (next.config.js สั่งให้แนบ docs/ ไปกับฟังก์ชันนี้)
@@ -235,7 +235,7 @@ export default async function handler(req, res) {
     if (!['schema', 'group', 'menu', 'bom', 'item', 'verify', 'probe'].includes(step)) {
       return res.status(400).json({ status: 'error', message: `ไม่รู้จัก step=${step}` });
     }
-    const data = await runStep(step, { confirm, offset, deadline });
+    const data = await runStep(step, { confirm, offset, deadline, extra: extraTargets(q) });
     return res.status(200).json({ status: 'success', db: describeTarget(), tookMs: Date.now() - t0, ...data });
   } catch (err) {
     console.error('qcrd-migrate error:', err.message);

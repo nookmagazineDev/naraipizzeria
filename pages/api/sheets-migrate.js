@@ -5,6 +5,7 @@
 //
 //   GET /api/sheets-migrate?key=<SHEETS_MIGRATE_KEY>&step=check       ← ดูสถานะ ไม่แตะข้อมูล (ค่าเริ่มต้น)
 //   GET /api/sheets-migrate?key=...&step=probe                        ← ไล่ทดสอบว่าพอร์ตไหนของ SQL เปิดให้ต่อได้
+//        เติม &host=1.2.3.4 และ/หรือ &port=1450,1451 เพื่อลองปลายทางที่ไม่ได้อยู่ในรายการเดา
 //   GET /api/sheets-migrate?key=...&step=schema&confirm=1              ← สร้างตาราง 5 ตาราง
 //   GET /api/sheets-migrate?key=...&step=plan&confirm=1                ← ย้ายแพลนสั่งของ
 //   GET /api/sheets-migrate?key=...&step=closing&confirm=1             ← ย้ายยอดปิดรอบสิ้นเดือน
@@ -25,7 +26,7 @@
 // ให้เรียกซ้ำต่อจากเดิม (ตอบ done:false = ยังไม่จบ, done:true = ชุดนั้นครบแล้ว)
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { probeEndpoints } from '../../lib/sqlProbe.mjs';
+import { probeEndpoints, extraTargets } from '../../lib/sqlProbe.mjs';
 import {
   fetchPlanRows, fetchClosingRows, fetchExpenseRefs, fetchExpenses, fetchEmployees,
 } from '../../lib/sheetsSheet';
@@ -201,7 +202,7 @@ export default async function handler(req, res) {
   // (เป็นตัวที่ใช้ตอบว่า "ต่อไม่ติด" เพราะพอร์ตปิด หรือเพราะรหัสผิด ซึ่งเป็นคนละเรื่องกัน)
   if (step0 === 'probe') {
     try {
-      return res.status(200).json({ status: 'success', ...(await probeEndpoints()) });
+      return res.status(200).json({ status: 'success', ...(await probeEndpoints(extraTargets(q))) });
     } catch (err) {
       return res.status(500).json({ status: 'error', step: 'probe', message: err.message });
     }
