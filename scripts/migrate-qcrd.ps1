@@ -105,15 +105,17 @@ node scripts\migrate-qcrd.mjs --verify @onlyArg
 
 Write-Host ''
 Write-Host '════════════════════════════════════════════════════════════' -ForegroundColor Green
-Write-Host '  ย้ายข้อมูลเสร็จแล้ว — เหลืออีก 2 ขั้นถึงจะใช้งานจากหน้าเว็บได้' -ForegroundColor Green
+Write-Host '  ย้ายข้อมูลเสร็จแล้ว — เหลือขั้นเดียวคือเปิดใช้จากหน้าเว็บ' -ForegroundColor Green
 Write-Host '════════════════════════════════════════════════════════════' -ForegroundColor Green
 Write-Host ''
-Write-Host '  1) เครื่องนี้: ตั้ง QCRD_WRITE_KEY แล้วเริ่ม host-server ใหม่' -ForegroundColor White
-Write-Host "       `$env:QCRD_WRITE_KEY = '<สุ่มข้อความยาว ๆ>'"
-Write-Host '       node host-server\server.js        # แล้วเปิด http://localhost:14365/qcrd/ping'
+Write-Host '  ทางที่ 1 (ง่ายสุด) ให้ Vercel ต่อ SQL ตรง — ไม่ต้องแตะเครื่องนี้อีก' -ForegroundColor White
+Write-Host '       Vercel > Settings > Environment Variables แล้ว Redeploy'
+Write-Host '       QCRD_SOURCE = sql'
+Write-Host '       (ถ้ายังไม่มี HR_DB_USER/HR_DB_PASSWORD บน Vercel ให้ตั้ง QCRD_DB_USER/QCRD_DB_PASSWORD ด้วย)'
+Write-Host '       login ที่ใช้ต้องมีสิทธิ์ในฐาน InventoryNarai — ส่วนให้สิทธิ์อยู่ท้าย docs\schema-qcrd.sql'
 Write-Host ''
-Write-Host '  2) Vercel: Settings > Environment Variables แล้ว Redeploy' -ForegroundColor White
-Write-Host '       QCRD_SOURCE    = sql'
-Write-Host '       QCRD_WRITE_KEY = <ค่าเดียวกับข้อ 1>'
+Write-Host '  ทางที่ 2 ผ่าน host API (เมื่อไม่อยากให้ Vercel ต่อ SQL ตรง)' -ForegroundColor White
+Write-Host "       เครื่องนี้: `$env:QCRD_WRITE_KEY = '<สุ่มข้อความยาว ๆ>' แล้ว node host-server\server.js"
+Write-Host '       Vercel:   QCRD_SOURCE=sql · QCRD_API_BASE=<URL ของ host API> · QCRD_WRITE_KEY=<ค่าเดียวกัน>'
 Write-Host ''
 Write-Host '  รายละเอียดทั้งหมด: docs\qcrd-sql-migration.md' -ForegroundColor DarkGray

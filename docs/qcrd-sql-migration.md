@@ -8,9 +8,17 @@
 ฝั่งสต๊อกย้ายไปแล้ว (ดู `docs/stock-sql-migration.md` ของรีโป Narai-branch) — ไฟล์นี้คือส่วนที่เหลือ
 คือฝั่ง QC/RD ที่ยังอ่าน/เขียนชีทต้นทุนเมนู `1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw` อยู่
 
+ฐานข้อมูลอยู่เครื่องเดียวกับ **ตารางงาน (`narai_hr`)** และ **หน้าสแกนหน้า (`ZKBio9`)**
+คือ `NARAI-PIZZARIA\SQLEXPRESS` ที่ `inventory.dyndns.tv` ซึ่งตรึง TCP 1433 และเปิดออกเน็ตอยู่แล้ว
+(Narai-branch ต่อตรงแบบนี้กับตารางงานมาตลอด) หน้าเว็บจึงไปถึงข้อมูลได้ 2 ทาง:
+
 ```
-เบราว์เซอร์ -> /api/qcrd, /api/qcrd-save (Vercel, เป็นแค่ตัวส่งต่อ) -> host API /qcrd/* -> SQL Server
+ทางที่ 1 (แนะนำ)  เบราว์เซอร์ -> /api/qcrd, /api/qcrd-save (Vercel) --ต่อ SQL ตรง--> SQL Server
+ทางที่ 2          เบราว์เซอร์ -> /api/qcrd, /api/qcrd-save (Vercel) -> host API /qcrd/* -> SQL Server
 ```
+
+ทางที่ 1 ไม่ต้องรัน host-server ไม่ต้องเปิด tunnel และไม่ต้องมีกุญแจเขียน — ตั้ง env บน Vercel
+ชุดเดียวก็ใช้ได้เลย โค้ดเลือกทางให้เอง (ตั้งรหัสฐานข้อมูลไว้ = ใช้ทางที่ 1, ไม่ตั้ง = ถอยไปทางที่ 2)
 
 ## 1) ข้อมูล QC/RD มีอะไรบ้าง และตอนนี้ SQL เก็บครบไหม
 
@@ -93,8 +101,10 @@
 
 ## 3) ขั้นตอนติดตั้ง
 
-ต้องรัน **ที่เครื่องออฟฟิศ** (เครื่องเดียวกับ SQL Server / ที่รัน `host-server`) เท่านั้น
-เพราะ SQL Server ต่อได้จาก localhost และชีทต้องเปิดจากเน็ตที่เข้า Google ได้
+ทำที่ **เครื่องออฟฟิศ** ง่ายที่สุด (ต่อ `localhost\SQLEXPRESS` ตรง ไม่ต้องออกเน็ต)
+แต่รันจากเครื่องอื่นที่มีเน็ตก็ได้ เพราะ SQL Server ตัวนี้เปิดพอร์ต 1433 ออกเน็ตอยู่แล้ว —
+ตั้ง `QCRD_DB_HOST=inventory.dyndns.tv` แล้วใช้ login ชุดเดียวกับ `HR_DB_USER`/`HR_DB_PASSWORD`
+(เครื่องที่รันต้องเปิด Google Sheets ได้ด้วย เพราะต้องอ่านชีทต้นทาง)
 
 ### วิธีเร็ว — คำสั่งเดียวจบ
 
@@ -152,7 +162,31 @@ node scripts/migrate-qcrd.mjs --verify
 
 ### เปิดใช้จากหน้าเว็บ
 
-ตั้ง environment variable **บนเครื่องโฮสต์** (ที่รัน `node host-server/server.js`):
+#### ทางที่ 1 — ต่อ SQL ตรงจาก Vercel (แนะนำ, ไม่ต้องแตะเครื่องโฮสต์เลย)
+
+ตั้ง environment variable บน Vercel (Settings > Environment Variables) แล้ว Redeploy:
+
+| ตัวแปร | ค่า | หมายเหตุ |
+|---|---|---|
+| `QCRD_SOURCE` | `sql` | ไม่ตั้ง = ใช้ชีทเหมือนเดิม |
+| `QCRD_DB_USER` / `QCRD_DB_PASSWORD` | login ที่มีสิทธิ์ใน `InventoryNarai` | **ไม่ต้องตั้งถ้ามี `HR_DB_USER`/`HR_DB_PASSWORD` อยู่แล้ว** — ใช้ชุดเดียวกันได้ |
+| `QCRD_DB_HOST` | `inventory.dyndns.tv` | ไม่ตั้ง = ใช้ `HR_DB_HOST` หรือค่านี้เป็นค่าเริ่มต้น |
+| `QCRD_DB_NAME` | `InventoryNarai` | ไม่ตั้งก็ได้ |
+
+> ⚠️ login ที่ใช้ต้องมีสิทธิ์ใน `InventoryNarai` ด้วย ไม่ใช่แค่ `narai_hr`
+> (ถ้าลืม จะต่อติดแต่ query ไม่ผ่าน ขึ้นว่า *is not able to access the database* —
+> ส่วนให้สิทธิ์อยู่ท้าย `docs/schema-qcrd.sql`)
+
+> ทางนี้อาศัยว่า SQL Server เปิดพอร์ต 1433 ออกเน็ตอยู่แล้ว (ตารางงานบน Vercel ใช้ทางนี้มาตลอด)
+> ถ้าวันหนึ่งปิดพอร์ตนั้น หน้า QC/RD จะสลับไปทางที่ 2 ได้ทันทีโดยแค่เปลี่ยน env ไม่ต้องแก้โค้ด
+> และควรจำกัดสิทธิ์ของ login ที่ Vercel ใช้ให้เหลือเท่าที่ต้องใช้จริง (อ่าน/เขียน 2 ฐานนี้ ไม่ต้องเป็น sa)
+
+เช็กว่าใช้ทางไหนอยู่: เปิด `/api/qcrd?sheet=menugroup` แล้วดูค่า `source` กับ `via`
+(`"source":"sql","via":"ต่อ SQL ตรง (inventory.dyndns.tv:1433/InventoryNarai)"`)
+
+#### ทางที่ 2 — ผ่าน host API (ใช้เมื่อไม่อยากเปิดพอร์ต SQL ให้ Vercel)
+
+ตั้ง env **บนเครื่องโฮสต์** (ที่รัน `node host-server/server.js`):
 
 ```cmd
 set QCRD_DB_SERVER=localhost\SQLEXPRESS
@@ -162,18 +196,14 @@ set QCRD_DB_PASSWORD=...
 set QCRD_WRITE_KEY=<สุ่มข้อความยาว ๆ มาสักชุด>
 ```
 
-แล้วตั้ง **บน Vercel** (Settings > Environment Variables) แล้ว Redeploy:
-
-| ตัวแปร | ค่า | ความหมาย |
-|---|---|---|
-| `QCRD_SOURCE` | `sql` | สลับทั้งอ่านและเขียนไปที่ SQL (ไม่ตั้ง = ใช้ชีทเหมือนเดิม) |
-| `QCRD_API_BASE` | URL ของ host API | ไม่ตั้ง = ใช้ `STORE_API_BASE` ตัวเดียวกับหน้ายอดขาย |
-| `QCRD_WRITE_KEY` | ค่าเดียวกับที่ตั้งบนเครื่องโฮสต์ | กุญแจสำหรับ `POST /qcrd/save` |
+แล้วตั้งบน Vercel: `QCRD_SOURCE=sql` · `QCRD_API_BASE=<URL ของ host API>` ·
+`QCRD_WRITE_KEY=<ค่าเดียวกับเครื่องโฮสต์>` (ห้ามตั้ง `QCRD_DB_USER/PASSWORD` ไม่งั้นจะไปใช้ทางที่ 1)
 
 > 🔐 `QCRD_WRITE_KEY` ไม่ใช่ของประดับ — host API เปิดออกเน็ตผ่าน tunnel และไม่มีระบบล็อกอิน
-> ถ้าไม่ตั้ง ฝั่งเขียนจะถูกปิดไว้ (อ่านได้อย่างเดียว) ซึ่งเป็นค่าเริ่มต้นที่ปลอดภัยกว่า
+> ไม่ตั้ง = ฝั่งเขียนถูกปิดไว้ (อ่านได้อย่างเดียว) ซึ่งเป็นค่าเริ่มต้นที่ปลอดภัยกว่า
 
-เช็กว่าพร้อมไหม: เปิด `http://<host>/qcrd/ping` ต้องได้ `{"status":"success","menus":<จำนวนเมนู>,"writeEnabled":true}`
+เช็กว่าพร้อมไหม: เปิด `http://<host>/qcrd/ping` ต้องได้
+`{"status":"success","menus":<จำนวนเมนู>,"writeEnabled":true}`
 
 ### กลับไปใช้ชีท
 
@@ -190,8 +220,10 @@ set QCRD_WRITE_KEY=<สุ่มข้อความยาว ๆ มาสั�
 | `scripts/migrate-qcrd.mjs` | ย้ายข้อมูลจากชีทเข้า SQL (`--inspect` / `--dry-run` / `--verify` / `--only=`) |
 | `scripts/run-sql.mjs` | รันไฟล์ `.sql` ด้วย node สำหรับเครื่องที่ไม่มี `sqlcmd` |
 | `scripts/qcrdDb.mjs` | ค่าเชื่อมต่อฐานข้อมูลที่สคริปต์ทั้งสองใช้ร่วมกัน |
-| `host-server/qcrd-db.js` | อ่าน/เขียน QC/RD บน SQL — ตัวที่มาแทน `qcrd-apps-script.gs` |
-| `lib/qcrdSource.js` | ตัวตัดสินใจว่าจะไปชีทหรือ SQL + ตัวเรียก host API |
+| `lib/qcrdSql.mjs` | **ตรรกะ QC/RD ทั้งหมด** (คิดต้นทุน · แทนที่สูตร · cascade · ทุก action) ใช้ร่วมกันทั้งสองทาง |
+| `lib/qcrdPool.js` | ต่อ SQL ตรงจาก Vercel (ทางที่ 1) |
+| `host-server/qcrd-db.js` | เปิดตรรกะเดียวกันเป็น endpoint `/qcrd/*` ให้ทางที่ 2 |
+| `lib/qcrdSource.js` | ตัวเลือกว่าจะไปชีท / SQL ตรง / host API |
 | `pages/api/qcrd.js` | ฝั่งอ่านของหน้าเว็บ (สลับ sheet/sql + ถอยกลับอัตโนมัติ) |
 | `pages/api/qcrd-save.js` | ฝั่งเขียนของหน้าเว็บ (สลับ sheet/sql) |
 | `qcrd-apps-script.gs` | ของเดิม ยังใช้ได้ ใช้เป็นทางถอยเมื่อยังไม่เปิดโหมด SQL |

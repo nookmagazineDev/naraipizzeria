@@ -2,7 +2,8 @@
 //
 // ส่งต่อไปที่ไหน ขึ้นกับ env QCRD_SOURCE เหมือนฝั่งอ่านใน /api/qcrd:
 //   sheet (ค่าเริ่มต้น) → /api/qcrd-gas (Apps Script เขียนลงชีทต้นทุนเมนู)
-//   sql                → host API POST /qcrd/save (เขียนลงฐาน InventoryNarai)
+//   sql                → เขียนลงฐาน InventoryNarai — ต่อ SQL ตรงจาก Vercel ถ้าตั้งรหัสไว้
+//                        ไม่งั้นยิงไป host API POST /qcrd/save (ดู lib/qcrdSource.js)
 //
 // action ทั้งสองทางชื่อเดียวกันและรับ payload ชุดเดียวกัน: saveMenu · saveMenuStatus ·
 // saveMenuGroup · saveItem · addItem · deleteItem · updateItemUnits · sortBom

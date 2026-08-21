@@ -2,12 +2,13 @@
 //
 // มีสองทาง เลือกด้วย env QCRD_SOURCE:
 //   sheet (ค่าเริ่มต้น) — ชีทต้นทุนเมนู 1v8WRT… ผ่าน lib/qcrdSheet.js (ใช้ร่วมกับ /api/usage-bom)
-//   sql                — ตาราง qcrd_* / stock_item ในฐาน InventoryNarai ผ่าน host API
-//                        (host-server/qcrd-db.js · โครงตารางใน docs/schema-qcrd.sql)
+//   sql                — ตาราง qcrd_* / stock_item ในฐาน InventoryNarai
+//                        ต่อ SQL ตรงจาก Vercel ถ้าตั้งรหัสไว้ ไม่งั้นผ่าน host API
+//                        (ดู lib/qcrdSource.js · โครงตารางใน docs/schema-qcrd.sql)
 // โหมด sql ถ้าเรียก host API ไม่ได้ จะถอยไปอ่านชีทให้ แล้วแนบ warning มากับผลลัพธ์
 // ส่วน "เขียน" ใช้ /api/qcrd-save (ไปที่ SQL หรือ Apps Script ตาม QCRD_SOURCE เหมือนกัน)
 import { fetchQcrdSheet as fetchSheet, TRUTHY } from '../../lib/qcrdSheet';
-import { usingSql, fetchQcrdSql } from '../../lib/qcrdSource';
+import { usingSql, fetchQcrdSql, sqlRoute } from '../../lib/qcrdSource';
 
 // ---------- วิเคราะห์หน่วยจากชื่อวัตถุดิบ ----------
 // ชื่อในชีท item มักลงท้ายด้วยหน่วยซื้อ เช่น "...(1ถุง/1กก.) กก." หรือ "...(กิโล)"
@@ -123,7 +124,7 @@ export default async function handler(req, res) {
   if (usingSql() && ['menu', 'bom', 'item', 'menugroup'].includes(sheet)) {
     try {
       const data = await readFromSql(sheet);
-      return res.status(200).json({ status: 'success', source: 'sql', data });
+      return res.status(200).json({ status: 'success', source: 'sql', via: sqlRoute(), data });
     } catch (err) {
       console.error('QC/RD SQL error:', err.message);
       warning = `อ่านจาก SQL ไม่ได้ (${err.message}) — แสดงข้อมูลจากชีทแทน การแก้ไขล่าสุดอาจยังไม่ขึ้น`;
