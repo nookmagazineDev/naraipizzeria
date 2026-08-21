@@ -1,5 +1,6 @@
 # dependencies
 /node_modules
+node_modules/
 
 # Next.js build output
 /.next
@@ -8,7 +9,8 @@
 # production build
 /build
 
-# env files
+# env files (รวมไฟล์รหัสฐานของเครื่องโฮสต์ — ห้ามขึ้น git เด็ดขาด)
+db.env.ps1
 .env
 .env.local
 .env.development.local
