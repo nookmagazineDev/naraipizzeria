@@ -17,7 +17,8 @@ const EDIT_FIELDS = [
 
 /*
  * NARAI OFFICE — รายชื่อพนักงาน (โหมดดูอย่างเดียว)
- * ดึงข้อมูลจาก Google Sheet (ชีต DATA) ผ่าน Apps Script proxy /api/stock-gas → action=getEmployees
+ * ดึงผ่าน /api/stock-gas → action=getEmployees ซึ่งอ่านจาก dbo.hr_employee เมื่อ SHEETS_SOURCE=sql
+ * (ยังไม่ได้ตั้ง = ถอยไปอ่านชีท DATA ผ่าน Apps Script เหมือนเดิม)
  * แสดงผลให้เหมือนหน้า "รายชื่อพนักงาน" ของ narai-branch.vercel.app
  */
 
@@ -195,7 +196,7 @@ export default function EmployeeList() {
             </div>
             <div>
               <h2 className="text-2xl font-bold text-slate-800">รายชื่อพนักงาน</h2>
-              <p className="text-sm text-slate-500 mt-1">ข้อมูลพนักงานทุกสาขา (ดึงจาก Google Sheet · ดูอย่างเดียว)</p>
+              <p className="text-sm text-slate-500 mt-1">ข้อมูลพนักงานทุกสาขา · แก้ไขได้</p>
             </div>
           </div>
           <div className="flex items-center gap-3">

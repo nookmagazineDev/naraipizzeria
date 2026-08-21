@@ -18,11 +18,16 @@ export default async function handler(req, res) {
     : (req.body || {});
   const action = String(payload.action || '').trim();
 
+  // เก็บไว้แนบท้าย error ของ Apps Script — ไม่งั้นหน้าเว็บจะเห็นแค่ "ตอบกลับจาก GAS ไม่ใช่ JSON"
+  // ซึ่งไม่ได้บอกเลยว่าจริง ๆ แล้วมันลอง SQL ก่อนแล้วพลาดเพราะอะไร
+  let sqlError = '';
+
   if (usingSql() && (action === 'getEmployees' || action === 'saveEmployee')) {
     try {
       const data = action === 'getEmployees' ? await readEmployees() : await saveEmployee(payload);
       return res.status(200).json({ status: 'success', source: 'sql', data });
     } catch (err) {
+      sqlError = err.message;
       console.error(`stock-gas: ${action} กับ SQL ไม่ได้ (${sqlRoute()}):`, err.message);
       if (action === 'saveEmployee') {
         // การเขียนห้ามถอยไปชีท — เขียนคนละที่กับที่หน้าเว็บอ่าน แปลว่าข้อมูลสองที่จะไม่ตรงกัน
@@ -46,9 +51,18 @@ export default async function handler(req, res) {
     const text = await upstream.text();
     let json;
     try { json = JSON.parse(text); }
-    catch { return res.status(502).json({ status: 'error', message: 'ตอบกลับจาก GAS ไม่ใช่ JSON' }); }
+    catch { return res.status(502).json({ status: 'error', message: gasFailed('ตอบกลับจาก GAS ไม่ใช่ JSON', sqlError) }); }
     return res.status(200).json(json);
   } catch (err) {
-    return res.status(502).json({ status: 'error', message: err.message });
+    return res.status(502).json({ status: 'error', message: gasFailed(err.message, sqlError) });
   }
+}
+
+/** ข้อความ error ที่บอกครบว่าลองทางไหนไปแล้วบ้าง */
+function gasFailed(gasMessage, sqlError) {
+  if (!sqlError) {
+    return `${gasMessage} — ตอนนี้ยังอ่านจาก Google Sheets อยู่ ` +
+      '(ถ้าย้ายข้อมูลเข้า SQL แล้ว ให้ตั้ง env SHEETS_SOURCE=sql บน Vercel แล้ว Redeploy)';
+  }
+  return `อ่านจาก SQL ไม่ได้ (${sqlError}) แล้วถอยไปถาม Google Sheets ก็ไม่ได้อีก (${gasMessage})`;
 }

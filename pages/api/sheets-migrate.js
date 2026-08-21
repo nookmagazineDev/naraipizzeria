@@ -31,6 +31,7 @@ import {
   fetchPlanRows, fetchClosingRows, fetchExpenseRefs, fetchExpenses, fetchEmployees,
 } from '../../lib/sheetsSheet.mjs';
 import { isConfigured as hasDirectDb, describeTarget, runQuery, credentials } from '../../lib/qcrdPool';
+import { SHEETS_API_BASE } from '../../lib/sheetsSource';
 import { combine, PARAM_LIMIT } from '../../lib/qcrdMigrate.mjs';
 import {
   mapPlan, mapClosing, mapExpenseRefs, mapExpenses, mapEmployees,
@@ -183,6 +184,64 @@ async function verify() {
   return { step: 'verify', ready: checks.every((c) => c.ok), checks };
 }
 
+/**
+ * เช็กสถานะของทางที่ 2 (host API) — ใช้เมื่อ Vercel ไม่มีรหัสฐาน จึงต่อ SQL ตรงไม่ได้
+ * ตอบให้ครบว่าหน้าเว็บจะไปถึงข้อมูลได้ไหม: env ตั้งถูกไหม · host-server ตอบไหม · ตารางมีข้อมูลกี่แถว
+ */
+async function checkViaHost() {
+  const base = SHEETS_API_BASE;
+  const hit = async (path) => {
+    try {
+      const r = await fetch(`${base}${path}`, {
+        signal: AbortSignal.timeout(10000),
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+      });
+      const text = (await r.text()).slice(0, 400);
+      try { return { ok: r.ok, json: JSON.parse(text) }; }
+      catch { return { ok: false, raw: `HTTP ${r.status} — ${text.replace(/\s+/g, ' ')}` }; }
+    } catch (e) {
+      return { ok: false, raw: `ต่อไม่ได้: ${e.message}` };
+    }
+  };
+
+  const [sheetsPing, qcrdPing] = await Promise.all([hit('/sheets/ping'), hit('/qcrd/ping')]);
+  const source = process.env.SHEETS_SOURCE || '(ไม่ได้ตั้ง)';
+  const sourceOn = String(process.env.SHEETS_SOURCE || '').toLowerCase() === 'sql';
+  const hostReady = Boolean(sheetsPing.json?.rows);
+
+  const todo = [];
+  if (!sourceOn) todo.push('ตั้ง env SHEETS_SOURCE=sql บน Vercel แล้ว Redeploy — ตอนนี้หน้าเว็บยังอ่านชีทอยู่');
+  if (!hostReady) {
+    todo.push(`host API ที่ ${base} ยังไม่พร้อม — ตรวจว่า host-server ที่เครื่องออฟฟิศรันอยู่ไหม ` +
+      'และเป็นเวอร์ชันที่มี /sheets/* แล้วหรือยัง (git pull + รีสตาร์ท)');
+  }
+  if (hostReady && !sheetsPing.json?.writeEnabled) {
+    todo.push('host-server ยังเขียนไม่ได้ — ตั้ง $env:SHEETS_WRITE_KEY บนเครื่องออฟฟิศ แล้วรีสตาร์ท');
+  }
+  if (!process.env.SHEETS_WRITE_KEY && !process.env.QCRD_WRITE_KEY) {
+    todo.push('ยังไม่ได้ตั้ง SHEETS_WRITE_KEY บน Vercel — อ่านได้แต่บันทึกไม่ได้');
+  }
+  if (String(process.env.QCRD_SOURCE || '').toLowerCase() === 'sql' && !qcrdPing.json?.menus) {
+    todo.push('⚠️ ตั้ง QCRD_SOURCE=sql ไว้แต่ qcrd_menu ยังว่าง — ต้นทุนเมนูจะเป็นค่าว่างเงียบ ๆ ' +
+      'ให้รัน scripts\\migrate-qcrd.ps1 ที่เครื่องออฟฟิศก่อน หรือเอา QCRD_SOURCE ออกไปก่อน');
+  }
+
+  return {
+    status: 'success',
+    step: 'check',
+    route: `host API (${base}) — Vercel ไม่มีรหัสฐาน จึงไม่ต่อ SQL ตรง`,
+    env: {
+      SHEETS_SOURCE: source,
+      QCRD_SOURCE: process.env.QCRD_SOURCE || '(ไม่ได้ตั้ง)',
+      SHEETS_API_BASE: base,
+      writeKeySet: Boolean(process.env.SHEETS_WRITE_KEY || process.env.QCRD_WRITE_KEY),
+    },
+    hostApi: { sheets: sheetsPing.json || sheetsPing.raw, qcrd: qcrdPing.json || qcrdPing.raw },
+    ready: sourceOn && hostReady,
+    todo: todo.length ? todo : ['พร้อมใช้งานแล้ว — หน้าเว็บควรอ่านจาก SQL ผ่าน host API'],
+  };
+}
+
 export default async function handler(req, res) {
   const q = { ...req.query, ...(typeof req.body === 'object' ? req.body : {}) };
   // ตั้ง SHEETS_MIGRATE_KEY แยกก็ได้ ไม่ตั้งก็ใช้รหัสเดิมของ QC/RD ได้เลย (คนเดียวกันเป็นคนกด
@@ -208,10 +267,16 @@ export default async function handler(req, res) {
     }
   }
 
+  // step=check ต้องตอบได้เสมอ แม้ไม่มีรหัสฐาน — เพราะทางที่ 2 (host API) ไม่ต้องใช้รหัสฐานเลย
+  // และนี่คือลิงก์เดียวที่ตอบได้ว่า "ทำไมหน้าเว็บยังไม่ไปที่ SQL" (env ไม่ติด / host-server ไม่ตอบ / ตารางว่าง)
+  if (step0 === 'check' && !hasDirectDb()) return res.status(200).json(await checkViaHost());
+
   if (!hasDirectDb()) {
     return res.status(400).json({
       status: 'error',
-      message: 'ยังต่อ SQL ตรงไม่ได้ — ตั้ง QCRD_DB_USER/QCRD_DB_PASSWORD (หรือ ZK_DB_/HR_DB_) บน Vercel ก่อน',
+      message: 'ย้ายข้อมูลจากหน้าเว็บต้องต่อ SQL ตรง ซึ่งที่ร้านทำไม่ได้ (ดู &step=probe) ' +
+        '— ให้ย้ายจากเครื่องออฟฟิศด้วย scripts\\migrate-sheets.ps1 แทน ' +
+        '(ถ้าจะใช้ทางนี้จริง ต้องตั้ง QCRD_DB_USER/QCRD_DB_PASSWORD บน Vercel ก่อน)',
     });
   }
 
