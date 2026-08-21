@@ -116,6 +116,7 @@ Write-Host '  ย้ายข้อมูลเสร็จแล้ว — เ�
 Write-Host '════════════════════════════════════════════════════════════' -ForegroundColor Green
 Write-Host ''
 Write-Host '  ที่เครื่องนี้ — เปิด host API ให้หน้าเว็บเรียกผ่าน tunnel' -ForegroundColor White
+Write-Host '       cd host-server; npm install; cd ..     # ครั้งแรกเท่านั้น (express/cors/compression)'
 Write-Host "       `$env:SHEETS_WRITE_KEY = '<สุ่มข้อความยาว ๆ>'   # ใช้ QCRD_WRITE_KEY เดิมก็ได้"
 Write-Host '       node host-server\server.js'
 Write-Host '       เช็กว่าพร้อม: http://localhost:14365/sheets/ping'

@@ -13,10 +13,20 @@ Dashboard เรียกผ่าน proxy ฝั่ง Next.js:
 
 ## ติดตั้ง
 
+dependency ของ host-server แยกจากของหน้าเว็บ (`package.json` ที่รากรีโปไม่มี express/cors/compression)
+ต้อง `npm install` ในโฟลเดอร์นี้ด้วย ไม่งั้นรันแล้วขึ้น `Cannot find module 'express'`
+
 ```bash
-npm init -y
-npm install express mssql cors compression
+cd host-server
+npm install
 node server.js
+```
+
+หรือถ้าอยากลงรวมไว้ที่รากรีโป (ทำงานเหมือนกัน node ไล่หา node_modules ขึ้นไปให้เอง):
+
+```bash
+npm install express cors compression
+node host-server/server.js
 ```
 
 ### ⚠️ ตั้งรหัสผ่าน SQL ผ่าน env (ห้ามฝังในไฟล์ — repo เป็น public)
