@@ -21,7 +21,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fetchQcrdSheet } from '../../lib/qcrdSheet';
-import { isConfigured as hasDirectDb, describeTarget, runQuery } from '../../lib/qcrdPool';
+import { isConfigured as hasDirectDb, describeTarget, runQuery, credentials } from '../../lib/qcrdPool';
 import {
   mapGroups, mapMenus, mapBomByMenu, mapItems,
   groupStmt, menuStmt, bomStmt, itemStmt, itemBranchStmt, combine, PARAM_LIMIT,
@@ -190,17 +190,38 @@ export default async function handler(req, res) {
 
   try {
     if (step === 'check') {
-      const menus = await runQuery('SELECT COUNT(*) AS n FROM dbo.qcrd_menu').then(
-        (r) => Number(r[0]?.n) || 0,
-      ).catch((e) => ({ error: e.message }));
+      // สิทธิ์ของ login ที่ใช้ — เช็กก่อนดีกว่าไปพังกลางทางตอนสร้างตาราง
+      const perms = await runQuery(`
+        SELECT DB_NAME() AS db, SUSER_SNAME() AS login_name,
+               HAS_PERMS_BY_NAME(NULL, NULL, 'CREATE TABLE') AS can_create,
+               HAS_PERMS_BY_NAME(NULL, NULL, 'INSERT') AS can_insert,
+               OBJECT_ID(N'dbo.stock_item') AS has_stock_item,
+               OBJECT_ID(N'dbo.qcrd_menu') AS has_qcrd_menu`).catch((e) => ({ error: e.message }));
+      if (perms.error) {
+        return res.status(200).json({
+          status: 'error', step, db: describeTarget(), credentialsFrom: credentials().from,
+          message: perms.error,
+        });
+      }
+      const p = perms[0] || {};
+      const tablesReady = Boolean(p.has_qcrd_menu);
+      const menus = tablesReady
+        ? Number((await runQuery('SELECT COUNT(*) AS n FROM dbo.qcrd_menu'))[0]?.n) || 0
+        : undefined;
       return res.status(200).json({
         status: 'success', step, db: describeTarget(),
-        tablesReady: typeof menus === 'number',
-        menusInSql: typeof menus === 'number' ? menus : undefined,
-        hint: typeof menus === 'number'
-          ? 'พร้อมย้าย — เรียก &step=group&confirm=1 แล้วไล่ไป menu, bom, item ตามลำดับ'
-          : 'ยังไม่มีตาราง — เรียก &step=schema&confirm=1 ก่อน',
-        detail: typeof menus === 'number' ? undefined : menus.error,
+        credentialsFrom: credentials().from,
+        loginName: str(p.login_name),
+        canCreateTable: p.can_create === 1,
+        canWrite: p.can_insert === 1,
+        stockItemExists: Boolean(p.has_stock_item),
+        tablesReady,
+        menusInSql: menus,
+        hint: tablesReady
+          ? 'ตารางพร้อมแล้ว — เรียก &step=group&confirm=1 แล้วไล่ไป menu, bom, item, verify ตามลำดับ'
+          : p.can_create === 1
+            ? 'ยังไม่มีตาราง — เรียก &step=schema&confirm=1 ก่อน'
+            : 'ยังไม่มีตาราง และ login นี้สร้างตารางไม่ได้ — ให้สิทธิ์ db_ddladmin เพิ่ม หรือรัน docs/schema-qcrd.sql ที่เครื่องออฟฟิศครั้งเดียว',
       });
     }
     if (!['schema', 'group', 'menu', 'bom', 'item', 'verify'].includes(step)) {

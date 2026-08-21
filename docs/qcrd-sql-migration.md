@@ -115,12 +115,16 @@ Vercel เข้าถึงได้ทั้งชีทและ SQL Server �
 | ตัวแปร | ค่า |
 |---|---|
 | `QCRD_MIGRATE_KEY` | สุ่มข้อความยาว ๆ มาสักชุด — ไม่ตั้ง = ปิดทางนี้ไว้ทั้งหมด |
-| `QCRD_DB_USER` / `QCRD_DB_PASSWORD` | login ที่มีสิทธิ์ใน `InventoryNarai` (มี `HR_DB_USER`/`HR_DB_PASSWORD` อยู่แล้วก็ไม่ต้องตั้ง) |
+| รหัสฐานข้อมูล | **ปกติไม่ต้องตั้งอะไรเพิ่ม** — ถ้ามี `ZK_DB_USER`/`ZK_DB_PASSWORD` (หน้าสแกนหน้า) หรือ `HR_DB_USER`/`HR_DB_PASSWORD` อยู่แล้ว โค้ดหยิบไปใช้เอง เพราะเป็น SQL Server เครื่องเดียวกัน · จะใช้ login แยกก็ตั้ง `QCRD_DB_USER`/`QCRD_DB_PASSWORD` ทับได้ |
+
+> ⚠️ **login ที่หยิบมาใช้ต้องมีสิทธิ์ในฐาน `InventoryNarai` ด้วย** — `ZK_DB_USER` เดิมมีสิทธิ์แค่ใน `ZKBio9`
+> ถ้ายังไม่ได้ให้สิทธิ์ `step=check` จะฟ้องมาตรง ๆ ให้รันส่วนท้ายของ `docs/schema-qcrd.sql`
+> (แก้ตัวแปร `@login` ให้ตรงก่อน) ด้วย `sa` ที่เครื่องออฟฟิศครั้งเดียว
 
 **แล้วเปิดลิงก์ทีละบรรทัด** (เปลี่ยน `<โดเมน>` เป็นโดเมนของ Dashboard และ `<KEY>` เป็นค่าที่ตั้งไว้):
 
 ```
-https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=check                 ← ดูสถานะก่อน ไม่แตะข้อมูล
+https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=check                 ← ดูสถานะ+สิทธิ์ก่อน ไม่แตะข้อมูล
 https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=schema&confirm=1      ← สร้างตาราง/เพิ่มคอลัมน์
 https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=group&confirm=1       ← หมวดหมู่เมนู
 https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=menu&confirm=1        ← เมนู
@@ -129,7 +133,11 @@ https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=item&confirm=1        
 https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=verify                ← เทียบจำนวนชีท ↔ SQL
 ```
 
+- `step=check` บอกว่ากำลังใช้รหัสจาก env ตัวไหน (`credentialsFrom`), login ชื่ออะไร,
+  สร้างตารางได้ไหม (`canCreateTable`), เขียนได้ไหม (`canWrite`), และมีตารางแล้วหรือยัง — ดูอันนี้ก่อนเสมอ
 - **ไม่ใส่ `&confirm=1` = ทดลอง** อ่านชีทแล้วบอกจำนวนแถวเฉย ๆ ไม่เขียนอะไร ลองก่อนได้ทุก step
+- ถ้า `canCreateTable` เป็น `false` → ข้าม `step=schema` แล้วให้คนที่มี `sa` รัน `docs/schema-qcrd.sql`
+  ที่เครื่องออฟฟิศครั้งเดียวแทน (หรือให้สิทธิ์ `db_ddladmin` กับ login นั้นตามส่วนท้ายของไฟล์นั้น)
 - Vercel ตัดที่ 60 วิ ถ้าชุดไหนใหญ่จนไม่จบ จะตอบ `"done": false` พร้อม `nextOffset`
   → เปิดลิงก์เดิมต่อท้ายด้วย `&offset=<เลขนั้น>` จนกว่าจะได้ `"done": true`
 - ทุก step รันซ้ำได้ ไม่เกิดข้อมูลซ้ำ
