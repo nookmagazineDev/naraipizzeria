@@ -3,6 +3,7 @@ import { apiCall } from '../lib/stockApi';
 import { Users, Loader2, Search, Gift, Image as ImageIcon, AlertCircle, Pencil, X, CheckCircle } from 'lucide-react';
 
 // ฟิลด์ที่แก้ไขได้ (hrCode เป็นคีย์ ไม่ให้แก้)
+// LABEL_OF ด้านล่างใช้แปลงชื่อฟิลด์เป็นชื่อไทยตอนรายงานว่าช่องไหนบันทึกไม่ได้
 const EDIT_FIELDS = [
   { key: 'fullName', label: 'ชื่อ - นามสกุล', type: 'text' },
   { key: 'branch', label: 'สาขา', type: 'text' },
@@ -14,6 +15,8 @@ const EDIT_FIELDS = [
   { key: 'newCode', label: 'รหัสใหม่', type: 'text' },
   { key: 'photoUrl', label: 'ลิงก์รูป', type: 'text' },
 ];
+
+const LABEL_OF = Object.fromEntries(EDIT_FIELDS.map(f => [f.key, f.label]));
 
 /*
  * NARAI OFFICE — รายชื่อพนักงาน (โหมดดูอย่างเดียว)
@@ -109,7 +112,25 @@ export default function EmployeeList() {
       });
       if (Object.keys(changed).length === 0) { setToast({ ok: false, msg: 'ไม่มีการเปลี่ยนแปลง' }); setSavingEmp(false); return; }
       const res = await apiCall('saveEmployee', { hrCode: editEmp.hrCode, ...changed });
-      setToast({ ok: true, msg: `บันทึก ${editEmp.hrCode} สำเร็จ (${Object.keys(changed).length} ช่อง)` });
+
+      // บอกตามที่เขียนได้จริง ไม่ใช่ตามจำนวนช่องที่ผู้ใช้แก้
+      // ฝั่งชีทคืน updated = ช่องที่เขียนลงชีทได้ · skipped = ช่องที่ "หาคอลัมน์ในหัวตารางไม่เจอ"
+      // ของเดิมขึ้นว่าสำเร็จทุกครั้งโดยไม่ดูสองค่านี้ ช่องที่ชีทไม่มีคอลัมน์รองรับจึงหายเงียบ ๆ
+      // (ฝั่ง SQL คืน { updated: <จำนวนแถว>, fields } ซึ่งไม่มี skipped — เช็กชนิดก่อนใช้)
+      const d = res.data || {};
+      const wrote = Array.isArray(d.updated) ? d.updated.length : (Number(d.updated) ? Object.keys(changed).length : 0);
+      const skipped = Array.isArray(d.skipped) ? d.skipped : [];
+      if (wrote === 0) {
+        throw new Error(skipped.length
+          ? `ไม่มีช่องไหนถูกบันทึก — หาคอลัมน์ของ ${skipped.map(k => LABEL_OF[k] || k).join(', ')} ในชีทไม่เจอ`
+          : 'ไม่มีช่องไหนถูกบันทึก (ลองใหม่อีกครั้ง)');
+      }
+      setToast({
+        ok: skipped.length === 0,
+        msg: `บันทึก ${editEmp.hrCode} แล้ว ${wrote} ช่อง`
+          + (skipped.length ? ` · ไม่มีคอลัมน์ในชีท: ${skipped.map(k => LABEL_OF[k] || k).join(', ')}` : '')
+          + (res.source === 'sql' ? ' (SQL)' : ''),
+      });
       setEditEmp(null);
       fetchEmployees();
     } catch (err) {
