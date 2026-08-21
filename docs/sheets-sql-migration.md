@@ -113,6 +113,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\migrate-sheets.ps1
 .\scripts\migrate-sheets.ps1 -Yes                      # ไม่ต้องถามยืนยัน
 .\scripts\migrate-sheets.ps1 -SkipSchema               # สร้างตารางไปแล้ว
 .\scripts\migrate-sheets.ps1 -Only plan,expense        # เฉพาะบางชุด
+.\scripts\migrate-sheets.ps1 -DbName NARAITEST         # ลงฐานทดสอบก่อน
 ```
 
 เรียก node ตรง ๆ ก็ได้ถ้าอยากคุมทีละขั้น

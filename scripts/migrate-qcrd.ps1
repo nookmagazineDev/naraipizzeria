@@ -17,7 +17,7 @@
 #     -Yes           ไม่ต้องถามยืนยัน (ใช้ตอนรันซ้ำ/รันอัตโนมัติ)
 #     -SkipSchema    ข้ามขั้นสร้างตาราง (เคยรันแล้ว)
 #     -Only menu,bom ย้ายเฉพาะบางชุด (group,menu,bom,item)
-#     -Db ชื่อฐาน     ฐานปลายทาง (ค่าเริ่มต้น InventoryNarai)
+#     -DbName ชื่อฐาน ฐานปลายทาง (ค่าเริ่มต้น InventoryNarai)
 #
 #  ⚠️ ไฟล์นี้ต้องบันทึกเป็น UTF-8 "พร้อม BOM" เท่านั้น
 #     Windows PowerShell 5.1 (ตัวที่ติดมากับ Windows Server) อ่านไฟล์ .ps1 ที่ไม่มี BOM
@@ -30,7 +30,7 @@ param(
   [switch]$Yes,
   [switch]$SkipSchema,
   [string]$Only = '',
-  [string]$Db = ''
+  [string]$DbName = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,8 +48,8 @@ if (Test-Path $secret) { . $secret; Ok "โหลดค่าจาก host-serv
 
 # ตารางสต๊อก/QC/RD อยู่บน SQLEXPRESS (คนละอินสแตนซ์กับ NaraiPos ที่ค่า default เป็น localhost)
 if (-not $env:QCRD_DB_SERVER)   { $env:QCRD_DB_SERVER = if ($env:DB_SERVER -and $env:DB_SERVER -match '\\') { $env:DB_SERVER } else { 'localhost\SQLEXPRESS' } }
-if (-not $env:QCRD_DB_NAME)     { $env:QCRD_DB_NAME = if ($Db) { $Db } else { 'InventoryNarai' } }
-if ($Db)                        { $env:QCRD_DB_NAME = $Db }
+if (-not $env:QCRD_DB_NAME)     { $env:QCRD_DB_NAME = if ($DbName) { $DbName } else { 'InventoryNarai' } }
+if ($DbName)                    { $env:QCRD_DB_NAME = $DbName }
 if (-not $env:QCRD_DB_USER)     { $env:QCRD_DB_USER = if ($env:DB_USER) { $env:DB_USER } else { 'sa' } }
 if (-not $env:QCRD_DB_PASSWORD) { $env:QCRD_DB_PASSWORD = $env:DB_PASSWORD }
 if (-not $env:QCRD_DB_PASSWORD) {
