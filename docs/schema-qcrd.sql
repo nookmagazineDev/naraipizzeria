@@ -164,16 +164,37 @@ IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_ite
     ALTER TABLE dbo.stock_item ADD used_when NVARCHAR(50) NULL;    -- P ใช้กับ (ทั้งสอง/ทานที่ร้าน/ห่อกลับบ้าน)
 GO
 
-/* ==================== สิทธิ์ของ login ที่ API ใช้ ====================
-   host-server/office-server ต่อด้วย login เดียวกับที่ใช้กับ narai_hr / InventoryNarai
-   ถ้าเพิ่ง CREATE DATABASE ใหม่ ต้องเพิ่ม user ในฐานข้อมูลนี้ด้วย ไม่งั้นต่อติดแต่ query ไม่ผ่าน
-   แก้ชื่อ login ให้ตรงกับที่ใช้จริงก่อนรัน */
-IF SUSER_ID(N'narai_web') IS NOT NULL AND DATABASE_PRINCIPAL_ID(N'narai_web') IS NULL
-BEGIN
-    CREATE USER narai_web FOR LOGIN narai_web;
-    ALTER ROLE db_datareader ADD MEMBER narai_web;
-    ALTER ROLE db_datawriter ADD MEMBER narai_web;
-END
+/* ==================== สิทธิ์ของ login ที่เว็บ/API ใช้ ====================
+   ฐานนี้ถูกเรียกใช้จากหลายทาง และแต่ละทางใช้ login คนละตัวได้:
+     - Vercel ต่อ SQL ตรง   ใช้ QCRD_DB_USER หรือ ZK_DB_USER (ตัวเดียวกับหน้าสแกนหน้า) หรือ HR_DB_USER
+     - host-server           ใช้ QCRD_DB_USER / DB_USER
+   login พวกนี้ส่วนใหญ่มีสิทธิ์เฉพาะฐานของตัวเอง (เช่น ZKBio9) จึงต้องเพิ่ม user ในฐานนี้ให้ด้วย
+   ไม่งั้นจะต่อติดแต่ query ไม่ผ่าน ขึ้นว่า 'The server principal ... is not able to access the database'
+
+   แก้ @login ให้ตรงกับ login ที่ใช้จริง แล้วรันส่วนนี้ (รันซ้ำได้)
+   db_ddladmin ใส่ไว้เพื่อให้สร้างตารางจากหน้าเว็บ (/api/qcrd-migrate?step=schema) ได้
+   ถ้าไม่อยากให้สิทธิ์นั้น ก็รันไฟล์นี้ด้วย sa ที่เครื่องออฟฟิศครั้งเดียวแล้วข้าม step=schema ไป */
+DECLARE @login SYSNAME = N'narai_web';   -- <<< แก้เป็นชื่อ login ที่ใช้จริง เช่น ZK_DB_USER ที่ตั้งบน Vercel
+
+-- ครอบ TRY ไว้เพราะไฟล์นี้ถูกรันได้จากสองที่: ด้วย sa ที่เครื่องออฟฟิศ (ให้สิทธิ์ได้)
+-- และจากหน้าเว็บผ่าน /api/qcrd-migrate?step=schema ซึ่งใช้ login ธรรมดาที่ให้สิทธิ์ตัวเองไม่ได้
+-- ถ้าไม่ครอบไว้ ส่วนสร้างตารางที่สำเร็จไปแล้วจะถูกรายงานว่าล้มทั้งไฟล์เพราะบรรทัดนี้บรรทัดเดียว
+BEGIN TRY
+    IF SUSER_ID(@login) IS NOT NULL
+    BEGIN
+        IF DATABASE_PRINCIPAL_ID(@login) IS NULL
+            EXEC(N'CREATE USER ' + QUOTENAME(@login) + N' FOR LOGIN ' + QUOTENAME(@login));
+        EXEC(N'ALTER ROLE db_datareader ADD MEMBER ' + QUOTENAME(@login));
+        EXEC(N'ALTER ROLE db_datawriter ADD MEMBER ' + QUOTENAME(@login));
+        EXEC(N'ALTER ROLE db_ddladmin  ADD MEMBER ' + QUOTENAME(@login));
+        PRINT N'ให้สิทธิ์ ' + @login + N' ในฐานนี้เรียบร้อย';
+    END
+    ELSE
+        PRINT N'ข้ามการให้สิทธิ์: ไม่พบ login ' + @login + N' บนอินสแตนซ์นี้ (แก้ตัวแปร @login ให้ตรงก่อน)';
+END TRY
+BEGIN CATCH
+    PRINT N'ข้ามการให้สิทธิ์ (ผู้รันไม่มีสิทธิ์แจกสิทธิ์): ' + ERROR_MESSAGE();
+END CATCH
 GO
 
 PRINT N'สร้างตาราง QC/RD (qcrd_menu, qcrd_menu_group, qcrd_bom) + เพิ่มคอลัมน์ใน stock_item เรียบร้อย';
