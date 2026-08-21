@@ -8,6 +8,10 @@
 // เลือกโมเดลผ่าน env GEMINI_MODEL — ถ้าไม่ตั้ง จะใช้ค่า default ในบรรทัด GEMINI_MODEL ด้านล่าง
 // (คำตอบจาก /api/ai-chat มีฟิลด์ model บอกว่ารอบนั้นตอบด้วยโมเดลไหนจริง ๆ)
 
+// ค่าใช้จ่ายอื่นๆ / พนักงาน / แพลนสั่งของ ย้ายเข้า SQL แล้ว (SHEETS_SOURCE=sql)
+// เครื่องมือของ AI ต้องอ่านที่เดียวกับหน้าเว็บ ไม่งั้นหลังย้ายเสร็จ AI จะยังตอบจากชีทที่หยุดอัปเดตไปแล้ว
+import { usingSql as usingSheetsSql, readExpenses, readEmployees, readPlan } from '../../lib/sheetsSource';
+
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 // GAS ค่าใช้จ่าย/พนักงาน (ตัวเดียวกับ proxy) — ส่วนชีท Google อยู่ในทะเบียน SHEETS ด้านล่าง
 const EXPENSE_GAS = process.env.EXPENSE_GAS_URL || 'https://script.google.com/macros/s/AKfycbwcRP65mAO0jWusYr1OfcgxpW8GU7yv0t85VcnQ3ShTjEROaXCF2d3MNo_VffNho6Y/exec';
@@ -457,9 +461,9 @@ const TOOL_HANDLERS = {
     return { rows: out, days, note: 'อิงเวลาเปิดบิล ยอดรวม VAT · หารด้วย days = ค่าเฉลี่ยต่อวัน' };
   },
 
-  // ค่าใช้จ่ายอื่นๆ (ค่าเช่า/ไฟ/น้ำ/แก๊ส/โทรศัพท์) จากชีทที่ทีมบันทึก
+  // ค่าใช้จ่ายอื่นๆ (ค่าเช่า/ไฟ/น้ำ/แก๊ส/โทรศัพท์) เท่าที่ทีมบันทึกไว้ (dbo.expense_entry — เดิมคือชีท 1YXOaA…)
   async get_expenses({ month, branch }) {
-    const list = await gasPost(EXPENSE_GAS, { action: 'getExpenses' });
+    const list = await pickSource(() => readExpenses(), () => gasPost(EXPENSE_GAS, { action: 'getExpenses' }));
     let rows = list || [];
     if (month) rows = rows.filter(r => String(r.month) === String(month));
     if (branch) rows = rows.filter(r => String(r.branch).toUpperCase() === String(branch).toUpperCase());
@@ -479,9 +483,9 @@ const TOOL_HANDLERS = {
     };
   },
 
-  // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว)
+  // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว) — dbo.hr_employee เดิมคือชีทแท็บ DATA
   async get_employees_summary({ branch }) {
-    const list = await gasPost(HR_GAS, { action: 'getEmployees', branch: 'all' });
+    const list = await pickSource(() => readEmployees(), () => gasPost(HR_GAS, { action: 'getEmployees', branch: 'all' }));
     let emps = (list || []).filter(e => e.hrCode && String(e.fullName || '').trim() !== 'ชื่อ - สกุล');
     if (branch) emps = emps.filter(e => String(e.branch).toUpperCase() === String(branch).toUpperCase());
     const byBranch = {};
@@ -725,29 +729,37 @@ const TOOL_HANDLERS = {
     };
   },
 
-  // ประวัติการสั่งของแต่ละสาขา (ชีท stock/plan)
+  // ประวัติการสั่งของแต่ละสาขา (dbo.stock_plan — เดิมคือชีท stock/plan)
   async get_purchase_plan({ branch, start_date, end_date, search, group_by, limit = 50 }) {
-    const rows = await fetchTab('stock', 'plan');
-    const col = colFinder(rows[0]);
-    const c = {
-      orderDate: col('วันที่สั่ง'), branch: col('สาขา'), orderNo: col('เลขที่ใบสั่ง'),
-      receiveDate: col('วันที่รับ'), itemCode: col('รหัสสินค้า'), itemName: col('ชื่อสินค้า'),
-      qty: col('จำนวน'), unit: col('หน่วย'), unitPrice: col('ราคา/หน่วย'),
-      total: col('มูลค่ารวม'), type: col('ประเภท'),
-    };
-    // ชีทเก็บวันที่สั่งเป็น DD/MM/YYYY — แปลงเป็น YYYY-MM-DD ก่อนเทียบช่วง
+    // ทั้งสองทางเก็บวันที่สั่งเป็น DD/MM/YYYY — แปลงเป็น YYYY-MM-DD ก่อนเทียบช่วง
     const toYMD = s => {
       const m = txt(s).split(' ')[0].split('/');
       return m.length === 3 ? `${m[2]}-${m[1].padStart(2, '0')}-${m[0].padStart(2, '0')}` : '';
     };
-    let list = rows.slice(1).filter(r => txt(r[c.itemCode])).map(r => ({
-      orderDate: toYMD(r[c.orderDate]),
-      branch: txt(r[c.branch]).toUpperCase(),
-      orderNo: txt(r[c.orderNo]), receiveDate: txt(r[c.receiveDate]),
-      itemCode: txt(r[c.itemCode]), itemName: txt(r[c.itemName]),
-      qty: snum(r[c.qty]) || 0, unit: txt(r[c.unit]),
-      unitPrice: snum(r[c.unitPrice]) || 0, total: snum(r[c.total]) || 0,
-      type: txt(r[c.type]),
+    const fromSheet = async () => {
+      const rows = await fetchTab('stock', 'plan');
+      const col = colFinder(rows[0]);
+      const c = {
+        orderDate: col('วันที่สั่ง'), branch: col('สาขา'), orderNo: col('เลขที่ใบสั่ง'),
+        receiveDate: col('วันที่รับ'), itemCode: col('รหัสสินค้า'), itemName: col('ชื่อสินค้า'),
+        qty: col('จำนวน'), unit: col('หน่วย'), unitPrice: col('ราคา/หน่วย'),
+        total: col('มูลค่ารวม'), type: col('ประเภท'),
+      };
+      return rows.slice(1).filter(r => txt(r[c.itemCode])).map(r => ({
+        orderDate: r[c.orderDate], branch: r[c.branch], orderNo: r[c.orderNo],
+        receiveDate: r[c.receiveDate], itemCode: r[c.itemCode], itemName: r[c.itemName],
+        qty: r[c.qty], unit: r[c.unit], unitPrice: r[c.unitPrice], total: r[c.total], type: r[c.type],
+      }));
+    };
+    const raw = await pickSource(() => readPlan(), fromSheet);
+    let list = raw.filter(r => txt(r.itemCode)).map(r => ({
+      orderDate: toYMD(r.orderDate),
+      branch: txt(r.branch).toUpperCase(),
+      orderNo: txt(r.orderNo), receiveDate: txt(r.receiveDate),
+      itemCode: txt(r.itemCode), itemName: txt(r.itemName),
+      qty: snum(r.qty) || 0, unit: txt(r.unit),
+      unitPrice: snum(r.unitPrice) || 0, total: snum(r.total) || 0,
+      type: txt(r.type),
     }));
     if (branch) list = list.filter(x => x.branch === txt(branch).toUpperCase());
     if (start_date) list = list.filter(x => x.orderDate && x.orderDate >= start_date);
@@ -950,6 +962,16 @@ async function fetchCostMap() {
     if (code && cost !== null && !(code in map)) map[code] = cost;
   });
   return map;
+}
+
+// อ่านจาก SQL ก่อนเมื่อเปิด SHEETS_SOURCE=sql — ฐานล่มค่อยถอยไปอ่านชีท/GAS
+// (เครื่องมือของ AI เป็นแบบอ่านอย่างเดียว การถอยจึงแค่ทำให้ข้อมูลเก่าลง ไม่ทำให้ข้อมูลสองที่เพี้ยน)
+async function pickSource(fromSql, fromSheet) {
+  if (usingSheetsSql()) {
+    try { return await fromSql(); }
+    catch (err) { console.error('ai-chat: อ่าน SQL ไม่ได้ — ถอยไปอ่านชีท:', err.message); }
+  }
+  return fromSheet();
 }
 
 async function gasPost(url, payload) {

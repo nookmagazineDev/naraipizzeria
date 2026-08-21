@@ -1,28 +1,75 @@
-// Proxy ไป Google Apps Script ของชีท "ค่าใช้จ่ายอื่นๆ" (1YXOaA…)
-// ตั้ง URL ที่ deploy แล้วผ่าน env EXPENSE_GAS_URL บน Vercel หรือใส่ตรง ๆ ตรง fallback ด้านล่าง
+// หลังบ้านของหน้า "ค่าใช้จ่ายอื่นๆ"
+//
+// ที่มาเดิม: proxy ไป Google Apps Script ของชีท 1YXOaA… (ตั้ง URL ผ่าน env EXPENSE_GAS_URL)
+// ที่มาใหม่ (SHEETS_SOURCE=sql): ทำงานกับ dbo.expense_ref / dbo.expense_entry ในฐาน InventoryNarai ตรง ๆ
+//   ชื่อ action และรูปแบบ body/ผลลัพธ์เหมือนเดิมทุกช่อง หน้าเว็บ (lib/expenseApi.js) จึงไม่ต้องแก้
+//
+// ฝั่งอ่าน (getExpenseRefs / getExpenses) ถ้า SQL ล่มจะถอยไปถาม Apps Script ให้
+// ฝั่งเขียนไม่ถอย — เขียนลงชีทบ้างลงฐานบ้าง แปลว่าข้อมูลสองที่จะไม่ตรงกันตั้งแต่นาทีนั้น
+import {
+  usingSql, sqlNotReady, describeTarget,
+  readExpenseRefs, readExpenses, saveOtherExpense, bulkImportExpenses, deleteExpenseByMonth,
+} from '../../lib/sheetsSource';
+
 const SCRIPT_URL =
   process.env.EXPENSE_GAS_URL ||
   'https://script.google.com/macros/s/AKfycbwcRP65mAO0jWusYr1OfcgxpW8GU7yv0t85VcnQ3ShTjEROaXCF2d3MNo_VffNho6Y/exec';
+
+const READ_ACTIONS = { getExpenseRefs: readExpenseRefs, getExpenses: readExpenses };
+const WRITE_ACTIONS = {
+  saveOtherExpense, bulkImport: bulkImportExpenses, deleteExpenseByMonth,
+};
+
+async function callGas(body) {
+  const upstream = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body,
+    redirect: 'follow',
+  });
+  const text = await upstream.text();
+  try { return { json: JSON.parse(text) }; }
+  catch { return { error: 'ตอบกลับจาก GAS ไม่ใช่ JSON' }; }
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ status: 'error', message: 'POST only' });
   }
+
+  const payload = typeof req.body === 'string' ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })() : (req.body || {});
+  const action = String(payload.action || '').trim();
+
+  if (usingSql()) {
+    try {
+      if (READ_ACTIONS[action]) {
+        return res.status(200).json({ status: 'success', source: 'sql', data: await READ_ACTIONS[action]() });
+      }
+      if (WRITE_ACTIONS[action]) {
+        return res.status(200).json({ status: 'success', source: 'sql', data: await WRITE_ACTIONS[action](payload) });
+      }
+      return res.status(400).json({ status: 'error', message: `unknown action: ${action || '(ไม่ระบุ)'}` });
+    } catch (err) {
+      console.error(`expense-gas: ทำงานกับ SQL ไม่ได้ (${describeTarget()}):`, err.message);
+      if (!READ_ACTIONS[action]) {
+        // การเขียนห้ามถอยไปชีท — บอกไปตรง ๆ ว่าบันทึกไม่สำเร็จ ดีกว่าเขียนคนละที่กับที่หน้าเว็บอ่าน
+        return res.status(502).json({
+          status: 'error',
+          message: `บันทึกลง SQL ไม่สำเร็จ (${err.message}) — ยังไม่ได้บันทึกอะไรลงไป ลองใหม่อีกครั้ง`,
+        });
+      }
+      // ฝั่งอ่านถอยไปถาม Apps Script ต่อได้ หน้าเว็บจะได้ไม่ค้าง
+    }
+  } else if (sqlNotReady()) {
+    console.warn('expense-gas: ตั้ง SHEETS_SOURCE=sql ไว้แต่ยังไม่มีรหัสฐานข้อมูล — ใช้ Apps Script ไปก่อน');
+  }
+
   if (!SCRIPT_URL) {
     return res.status(503).json({ status: 'error', message: 'ยังไม่ได้ตั้งค่า EXPENSE_GAS_URL (Apps Script ของชีทค่าใช้จ่ายอื่นๆ)' });
   }
   try {
-    const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
-    const upstream = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body,
-      redirect: 'follow',
-    });
-    const text = await upstream.text();
-    let json;
-    try { json = JSON.parse(text); }
-    catch { return res.status(502).json({ status: 'error', message: 'ตอบกลับจาก GAS ไม่ใช่ JSON' }); }
+    const { json, error } = await callGas(JSON.stringify(payload));
+    if (error) return res.status(502).json({ status: 'error', message: error });
     return res.status(200).json(json);
   } catch (err) {
     return res.status(502).json({ status: 'error', message: err.message });
