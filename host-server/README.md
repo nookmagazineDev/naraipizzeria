@@ -119,6 +119,23 @@ $env:QCRD_WRITE_KEY   = '<สุ่มข้อความยาว ๆ>'      
 - **`QCRD_WRITE_KEY` ต้องตั้งให้ตรงกับ env ชื่อเดียวกันบน Vercel** ไม่งั้นหน้าเว็บบันทึกไม่ได้
   (API ตัวนี้เปิดออกเน็ตและไม่มีระบบล็อกอิน กุญแจนี้คือด่านเดียวที่กันคนอื่นเขียนทับข้อมูล)
 
+## แพลนสั่งของ · ปิดรอบสิ้นเดือน · ค่าใช้จ่ายอื่นๆ · พนักงาน — ฐาน InventoryNarai
+
+รอบที่สองของการเลิกใช้ Google Sheets ใช้ฐานและ pool เดียวกับ `/qcrd/*` (ไม่ต้องตั้ง env ชุดใหม่)
+ตารางและขั้นตอนย้ายข้อมูลอยู่ใน [`docs/sheets-sql-migration.md`](../docs/sheets-sql-migration.md)
+ตรรกะอยู่ใน `lib/sheetsSql.mjs` (ใช้ร่วมกับฝั่ง Vercel) ส่วน `host-server/sheets-db.js` แค่เปิดเป็น endpoint
+
+```powershell
+$env:SHEETS_WRITE_KEY = '<สุ่มข้อความยาว ๆ>'   # ไม่ตั้ง = ใช้ QCRD_WRITE_KEY เดิม
+```
+
+- **ที่ร้านต้องใช้ endpoint พวกนี้** — ต่างจาก `/qcrd/*` ที่ยังมีทางเลือกให้ Vercel ต่อ SQL ตรง
+  เพราะ probe แล้วพบว่า SQL Server ไม่ได้เปิดพอร์ตออกเน็ตเลยสักพอร์ต (ขาด port forward ที่ router)
+  ดูรายละเอียดในข้อ 1 ของ `docs/sheets-sql-migration.md`
+- เช็กว่าพร้อมไหม: `http://localhost:14365/sheets/ping` — คืนจำนวนแถวของทั้ง 5 ตาราง
+  ถ้าขึ้น `Invalid object name` แปลว่ายังไม่ได้สร้างตาราง ให้รัน `scripts\migrate-sheets.ps1` ก่อน
+- ฝั่ง Vercel ตั้ง `SHEETS_SOURCE=sql` · `SHEETS_API_BASE=<URL ของ host API>` · `SHEETS_WRITE_KEY=<ค่าเดียวกัน>`
+
 ## endpoint ทั้งหมด
 
 | Method | Path | คำอธิบาย |
@@ -136,6 +153,12 @@ $env:QCRD_WRITE_KEY   = '<สุ่มข้อความยาว ๆ>'      
 | GET | `/qcrd/menu` `/qcrd/bom` `/qcrd/item` `/qcrd/menugroup` | ข้อมูล QC/RD จากฐาน InventoryNarai |
 | POST | `/qcrd/save` | เพิ่ม/แก้/ลบ ของ QC/RD (ต้องมี header `x-api-key`) |
 | GET | `/qcrd/ping` | เช็กการเชื่อมต่อฐาน QC/RD + เขียนได้ไหม |
+| GET | `/sheets/plan` | แพลนสั่งของทุกสาขา (dbo.stock_plan) |
+| GET | `/sheets/closing?branch=crm` | ยอดยกมาล่าสุดของสาขานั้น (dbo.stock_closing) |
+| GET | `/sheets/expense-ref` `/sheets/expense` | รหัสค่าใช้จ่าย · ค่าใช้จ่ายที่บันทึกแล้ว |
+| GET | `/sheets/employee` | รายชื่อพนักงาน (dbo.hr_employee) |
+| POST | `/sheets/save` | บันทึกค่าใช้จ่าย/แก้ข้อมูลพนักงาน (ต้องมี header `x-api-key`) |
+| GET | `/sheets/ping` | เช็กว่าตาราง 5 ตารางพร้อมไหม + เขียนได้ไหม |
 
 ทุก endpoint คืน `{ data: [...] }` (ยกเว้น debug) โดยชื่อคอลัมน์แปลงเป็นตัวพิมพ์เล็กตัวแรก
 ให้ตรงกับที่ frontend ใช้

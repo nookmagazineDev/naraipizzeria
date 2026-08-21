@@ -5,8 +5,8 @@
 //   ฝั่ง SQL ให้ฐานคัดแถวล่าสุดมาให้เลย ไม่ต้องลากทั้งชีทมาคัดที่ Vercel ทุกครั้ง
 //
 // คืนรูปแบบ: { status:'success', data: { <รหัสสินค้าตัด 0 นำหน้า>: { balance, date, unit, recordedAt } } }
-import { fetchClosingRows } from '../../lib/sheetsSheet';
-import { usingSql, readClosing, describeTarget } from '../../lib/sheetsSource';
+import { fetchClosingRows } from '../../lib/sheetsSheet.mjs';
+import { usingSql, readClosing, sqlRoute } from '../../lib/sheetsSource';
 
 /** คัดเฉพาะรายการล่าสุดของแต่ละไอเทมจากแถวดิบในชีท (เรียงตาม วันที่ปิดยอด > เวลาบันทึก > ลำดับแถว) */
 function latestFromSheetRows(rows, branchKey) {
@@ -57,7 +57,7 @@ export default async function handler(req, res) {
         result = await readClosing(branchKey);
         source = 'sql';
       } catch (err) {
-        console.error(`stock-closing: อ่าน SQL ไม่ได้ (${describeTarget()}) — ถอยไปอ่านชีท:`, err.message);
+        console.error(`stock-closing: อ่าน SQL ไม่ได้ (${sqlRoute()}) — ถอยไปอ่านชีท:`, err.message);
         warning = `อ่านจาก SQL ไม่ได้ (${err.message}) — ข้อมูลชุดนี้มาจากชีท`;
       }
     }

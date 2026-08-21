@@ -146,4 +146,6 @@ function mountQcrd(app) {
   });
 }
 
-module.exports = { mountQcrd, getPool, getCore };
+// ส่งออก q ด้วย เพื่อให้ sheets-db.js ใช้ pool เดียวกันได้ (ฐาน InventoryNarai ตัวเดียวกันเป๊ะ)
+// ไม่ต้องต่อซ้ำสองครั้ง และไม่ต้องตั้ง env ชุดที่สองให้สับสน
+module.exports = { mountQcrd, getPool, getCore, q, withTx };

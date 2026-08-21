@@ -7,7 +7,7 @@
 // ฝั่งอ่าน (getExpenseRefs / getExpenses) ถ้า SQL ล่มจะถอยไปถาม Apps Script ให้
 // ฝั่งเขียนไม่ถอย — เขียนลงชีทบ้างลงฐานบ้าง แปลว่าข้อมูลสองที่จะไม่ตรงกันตั้งแต่นาทีนั้น
 import {
-  usingSql, sqlNotReady, describeTarget,
+  usingSql, sqlRoute,
   readExpenseRefs, readExpenses, saveOtherExpense, bulkImportExpenses, deleteExpenseByMonth,
 } from '../../lib/sheetsSource';
 
@@ -50,7 +50,7 @@ export default async function handler(req, res) {
       }
       return res.status(400).json({ status: 'error', message: `unknown action: ${action || '(ไม่ระบุ)'}` });
     } catch (err) {
-      console.error(`expense-gas: ทำงานกับ SQL ไม่ได้ (${describeTarget()}):`, err.message);
+      console.error(`expense-gas: ทำงานกับ SQL ไม่ได้ (${sqlRoute()}):`, err.message);
       if (!READ_ACTIONS[action]) {
         // การเขียนห้ามถอยไปชีท — บอกไปตรง ๆ ว่าบันทึกไม่สำเร็จ ดีกว่าเขียนคนละที่กับที่หน้าเว็บอ่าน
         return res.status(502).json({
@@ -60,8 +60,6 @@ export default async function handler(req, res) {
       }
       // ฝั่งอ่านถอยไปถาม Apps Script ต่อได้ หน้าเว็บจะได้ไม่ค้าง
     }
-  } else if (sqlNotReady()) {
-    console.warn('expense-gas: ตั้ง SHEETS_SOURCE=sql ไว้แต่ยังไม่มีรหัสฐานข้อมูล — ใช้ Apps Script ไปก่อน');
   }
 
   if (!SCRIPT_URL) {

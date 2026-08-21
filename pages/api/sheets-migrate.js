@@ -29,7 +29,7 @@ import path from 'node:path';
 import { probeEndpoints, extraTargets } from '../../lib/sqlProbe.mjs';
 import {
   fetchPlanRows, fetchClosingRows, fetchExpenseRefs, fetchExpenses, fetchEmployees,
-} from '../../lib/sheetsSheet';
+} from '../../lib/sheetsSheet.mjs';
 import { isConfigured as hasDirectDb, describeTarget, runQuery, credentials } from '../../lib/qcrdPool';
 import { combine, PARAM_LIMIT } from '../../lib/qcrdMigrate.mjs';
 import {

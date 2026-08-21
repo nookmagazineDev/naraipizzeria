@@ -8,7 +8,7 @@
 
 ## 1) ปลายทางคือเครื่องเดียวกับที่ดูสแกนหน้า
 
-`NARAI-PIZZARIA\SQLEXPRESS` ที่ `inventory.dyndns.tv` — เครื่องเดียวกับที่เก็บ
+`NARAI-PIZZARIA\SQLEXPRESS` ที่ออฟฟิศ — เครื่องเดียวกับที่เก็บ
 
 | ฐานข้อมูล | ใช้ทำอะไร |
 |---|---|
@@ -16,8 +16,37 @@
 | `narai_hr` | ตารางงาน |
 | `InventoryNarai` | สต๊อก (`stock_*`) + QC/RD (`qcrd_*`) + **ชุดใหม่ในไฟล์นี้** |
 
-เครื่องนี้ตรึง TCP 1433 และเปิดออกเน็ตอยู่แล้ว หน้าเว็บบน Vercel จึงต่อ SQL ตรงได้เลย
-ไม่ต้องรัน host-server ไม่ต้องเปิด tunnel
+### หน้าเว็บไปถึงฐานได้ 2 ทาง
+
+```
+ทางที่ 1  เบราว์เซอร์ -> /api/* (Vercel) --ต่อ SQL ตรง--> SQL Server
+ทางที่ 2  เบราว์เซอร์ -> /api/* (Vercel) -> host API /sheets/* -> SQL Server   ← ที่ร้านใช้ทางนี้
+```
+
+**ทางที่ 1 ใช้ไม่ได้ที่ร้าน** — probe เมื่อ 2026-08-21 พบว่า SQL Server ไม่ได้เปิดพอร์ตออกเน็ตเลย
+ทดสอบจาก 2 ที่ (Vercel + เครื่องนอก) รวม 7 พอร์ต `1433, 3389, 8080, 14322, 14330, 14333, 14365`
+timeout ทั้งหมด ทั้งที่ฝั่งเครื่องถูกต้องครบแล้ว:
+
+| ชั้น | สถานะ |
+|---|---|
+| SQL Server ฟัง `0.0.0.0:1433` | ✅ |
+| Windows Firewall ขาเข้า 1433 | ✅ Allow / Any |
+| DNS `inventory.dyndns.tv` = `203.154.185.48` = IP จริงของร้าน | ✅ |
+| ไม่ใช่ CGNAT (ในบ้านคือ `172.28.1.48`) | ✅ |
+| **router forward `203.154.185.48` → `172.28.1.48`** | ❌ ไม่มีกฎเลยสักข้อ |
+
+สรุปคือขาดกฎ port forward ที่ router ซึ่งอยู่นอกมือ ถ้าวันหลังเข้าถึง router ได้ ให้เพิ่มกฎเดียว
+
+```
+Protocol TCP · External 14330 · Internal 172.28.1.48 : 1433
+```
+
+แล้วเช็กด้วย `/api/sheets-migrate?key=...&step=probe&port=14330` ขึ้น ✅ เมื่อไหร่
+ก็ตั้ง `QCRD_DB_PORT=14330` บน Vercel — **โค้ดจะสลับไปใช้ทางที่ 1 ให้เองทันที** เร็วกว่าและไม่ต้องแก้อะไร
+
+**ทางที่ 2 คือทางที่ใช้อยู่** — host-server ที่เครื่องออฟฟิศเปิด tunnel ขาออกไปหา Cloudflare
+(`https://api.khanoykorshabu.com`) ซึ่งพิสูจน์แล้วว่าใช้ได้ (`/ping` = HTTP 200)
+ขาออกไม่ต้องพึ่ง port forward จึงไม่ต้องแตะ router เลย
 
 ## 2) ชีทไหนไปเป็นตารางอะไร
 
@@ -47,49 +76,63 @@
 
 | env | ค่า | ไว้ทำอะไร |
 |---|---|---|
-| `SHEETS_MIGRATE_KEY` | ตั้งเอง (รหัสอะไรก็ได้ที่เดายาก) | เปิดใช้ `/api/sheets-migrate` — **ไม่ตั้งก็ได้ถ้ามี `QCRD_MIGRATE_KEY` อยู่แล้ว** ใช้รหัสตัวนั้นแทน ไม่มีสักตัว = ปิดทางนี้ทั้งหมด |
 | `SHEETS_SOURCE` | `sheet` (เริ่มต้น) / `sql` | สลับให้หน้าเว็บอ่าน-เขียน SQL แทนชีท |
+| `SHEETS_API_BASE` | URL ของ host API | ไม่ตั้ง = ใช้ `QCRD_API_BASE` หรือ `STORE_API_BASE` เดิม |
+| `SHEETS_WRITE_KEY` | ให้ตรงกับเครื่องโฮสต์ | กุญแจฝั่งเขียน — ไม่ตั้งก็ใช้ `QCRD_WRITE_KEY` เดิมได้ |
 | `QCRD_SOURCE` | `sheet` (เริ่มต้น) / `sql` | คุมฝั่ง QC/RD + `/api/cost`, `/api/menugroup`, `/api/recipe` |
+| `SHEETS_MIGRATE_KEY` | ตั้งเอง | เปิดใช้ `/api/sheets-migrate` — ไม่ตั้งก็ใช้ `QCRD_MIGRATE_KEY` เดิมได้ |
 
-**รหัสฐานข้อมูลไม่ต้องตั้งใหม่** — ใช้ชุดเดียวกับ QC/RD (`lib/qcrdPool.js` เลือกให้เอง
-ตามลำดับ `QCRD_DB_*` → `ZK_DB_*` → `HR_DB_*`) ถ้ายังไม่เคยตั้งเลย ให้ตั้ง `QCRD_DB_USER` /
-`QCRD_DB_PASSWORD` แล้ว Redeploy
+**ทางที่ 2 ไม่ต้องมีรหัสฐานข้อมูลบน Vercel เลย** — Vercel ไม่ได้ต่อ SQL เอง แค่ยิง HTTP ไปหา host API
+(ถ้าตั้ง `QCRD_DB_USER`/`ZK_DB_USER` ไว้ โค้ดจะพยายามต่อตรงก่อน ซึ่งตอนนี้จะ timeout ทุกครั้ง
+— ถ้าเจออาการหน้าเว็บช้า 15 วิแล้วค่อยขึ้นข้อมูล ให้ลบ env รหัสฐานออกเพื่อให้ข้ามไปใช้ host API เลย)
 
-⚠️ login ที่ใช้ต้องมีสิทธิ์ในฐาน `InventoryNarai` — คำสั่งให้สิทธิ์อยู่ท้าย `schema-sheets.sql`
-ถ้ายังไม่ให้ จะต่อติดแต่ query ไม่ผ่าน ขึ้นว่า `is not able to access the database`
+### ที่เครื่องออฟฟิศต้องตั้งอะไร
+
+```powershell
+$env:SHEETS_WRITE_KEY = '<สุ่มข้อความยาว ๆ>'   # ใช้ QCRD_WRITE_KEY เดิมก็ได้ ไม่ต้องตั้งซ้ำ
+node host-server\server.js
+```
+
+เช็กว่าพร้อม: `http://localhost:14365/sheets/ping` → ต้องได้ `status: success` พร้อมจำนวนแถวของทั้ง 5 ตาราง
 
 ## 4) ลำดับการย้าย
 
-ทุก step เรียกผ่านเบราว์เซอร์ได้เลย (`<เว็บ>` = โดเมนที่ deploy ไว้)
+ที่ร้านต้องย้ายจาก **เครื่องออฟฟิศ** เพราะ Vercel ต่อ SQL ตรงไม่ได้ (ดูข้อ 1)
+เปิด PowerShell ที่โฟลเดอร์รีโปแล้วรันบรรทัดเดียว — ทำครบทั้งสร้างตาราง ย้าย และตรวจให้ในตัว
 
-```
-1. เช็กก่อนว่าต่อฐานได้ไหม / ตารางครบยัง / login มีสิทธิ์อะไร
-   https://<เว็บ>/api/sheets-migrate?key=<KEY>&step=check
-
-2. สร้างตาราง 5 ตาราง (ข้ามได้ถ้ารัน schema-sheets.sql ที่เครื่องออฟฟิศแล้ว)
-   https://<เว็บ>/api/sheets-migrate?key=<KEY>&step=schema&confirm=1
-
-3. ลองย้ายแบบไม่เขียนจริงก่อน — ดูว่าอ่านชีทได้กี่แถว จะเขียนกี่แถว
-   https://<เว็บ>/api/sheets-migrate?key=<KEY>&step=all
-
-4. ย้ายจริงทุกชุด
-   https://<เว็บ>/api/sheets-migrate?key=<KEY>&step=all&confirm=1
-
-5. เทียบจำนวน ชีท ↔ SQL
-   https://<เว็บ>/api/sheets-migrate?key=<KEY>&step=verify
-
-6. ครบแล้วค่อยตั้ง SHEETS_SOURCE=sql (และ QCRD_SOURCE=sql ถ้ายังไม่ได้ตั้ง) แล้ว Redeploy
+```powershell
+git pull
+powershell -ExecutionPolicy Bypass -File .\scripts\migrate-sheets.ps1
 ```
 
-ย้ายทีละชุดก็ได้ ใช้ `&step=plan` / `closing` / `expenseref` / `expense` / `employee` แทน `all`
+จะสำรวจต้นทางให้ดูก่อน แล้วถามยืนยันก่อนเขียนจริง ปลอดภัยที่จะรันซ้ำ (ทุกชุดเขียนแบบ MERGE)
 
-**ถ้าตอบกลับมาว่า `done: false`** แปลว่าชนเพดานเวลา 60 วิของ Vercel ก่อนจะจบ
-ให้เรียกซ้ำตาม `nextOffset` ที่แนบมา เช่น
-`?key=<KEY>&step=plan&confirm=1&offset=4200` — ย้ายซ้ำกี่รอบก็ได้ ทุกชุดเขียนแบบ MERGE
-(มีอยู่แล้วทับของเดิม ไม่มีค่อยเพิ่ม) จึงไม่เกิดแถวซ้ำ
+ตัวเลือกที่ใช้บ่อย
 
-**ต่อฐานไม่ติดเลย** ให้ไล่หาพอร์ตที่เปิดจริงด้วยตัวเดิมของ QC/RD:
-`/api/qcrd-migrate?key=<QCRD_MIGRATE_KEY>&step=probe` แล้วตั้ง `QCRD_DB_HOST` / `QCRD_DB_PORT` ให้ตรง
+```powershell
+.\scripts\migrate-sheets.ps1 -Yes                      # ไม่ต้องถามยืนยัน
+.\scripts\migrate-sheets.ps1 -SkipSchema               # สร้างตารางไปแล้ว
+.\scripts\migrate-sheets.ps1 -Only plan,expense        # เฉพาะบางชุด
+```
+
+เรียก node ตรง ๆ ก็ได้ถ้าอยากคุมทีละขั้น
+
+```powershell
+node scripts\migrate-sheets.mjs --inspect     # สำรวจ ไม่แตะฐาน (ไม่ต้องมีรหัสฐานด้วยซ้ำ)
+node scripts\migrate-sheets.mjs --dry-run     # อ่านครบ แปลงครบ แต่ไม่เขียน
+node scripts\migrate-sheets.mjs               # ย้ายจริง
+node scripts\migrate-sheets.mjs --verify      # เทียบจำนวน ต้นทาง ↔ SQL
+```
+
+### ถ้าวันหลังเปิดพอร์ต SQL ได้
+
+จะกดย้ายจากหน้าเว็บแทนก็ได้ ไม่ต้องเข้าเครื่องออฟฟิศ
+
+```
+?key=<KEY>&step=check    →  &step=schema&confirm=1  →  &step=all&confirm=1  →  &step=verify
+```
+
+ทั้งสองทางเขียนลงตารางเดียวกันด้วยตรรกะชุดเดียวกัน (`lib/sheetsMigrate.mjs`) ผลลัพธ์เหมือนกันเป๊ะ
 
 ## 5) หลังตั้ง `SHEETS_SOURCE=sql` แล้วอะไรเปลี่ยนบ้าง
 
@@ -125,7 +168,11 @@ action อื่นของสต๊อก (`getBranches`, `getStockItems`, `ge
 | ไฟล์ | หน้าที่ |
 |---|---|
 | `docs/schema-sheets.sql` | โครงตาราง 5 ตาราง (รันซ้ำได้) |
-| `lib/sheetsSheet.js` | ตัวอ่านฝั่งชีท/GAS — ใช้ทั้งตอนย้ายและตอนถอยกลับ |
+| `lib/sheetsSheet.mjs` | ตัวอ่านฝั่งชีท/GAS — ใช้ทั้งตอนย้ายและตอนถอยกลับ |
 | `lib/sheetsMigrate.mjs` | แปลงแถวชีท → เรคคอร์ด + คำสั่ง MERGE |
-| `lib/sheetsSource.js` | สวิตช์ `SHEETS_SOURCE` + ตัวอ่าน-เขียนฝั่ง SQL |
-| `pages/api/sheets-migrate.js` | ตัวย้ายข้อมูลที่กดจากหน้าเว็บ |
+| `lib/sheetsSql.mjs` | ตรรกะฝั่ง SQL (อ่าน/เขียน) ที่ Vercel กับ host-server ใช้ร่วมกัน |
+| `lib/sheetsSource.js` | สวิตช์ `SHEETS_SOURCE` + เลือกทาง (ต่อตรง / host API) |
+| `host-server/sheets-db.js` | endpoint `/sheets/*` ที่เครื่องออฟฟิศ |
+| `scripts/migrate-sheets.ps1` | ย้ายข้อมูลจากเครื่องออฟฟิศ (บรรทัดเดียวจบ) |
+| `scripts/migrate-sheets.mjs` | ตัวย้ายจริงที่ .ps1 เรียกใช้ |
+| `pages/api/sheets-migrate.js` | ย้าย/probe จากหน้าเว็บ (ใช้ได้เมื่อต่อ SQL ตรงได้) |
