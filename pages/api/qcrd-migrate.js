@@ -4,6 +4,7 @@
 // จะได้ไม่ต้องไปนั่งรันสคริปต์ที่เครื่องออฟฟิศ (ถ้าอยากรันที่เครื่องเอง ใช้ scripts/migrate-qcrd.ps1)
 //
 //   GET /api/qcrd-migrate?key=<QCRD_MIGRATE_KEY>&step=check     ← ดูสถานะ ไม่แตะข้อมูล (ค่าเริ่มต้น)
+//   GET /api/qcrd-migrate?key=...&step=probe                     ← ไล่ทดสอบว่าพอร์ตไหนของ SQL เปิดให้ต่อได้
 //   GET /api/qcrd-migrate?key=...&step=schema&confirm=1          ← สร้างตาราง/เพิ่มคอลัมน์
 //   GET /api/qcrd-migrate?key=...&step=group&confirm=1           ← ย้ายหมวดหมู่เมนู
 //   GET /api/qcrd-migrate?key=...&step=menu&confirm=1            ← ย้ายเมนู
@@ -19,6 +20,7 @@
 // งานหนักเกิน 60 วิของ Vercel ไม่ได้ — แต่ละครั้งจึงทำเท่าที่ทัน แล้วบอก nextOffset กลับมา
 // ให้เรียกซ้ำต่อจากเดิม (ตอบ done:false = ยังไม่จบ, done:true = ชุดนั้นครบแล้ว)
 import { readFile } from 'node:fs/promises';
+import net from 'node:net';
 import path from 'node:path';
 import { fetchQcrdSheet } from '../../lib/qcrdSheet';
 import { isConfigured as hasDirectDb, describeTarget, runQuery, credentials } from '../../lib/qcrdPool';
@@ -73,7 +75,72 @@ async function writeBatched(records, buildStmt, { deadline, startAt = 0, describ
   return { done, batches, finished: true };
 }
 
+/**
+ * ทดสอบว่าต่อ TCP ถึงปลายทางไหนได้บ้าง — ไว้หาว่า SQL Server เปิดพอร์ตอะไรออกเน็ต
+ * (พอร์ตที่เดาไว้ในโค้ดอาจไม่ตรงกับที่เปิดจริง แล้ว error ที่ได้คือ "timeout" เฉย ๆ ซึ่งบอกอะไรไม่ได้เลย)
+ */
+async function probeEndpoints(extra = []) {
+  const hosts = [...new Set([
+    process.env.QCRD_DB_HOST, process.env.ZK_DB_HOST, process.env.HR_DB_HOST,
+    '203.154.185.48', 'inventory.dyndns.tv', 'storenarai.dyndns.tv',
+  ].filter(Boolean))];
+  const ports = [...new Set([
+    Number(process.env.QCRD_DB_PORT) || 0, Number(process.env.ZK_DB_PORT) || 0, Number(process.env.HR_DB_PORT) || 0,
+    1433, 14322, 14333, 1435,
+  ].filter(Boolean))];
+  const targets = [];
+  hosts.forEach((h) => ports.forEach((p) => targets.push({ host: h, port: p })));
+  extra.forEach((t) => targets.push(t));
+
+  const tryOne = ({ host, port }) => new Promise((done) => {
+    const t0 = Date.now();
+    const sock = net.createConnection({ host, port, timeout: 4000 });
+    const finish = (open, detail) => {
+      sock.destroy();
+      done({ target: `${host}:${port}`, open, ms: Date.now() - t0, detail });
+    };
+    sock.on('connect', () => finish(true));
+    sock.on('timeout', () => finish(false, 'timeout (พอร์ตไม่เปิด หรือ firewall กันไว้)'));
+    sock.on('error', (e) => finish(false, e.code || e.message));
+  });
+
+  const results = await Promise.all(targets.map(tryOne));
+  const open = results.filter((r) => r.open);
+
+  // เช็กทางที่ 2 ไปด้วยเลย: host-server ที่เครื่องออฟฟิศ (ผ่าน tunnel) พร้อมใช้หรือยัง
+  const apiBase = (process.env.QCRD_API_BASE || process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com')
+    .replace(/\/+$/, '');
+  const hitApi = async (path) => {
+    try {
+      const r = await fetch(`${apiBase}${path}`, {
+        signal: AbortSignal.timeout(8000),
+        headers: { 'ngrok-skip-browser-warning': 'true' },
+      });
+      const text = (await r.text()).slice(0, 200);
+      return `HTTP ${r.status} — ${text.replace(/\s+/g, ' ')}`;
+    } catch (e) {
+      return `ต่อไม่ได้: ${e.message}`;
+    }
+  };
+  const [ping, qcrdPing] = await Promise.all([hitApi('/ping'), hitApi('/qcrd/ping')]);
+
+  return {
+    step: 'probe',
+    openPorts: open.map((r) => `${r.target} (${r.ms}ms)`),
+    tried: results.map((r) => `${r.open ? '✅' : '❌'} ${r.target} — ${r.open ? `ต่อได้ ${r.ms}ms` : r.detail}`),
+    hostApi: { base: apiBase, ping, qcrdPing },
+    hint: open.length
+      ? `เจอปลายทางที่ต่อได้ — ตั้ง QCRD_DB_HOST/QCRD_DB_PORT บน Vercel ให้ตรงกับ ${open[0].target} แล้ว Redeploy` +
+        ' (ถ้าต่อได้แต่ยัง query ไม่ผ่าน แปลว่าพอร์ตนั้นไม่ใช่ SQL Server)'
+      : 'ต่อ SQL ตรงไม่ได้สักพอร์ต — ดูช่อง hostApi: ถ้า /ping ตอบ HTTP 200 แปลว่าเครื่องออฟฟิศออนไลน์อยู่ '
+        + 'ให้ไปอัปเดตโค้ด host-server แล้วใช้ทางที่ 2 (ดู docs/qcrd-sql-migration.md) '
+        + 'ส่วนการย้ายข้อมูลรันที่เครื่องออฟฟิศด้วย scripts/migrate-qcrd.ps1 ได้เลย',
+  };
+}
+
 async function runStep(step, { confirm, offset, deadline }) {
+  if (step === 'probe') return probeEndpoints();
+
   if (step === 'schema') {
     // อ่านไฟล์สคีมาจากรีโป (next.config.js สั่งให้แนบ docs/ ไปกับฟังก์ชันนี้)
     const file = path.join(process.cwd(), 'docs', 'schema-qcrd.sql');
@@ -198,9 +265,13 @@ export default async function handler(req, res) {
                OBJECT_ID(N'dbo.stock_item') AS has_stock_item,
                OBJECT_ID(N'dbo.qcrd_menu') AS has_qcrd_menu`).catch((e) => ({ error: e.message }));
       if (perms.error) {
+        const cannotConnect = /Failed to connect|ETIMEOUT|ECONNREFUSED|ENOTFOUND|ESOCKET/i.test(perms.error);
         return res.status(200).json({
           status: 'error', step, db: describeTarget(), credentialsFrom: credentials().from,
           message: perms.error,
+          hint: cannotConnect
+            ? 'ต่อปลายทางไม่ได้เลย — เรียก &step=probe เพื่อไล่ดูว่าพอร์ตไหนเปิดให้ต่อได้บ้าง'
+            : undefined,
         });
       }
       const p = perms[0] || {};
@@ -224,7 +295,7 @@ export default async function handler(req, res) {
             : 'ยังไม่มีตาราง และ login นี้สร้างตารางไม่ได้ — ให้สิทธิ์ db_ddladmin เพิ่ม หรือรัน docs/schema-qcrd.sql ที่เครื่องออฟฟิศครั้งเดียว',
       });
     }
-    if (!['schema', 'group', 'menu', 'bom', 'item', 'verify'].includes(step)) {
+    if (!['schema', 'group', 'menu', 'bom', 'item', 'verify', 'probe'].includes(step)) {
       return res.status(400).json({ status: 'error', message: `ไม่รู้จัก step=${step}` });
     }
     const data = await runStep(step, { confirm, offset, deadline });
