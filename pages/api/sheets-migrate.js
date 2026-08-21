@@ -4,6 +4,7 @@
 // (Google Sheets + SQL Server) ซึ่ง Vercel ทำได้อยู่แล้ว จะได้ไม่ต้องไปนั่งรันสคริปต์ที่เครื่องออฟฟิศ
 //
 //   GET /api/sheets-migrate?key=<SHEETS_MIGRATE_KEY>&step=check       ← ดูสถานะ ไม่แตะข้อมูล (ค่าเริ่มต้น)
+//   GET /api/sheets-migrate?key=...&step=probe                        ← ไล่ทดสอบว่าพอร์ตไหนของ SQL เปิดให้ต่อได้
 //   GET /api/sheets-migrate?key=...&step=schema&confirm=1              ← สร้างตาราง 5 ตาราง
 //   GET /api/sheets-migrate?key=...&step=plan&confirm=1                ← ย้ายแพลนสั่งของ
 //   GET /api/sheets-migrate?key=...&step=closing&confirm=1             ← ย้ายยอดปิดรอบสิ้นเดือน
@@ -18,12 +19,13 @@
 // ⚠️ ต้องมีรหัสเปิดทางก่อน ไม่มี = ปิดทางนี้ไว้ทั้งหมด — ใช้ SHEETS_MIGRATE_KEY
 //    หรือ QCRD_MIGRATE_KEY ที่ตั้งไว้แล้วตอนย้าย QC/RD ก็ได้ (ตัวไหนตั้งไว้ก่อนใช้ตัวนั้น)
 //    และต้องตั้งรหัสฐานข้อมูล (QCRD_DB_USER/PASSWORD หรือ ZK_DB_/HR_DB_) ให้ต่อ SQL ตรงได้
-//    ต่อไม่ติดให้เรียก /api/qcrd-migrate?...&step=probe ไล่ดูว่าพอร์ตไหนเปิดจริง
+//    ต่อไม่ติดให้เรียก &step=probe ไล่ดูว่าพอร์ตไหนเปิดจริง (probe ไม่ต้องใช้รหัสฐาน)
 //
 // งานหนักเกิน 60 วิของ Vercel ไม่ได้ — แต่ละครั้งจึงทำเท่าที่ทัน แล้วบอก nextOffset กลับมา
 // ให้เรียกซ้ำต่อจากเดิม (ตอบ done:false = ยังไม่จบ, done:true = ชุดนั้นครบแล้ว)
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { probeEndpoints } from '../../lib/sqlProbe.mjs';
 import {
   fetchPlanRows, fetchClosingRows, fetchExpenseRefs, fetchExpenses, fetchEmployees,
 } from '../../lib/sheetsSheet';
@@ -193,6 +195,18 @@ export default async function handler(req, res) {
   }
   if (str(q.key) !== key) return res.status(401).json({ status: 'error', message: 'key ไม่ถูกต้อง' });
 
+  const step0 = str(q.step) || 'check';
+
+  // probe เป็นการทดสอบ TCP ล้วน ๆ ไม่ต้อง login ฐาน — ต้องกดได้แม้ยังไม่ได้ตั้งรหัสฐาน
+  // (เป็นตัวที่ใช้ตอบว่า "ต่อไม่ติด" เพราะพอร์ตปิด หรือเพราะรหัสผิด ซึ่งเป็นคนละเรื่องกัน)
+  if (step0 === 'probe') {
+    try {
+      return res.status(200).json({ status: 'success', ...(await probeEndpoints()) });
+    } catch (err) {
+      return res.status(500).json({ status: 'error', step: 'probe', message: err.message });
+    }
+  }
+
   if (!hasDirectDb()) {
     return res.status(400).json({
       status: 'error',
@@ -200,7 +214,7 @@ export default async function handler(req, res) {
     });
   }
 
-  const step = str(q.step) || 'check';
+  const step = step0;
   const confirm = String(q.confirm || '') === '1';
   const offset = Math.max(0, Number(q.offset) || 0);
   const deadline = Date.now() + BUDGET_MS;
@@ -224,7 +238,7 @@ export default async function handler(req, res) {
           status: 'error', step, db: describeTarget(), credentialsFrom: credentials().from,
           message: perms.error,
           hint: cannotConnect
-            ? 'ต่อปลายทางไม่ได้เลย — เรียก /api/qcrd-migrate?key=...&step=probe เพื่อไล่ดูว่าพอร์ตไหนเปิดให้ต่อได้'
+            ? 'ต่อปลายทางไม่ได้เลย — เรียก &step=probe (รหัสเดิม) เพื่อไล่ดูว่าพอร์ตไหนเปิดให้ต่อได้'
             : undefined,
         });
       }
@@ -288,7 +302,7 @@ export default async function handler(req, res) {
     if (!SETS[step]) {
       return res.status(400).json({
         status: 'error',
-        message: `ไม่รู้จัก step=${step} — ใช้ได้: check, schema, ${ORDER.join(', ')}, all, verify`,
+        message: `ไม่รู้จัก step=${step} — ใช้ได้: check, probe, schema, ${ORDER.join(', ')}, all, verify`,
       });
     }
 
