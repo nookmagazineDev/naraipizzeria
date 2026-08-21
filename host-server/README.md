@@ -144,7 +144,28 @@ $env:SHEETS_WRITE_KEY = '<สุ่มข้อความยาว ๆ>'   # �
   ดูรายละเอียดในข้อ 1 ของ `docs/sheets-sql-migration.md`
 - เช็กว่าพร้อมไหม: `http://localhost:14365/sheets/ping` — คืนจำนวนแถวของทั้ง 5 ตาราง
   ถ้าขึ้น `Invalid object name` แปลว่ายังไม่ได้สร้างตาราง ให้รัน `scripts\migrate-sheets.ps1` ก่อน
-- ฝั่ง Vercel ตั้ง `SHEETS_SOURCE=sql` · `SHEETS_API_BASE=<URL ของ host API>` · `SHEETS_WRITE_KEY=<ค่าเดียวกัน>`
+- ฝั่ง Vercel ตั้ง `SHEETS_API_BASE=<URL ของ host API>` · `SHEETS_WRITE_KEY=<ค่าเดียวกัน>`
+  (`SHEETS_SOURCE=sql` คุมแพลน/ปิดรอบ/ค่าใช้จ่าย ส่วน**พนักงานยึด SQL เสมอ ไม่ต้องตั้งอะไร**)
+
+### หน้าเว็บขึ้น `host API ตอบไม่ใช่ JSON (HTTP 404)`
+
+แปลว่า tunnel ถึงเครื่องนี้แล้ว แต่ `node server.js` ที่รันอยู่เป็น**เวอร์ชันเก่าที่ยังไม่มี `/sheets/*`**
+(Express ตอบ `Cannot GET /sheets/employee` เป็น HTML) — โค้ดที่ node ถือไว้คือเวอร์ชันตอนที่มันเริ่มรัน
+`git pull` เฉย ๆ ไม่ทำให้ endpoint ใหม่โผล่ **ต้องปิดตัวเก่าแล้วเปิดใหม่**
+
+```powershell
+cd <โฟลเดอร์รีโป>
+git pull
+cd host-server
+npm install                       # เผื่อมี dependency ใหม่
+powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart
+```
+
+`-Restart` คือตัวที่ปิด node เก่าซึ่งถือ port 14365 อยู่ให้ (ถ้าไม่ใส่ สคริปต์จะเห็นว่าพอร์ตไม่ว่าง
+แล้วข้ามขั้นตอนเปิด API ไปเลย — ตัวเก่าก็ยังรันอยู่เหมือนเดิม)
+
+เช็กให้ชัวร์ก่อนกลับไปดูหน้าเว็บ: เปิด `http://localhost:14365/sheets/ping` ต้องได้ JSON
+ที่มีจำนวนแถวของ 5 ตารางและ `writeEnabled: true`
 
 ## endpoint ทั้งหมด
 

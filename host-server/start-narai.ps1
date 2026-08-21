@@ -6,7 +6,12 @@
 #
 #  วิธีใช้ (คลิกขวา > Run with PowerShell  หรือ):
 #     powershell -ExecutionPolicy Bypass -File .\start-narai.ps1
+#
+#  หลัง git pull ต้องใช้ -Restart ด้วย ไม่งั้นตัวเก่าที่ค้างอยู่จะไม่ถูกปิด
+#  แล้วโค้ดใหม่จะไม่ถูกโหลด (อาการ: endpoint ใหม่ขึ้น HTTP 404 ทั้งที่ pull แล้ว):
+#     powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart
 # ════════════════════════════════════════════════════════════
+param([switch]$Restart)   # -Restart = ปิด API ตัวเก่าที่ถือ port 14365 อยู่ก่อน แล้วเปิดใหม่
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $cfProc = $null
@@ -38,6 +43,15 @@ try {
 
   # 3) เริ่ม API ถ้ายังไม่รัน
   $listening = (Test-NetConnection -ComputerName localhost -Port 14365 -WarningAction SilentlyContinue).TcpTestSucceeded
+  if ($listening -and $Restart) {
+    # node ที่รันอยู่ถือโค้ดเวอร์ชันตอนที่มันเริ่ม — git pull เฉย ๆ ไม่ทำให้ endpoint ใหม่โผล่
+    Write-Host "■ ปิด API ตัวเก่าที่ถือ port 14365 อยู่..." -ForegroundColor Yellow
+    Get-NetTCPConnection -LocalPort 14365 -State Listen -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty OwningProcess -Unique |
+      ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 2
+    $listening = $false
+  }
   if (-not $listening) {
     Write-Host "▶ เริ่ม Narai API (port 14365)..." -ForegroundColor Cyan
     Start-Process -FilePath "node" -ArgumentList "server.js" -WorkingDirectory $here -WindowStyle Normal
