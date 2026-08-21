@@ -52,6 +52,18 @@ export default async function handler(req, res) {
     let json;
     try { json = JSON.parse(text); }
     catch { return res.status(502).json({ status: 'error', message: gasFailed('ตอบกลับจาก GAS ไม่ใช่ JSON', sqlError) }); }
+
+    // บอกหน้าเว็บว่าคำตอบนี้มาจากชีท ไม่ใช่ SQL — และถ้าเป็นการ "ถอยมาอ่านชีท" ทั้งที่โหมด sql เปิดอยู่
+    // ต้องเตือนให้เห็นด้วย เพราะการแก้ไขพนักงานเขียนลง SQL อย่างเดียว (ไม่ถอยมาชีท)
+    // ถ้าอ่านชีทแต่เขียน SQL อาการที่ผู้ใช้เจอคือ "กดบันทึกขึ้นสำเร็จ แต่ข้อมูลบนหน้าไม่เปลี่ยน"
+    if (json && json.status === 'success' && (action === 'getEmployees' || action === 'saveEmployee')) {
+      json.source = 'sheet';
+      if (sqlError) {
+        json.warning = 'ตอนนี้รายชื่อที่เห็นอ่านจาก Google Sheets ไม่ใช่ SQL ' +
+          `(อ่าน SQL ไม่ได้: ${sqlError}) — การแก้ไขพนักงานจะเขียนลง SQL คนละที่กับที่อ่าน ` +
+          'ค่าที่แสดงจึงอาจไม่ใช่ค่าล่าสุด ให้แก้ทางเชื่อม SQL ก่อนแล้วโหลดหน้าใหม่';
+      }
+    }
     return res.status(200).json(json);
   } catch (err) {
     return res.status(502).json({ status: 'error', message: gasFailed(err.message, sqlError) });

@@ -15,7 +15,12 @@
  *   - เขียนเฉพาะฟิลด์ที่ส่งมาเท่านั้น (ฟิลด์อื่นไม่ถูกแตะ)
  */
 
-var EMP_SHEET_ID = '';        // ใส่ ID ชีตพนักงานถ้าสคริปต์เป็นแบบ standalone (ว่าง = ใช้ชีตที่ผูกกับสคริปต์)
+// ⚠️ สำคัญที่สุด: ถ้าสคริปต์นี้ไม่ได้ผูกกับ "สเปรดชีตพนักงาน" โดยตรง (เช่นไปวางไว้ในสคริปต์ของสต๊อก
+//    ซึ่งเปิดชีตพนักงานด้วย openById อยู่แล้ว) ต้องใส่ ID ชีตพนักงานลง EMP_SHEET_ID ด้วย
+//    ไม่งั้น getActiveSpreadsheet() จะได้สเปรดชีตคนละเล่มกับที่ getEmployees อ่าน — เขียนแล้ว
+//    ตอบว่าสำเร็จ แต่หน้าเว็บอ่านอีกเล่มจึงไม่เห็นอะไรเปลี่ยน (อาการ "บันทึกแล้วข้อมูลไม่อัพเดท")
+//    ID คือส่วนกลาง URL: https://docs.google.com/spreadsheets/d/<ตรงนี้คือ ID>/edit
+var EMP_SHEET_ID = '';        // ใส่ ID ชีตพนักงานถ้าสคริปต์ไม่ได้ผูกกับชีตพนักงาน (ว่าง = ใช้ชีตที่ผูกกับสคริปต์)
 var EMP_SHEET_NAME = 'DATA';  // ชื่อแท็บพนักงาน
 
 // ชื่อหัวคอลัมน์ที่เป็นไปได้ของแต่ละฟิลด์ (เทียบแบบตัดช่องว่าง/ตัวพิมพ์เล็ก)
@@ -50,7 +55,7 @@ function _empColMap(values) {
       var cell = _norm(values[r][c]);
       if (!cell) continue;
       for (var field in EMP_HEADER_ALIASES) {
-        if (map[field] !== undefined) continue;
+        if (m[field] !== undefined) continue;   // คอลัมน์แรกที่ตรงชนะ (ของเดิมเช็ก map ซึ่งยังว่างเสมอ ตัวหลังจึงทับตัวหน้า)
         var aliases = EMP_HEADER_ALIASES[field];
         for (var a = 0; a < aliases.length; a++) {
           if (cell === _norm(aliases[a])) { m[field] = c; found++; break; }
@@ -70,7 +75,12 @@ function saveEmployee_(data) {
 
   var values = sh.getDataRange().getValues();
   var cm = _empColMap(values);
-  if (cm.map.hrCode === undefined) return { status: 'error', message: 'หาคอลัมน์รหัส (hrCode) จากหัวตารางไม่เจอ' };
+  if (cm.map.hrCode === undefined || cm.map.fullName === undefined) {
+    // แท็บชื่อ DATA มีได้ในหลายสเปรดชีต — ถ้าหัวตารางไม่มีทั้งรหัสและชื่อ แปลว่ามาผิดเล่ม
+    return { status: 'error', message:
+      'แท็บ ' + EMP_SHEET_NAME + ' ของสเปรดชีต "' + sh.getParent().getName() + '" ไม่มีหัวคอลัมน์รหัส/ชื่อพนักงาน — ' +
+      'น่าจะเป็นคนละเล่มกับชีตพนักงาน ให้ใส่ ID ชีตพนักงานในตัวแปร EMP_SHEET_ID' };
+  }
 
   // หาแถวที่รหัสตรง
   var rowNum = -1;
@@ -89,5 +99,27 @@ function saveEmployee_(data) {
     sh.getRange(rowNum, cm.map[field] + 1).setValue(data[field]);
     updated.push(field);
   }
-  return { status: 'success', data: { hrCode: hrCode, row: rowNum, updated: updated, skipped: skipped } };
+
+  // อ่านกลับมาดูว่าค่าลงจริง — เซลล์ที่ถูกป้องกันไว้ (Protected range) setValue ไม่ error
+  // แต่ค่าก็ไม่เปลี่ยน ถ้าไม่อ่านกลับจะตอบว่าสำเร็จทั้งที่ชีทเหมือนเดิม
+  SpreadsheetApp.flush();
+  var after = sh.getRange(rowNum, 1, 1, sh.getLastColumn()).getDisplayValues()[0];
+  var unchanged = [];
+  for (var u = 0; u < updated.length; u++) {
+    var f = updated[u];
+    var want = String(data[f] == null ? '' : data[f]).trim();
+    var got = String(after[cm.map[f]] == null ? '' : after[cm.map[f]]).trim();
+    // ชีทอาจจัดรูปแบบค่าใหม่ (วันที่/ตัวเลข) จึงนับว่าไม่ผ่านเฉพาะตอนที่ยังเป็นค่าว่างทั้งที่ส่งค่ามา
+    if (got !== want && (got === '' || (want !== '' && got === String(values[rowNum - 1][cm.map[f]]).trim()))) {
+      unchanged.push(f);
+    }
+  }
+  if (unchanged.length && unchanged.length === updated.length) {
+    return { status: 'error', message:
+      'เขียนลงชีทไม่ติดสักช่อง (แถว ' + rowNum + ' ของ "' + sh.getParent().getName() + '") — ' +
+      'เซลล์อาจถูกป้องกันไว้ (Protected range) หรือบัญชีที่ deploy สคริปต์ไม่มีสิทธิ์แก้ชีตนี้' };
+  }
+  return { status: 'success', data: {
+    hrCode: hrCode, row: rowNum, sheet: sh.getParent().getName(),
+    updated: updated, skipped: skipped, unchanged: unchanged } };
 }
