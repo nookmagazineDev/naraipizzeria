@@ -139,29 +139,29 @@ GO
       ใน SQL จึงแยกเป็นคนละคอลัมน์ (plan_only กับ item_type) แล้วจบปัญหาไปเลย
       ส่วนตอนย้ายข้อมูล scripts/migrate-qcrd.mjs จะดูค่าที่อยู่ในช่องนั้นว่าเป็นแบบไหน
       แล้วลงให้ถูกคอลัมน์ (TRUE/ture -> plan_only, วัตถุดิบ/แพ็กเกจจิ้ง -> item_type) */
-IF COL_LENGTH(N'dbo.stock_item', N'converter') IS NULL
-    ALTER TABLE dbo.stock_item ADD converter DECIMAL(18,4) NULL;   -- I หน่วยเล็กต่อ 1 หน่วยซื้อ
-GO
-IF COL_LENGTH(N'dbo.stock_item', N'sub_item1') IS NULL
-    ALTER TABLE dbo.stock_item ADD sub_item1 NVARCHAR(50) NULL;    -- F ไอเทมทดแทน 1
-GO
-IF COL_LENGTH(N'dbo.stock_item', N'sub_item2') IS NULL
-    ALTER TABLE dbo.stock_item ADD sub_item2 NVARCHAR(50) NULL;    -- G ไอเทมทดแทน 2
-GO
-IF COL_LENGTH(N'dbo.stock_item', N'sub_item3') IS NULL
-    ALTER TABLE dbo.stock_item ADD sub_item3 NVARCHAR(50) NULL;    -- H ไอเทมทดแทน 3
-GO
-IF COL_LENGTH(N'dbo.stock_item', N'item_type') IS NULL
-    ALTER TABLE dbo.stock_item ADD item_type NVARCHAR(50) NULL;    -- O ประเภท (วัตถุดิบ/แพ็กเกจจิ้ง)
-GO
-IF COL_LENGTH(N'dbo.stock_item', N'used_when') IS NULL
-    ALTER TABLE dbo.stock_item ADD used_when NVARCHAR(50) NULL;    -- P ใช้กับ (ทั้งสอง/ทานที่ร้าน/ห่อกลับบ้าน)
-GO
-
-/* ถ้ายังไม่เคยรัน docs/schema-stock.sql บนเครื่องนี้ (ไม่มี stock_item) ให้รันไฟล์นั้นก่อน
-   ไม่งั้น ALTER ข้างบนจะข้ามไปเงียบ ๆ แล้วหน้า QC/RD จะหาคอลัมน์ไม่เจอตอนบันทึก */
+/* ต้องมี stock_item อยู่ก่อน (มาจาก docs/schema-stock.sql ของรีโป Narai-branch)
+   เช็กตรงนี้ก่อน ALTER เพื่อให้ได้ข้อความที่บอกวิธีแก้ ไม่ใช่ error ดิบว่าหาตารางไม่เจอ */
 IF OBJECT_ID(N'dbo.stock_item', N'U') IS NULL
     RAISERROR (N'ยังไม่มีตาราง dbo.stock_item — ต้องรัน docs/schema-stock.sql ของรีโป Narai-branch ก่อน', 16, 1);
+GO
+
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'converter') IS NULL
+    ALTER TABLE dbo.stock_item ADD converter DECIMAL(18,4) NULL;   -- I หน่วยเล็กต่อ 1 หน่วยซื้อ
+GO
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'sub_item1') IS NULL
+    ALTER TABLE dbo.stock_item ADD sub_item1 NVARCHAR(50) NULL;    -- F ไอเทมทดแทน 1
+GO
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'sub_item2') IS NULL
+    ALTER TABLE dbo.stock_item ADD sub_item2 NVARCHAR(50) NULL;    -- G ไอเทมทดแทน 2
+GO
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'sub_item3') IS NULL
+    ALTER TABLE dbo.stock_item ADD sub_item3 NVARCHAR(50) NULL;    -- H ไอเทมทดแทน 3
+GO
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'item_type') IS NULL
+    ALTER TABLE dbo.stock_item ADD item_type NVARCHAR(50) NULL;    -- O ประเภท (วัตถุดิบ/แพ็กเกจจิ้ง)
+GO
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'used_when') IS NULL
+    ALTER TABLE dbo.stock_item ADD used_when NVARCHAR(50) NULL;    -- P ใช้กับ (ทั้งสอง/ทานที่ร้าน/ห่อกลับบ้าน)
 GO
 
 /* ==================== สิทธิ์ของ login ที่ API ใช้ ====================

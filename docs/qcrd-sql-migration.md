@@ -93,11 +93,38 @@
 
 ## 3) ขั้นตอนติดตั้ง
 
-รันบนเครื่องที่ออฟฟิศ (เครื่องเดียวกับ SQL Server / ที่รัน `host-server`)
+ต้องรัน **ที่เครื่องออฟฟิศ** (เครื่องเดียวกับ SQL Server / ที่รัน `host-server`) เท่านั้น
+เพราะ SQL Server ต่อได้จาก localhost และชีทต้องเปิดจากเน็ตที่เข้า Google ได้
+
+### วิธีเร็ว — คำสั่งเดียวจบ
+
+เปิด PowerShell ที่โฟลเดอร์รีโป (`D:\...\naraipizzeria`) แล้วรัน:
+
+```powershell
+# ดึงโค้ดชุดนี้ลงเครื่องก่อน — ถ้า merge เข้า main แล้วใช้แค่ git pull origin main
+git fetch origin claude/qc-rd-data-sql-migration-kmbn80
+git checkout claude/qc-rd-data-sql-migration-kmbn80
+
+powershell -ExecutionPolicy Bypass -File .\scripts\migrate-qcrd.ps1
+```
+
+สคริปต์ทำให้ครบทุกขั้นในรอบเดียว: โหลดรหัสจาก `host-server\db.env.ps1` → `npm install` (ถ้าจำเป็น)
+→ สร้างตาราง → สำรวจชีทแล้ว**หยุดถามก่อนเขียนจริง** → ย้ายข้อมูล → เทียบจำนวนแถวชีทกับ SQL
+แล้วบอกต่อว่าต้องตั้ง env อะไรอีกบ้าง
+
+| ตัวเลือก | ใช้เมื่อ |
+|---|---|
+| `-Yes` | ไม่ต้องให้ถามยืนยัน (รันซ้ำ) |
+| `-SkipSchema` | เคยสร้างตารางแล้ว |
+| `-Only menu,bom` | ย้ายเฉพาะบางชุด (`group,menu,bom,item`) |
+
+### วิธีทีละขั้น (ถ้าอยากคุมเอง)
 
 ```powershell
 # 1) สร้างตาราง + เพิ่มคอลัมน์ (ครั้งเดียว, รันซ้ำได้)
 sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i docs\schema-qcrd.sql
+#    ไม่มี sqlcmd บนเครื่อง ใช้ตัวรันของ node แทนได้ ผลเหมือนกัน:
+node scripts/run-sql.mjs docs/schema-qcrd.sql
 
 # 2) ตั้งค่าเชื่อมต่อของ session นี้
 $env:QCRD_DB_SERVER   = 'localhost\SQLEXPRESS'
@@ -113,11 +140,15 @@ node scripts/migrate-qcrd.mjs --dry-run
 
 # 5) ย้ายจริง
 node scripts/migrate-qcrd.mjs
+
+# 6) เทียบจำนวนแถวชีท ↔ SQL ว่าครบไหม
+node scripts/migrate-qcrd.mjs --verify
 ```
 
 > ต้อง `npm install` ที่โฟลเดอร์รีโปก่อนถ้ายังไม่เคยลง (สคริปต์ใช้ package `mssql`)
 > โหมด `--inspect` / `--dry-run` ใช้ได้เลยโดยไม่ต้องลง เพราะไม่แตะฐานข้อมูล
 > สคริปต์รันซ้ำได้ไม่เกิดข้อมูลซ้ำ — ทุกชุดเป็นทะเบียน ใช้ `MERGE` ทับของเดิม
+> ถ้า `--verify` ขึ้นว่าจำนวนไม่ตรง ให้รัน `--only=<ชุดที่ไม่ตรง>` ซ้ำอีกรอบก่อนเปิดใช้งาน
 
 ### เปิดใช้จากหน้าเว็บ
 
@@ -155,7 +186,10 @@ set QCRD_WRITE_KEY=<สุ่มข้อความยาว ๆ มาสั�
 | ไฟล์ | หน้าที่ |
 |---|---|
 | `docs/schema-qcrd.sql` | ตารางใหม่ 3 ตาราง + คอลัมน์ที่เพิ่มใน `stock_item` |
-| `scripts/migrate-qcrd.mjs` | ย้ายข้อมูลจากชีทเข้า SQL (`--inspect` / `--dry-run` / `--only=`) |
+| `scripts/migrate-qcrd.ps1` | ตัวรันคำสั่งเดียวจบที่เครื่องออฟฟิศ (สคีมา → ย้าย → ตรวจ) |
+| `scripts/migrate-qcrd.mjs` | ย้ายข้อมูลจากชีทเข้า SQL (`--inspect` / `--dry-run` / `--verify` / `--only=`) |
+| `scripts/run-sql.mjs` | รันไฟล์ `.sql` ด้วย node สำหรับเครื่องที่ไม่มี `sqlcmd` |
+| `scripts/qcrdDb.mjs` | ค่าเชื่อมต่อฐานข้อมูลที่สคริปต์ทั้งสองใช้ร่วมกัน |
 | `host-server/qcrd-db.js` | อ่าน/เขียน QC/RD บน SQL — ตัวที่มาแทน `qcrd-apps-script.gs` |
 | `lib/qcrdSource.js` | ตัวตัดสินใจว่าจะไปชีทหรือ SQL + ตัวเรียก host API |
 | `pages/api/qcrd.js` | ฝั่งอ่านของหน้าเว็บ (สลับ sheet/sql + ถอยกลับอัตโนมัติ) |

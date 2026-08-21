@@ -16,6 +16,7 @@
  *        node scripts/migrate-qcrd.mjs --inspect
  *   4) ลองแบบไม่เขียนจริง:  node scripts/migrate-qcrd.mjs --dry-run
  *   5) ย้ายจริง:            node scripts/migrate-qcrd.mjs
+ *   6) ตรวจว่าครบ:         node scripts/migrate-qcrd.mjs --verify
  *
  * env ที่ใช้ (ถ้าไม่ตั้ง จะไล่ใช้ค่าของ host-server ที่ตั้งไว้อยู่แล้ว)
  *   QCRD_DB_SERVER   (หรือ DB_SERVER)    ค่าเริ่มต้น 'localhost\SQLEXPRESS'
@@ -26,6 +27,7 @@
  * ตัวเลือก
  *   --dry-run          อ่านชีทและสรุปผลอย่างเดียว ไม่เขียนลงฐานข้อมูล
  *   --inspect          พิมพ์แถวแรก ๆ ของทุกชีทออกมาดิบ ๆ + รายงานรหัสวัตถุดิบซ้ำ
+ *   --verify           เทียบจำนวนแถวในชีทกับที่อยู่ใน SQL แล้วบอกว่าตรงไหมทีละชุด
  *   --only=menu,bom    ย้ายเฉพาะบางชุด (group,menu,bom,item)
  *   --db=InventoryNarai ฐานข้อมูลปลายทาง
  *   --gid-menu=0       ระบุ gid ของแท็บเอง (มีครบ: --gid-menu --gid-bom --gid-item --gid-group)
@@ -42,6 +44,7 @@
  */
 
 import process from 'node:process';
+import { openPool, describeTarget } from './qcrdDb.mjs';
 
 /* ---- ต้นทาง: ชีทต้นทุนเมนู (ค่าตรงกับ lib/qcrdSheet.js) ---- */
 const QCRD_SS = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
@@ -53,6 +56,7 @@ const argVal = (name, fallback) => {
 };
 const DRY_RUN = args.includes('--dry-run');
 const INSPECT = args.includes('--inspect');
+const VERIFY = args.includes('--verify');
 const DB_NAME = argVal('db', process.env.QCRD_DB_NAME || process.env.STOCK_DB_NAME || 'InventoryNarai');
 const ONLY = String(argVal('only', '')).split(',').map((s) => s.trim()).filter(Boolean);
 const wants = (part) => ONLY.length === 0 || ONLY.includes(part);
@@ -115,42 +119,7 @@ async function loadSheet(part) {
 
 let pool = null;
 async function getPool() {
-  if (pool) return pool;
-  let mssql;
-  try {
-    mssql = (await import('mssql')).default;
-  } catch (err) {
-    if (err?.code === 'ERR_MODULE_NOT_FOUND') {
-      throw new Error(
-        "ยังไม่ได้ลง package 'mssql' — รัน npm install ที่โฟลเดอร์รีโปก่อน\n" +
-        '  โหมด --inspect กับ --dry-run ใช้ได้เลยโดยไม่ต้องลง เพราะไม่แตะฐานข้อมูล'
-      );
-    }
-    throw err;
-  }
-  const raw = process.env.QCRD_DB_SERVER || process.env.DB_SERVER || 'localhost\\SQLEXPRESS';
-  const [host, instance] = raw.split('\\');
-  const config = {
-    server: host,
-    database: DB_NAME,
-    user: process.env.QCRD_DB_USER || process.env.DB_USER || 'sa',
-    password: process.env.QCRD_DB_PASSWORD || process.env.DB_PASSWORD || '',
-    options: {
-      encrypt: false,
-      trustServerCertificate: true,
-      enableArithAbort: true,
-      ...(instance ? { instanceName: instance } : {}),
-    },
-    pool: { max: 4, min: 0, idleTimeoutMillis: 30000 },
-    requestTimeout: 120000,
-  };
-  if (!instance) config.port = Number(process.env.QCRD_DB_PORT || process.env.DB_PORT) || 1433;
-  try {
-    pool = await new mssql.ConnectionPool(config).connect();
-  } catch (err) {
-    throw new Error(`ต่อ SQL Server (${raw}/${DB_NAME}) ไม่ได้: ${err.message}`);
-  }
-  pool.__sql = mssql;
+  if (!pool) pool = await openPool(DB_NAME);
   return pool;
 }
 
@@ -431,11 +400,77 @@ async function inspectSheets() {
   }
 }
 
+/* ------------------------------- โหมดตรวจครบ ------------------------------- */
+
+/**
+ * เทียบ "จำนวนของจริงในชีท" กับ "จำนวนที่อยู่ใน SQL" ทีละชุด
+ * ใช้หลังย้ายเสร็จ เพื่อยืนยันว่าไม่มีอะไรตกหล่นก่อนไปเปิด QCRD_SOURCE=sql
+ */
+async function verify() {
+  console.log(`เทียบชีทกับ ${describeTarget(DB_NAME)}\n`);
+  const one = async (label, sheetCount, sqlText) => {
+    const rows = await run(sqlText);
+    const n = Number(rows.recordset?.[0]?.n) || 0;
+    const same = n === sheetCount;
+    console.log(`  ${same ? '✔' : '⚠️'} ${label}: ชีท ${sheetCount} · SQL ${n}${same ? '' : `  (ต่างกัน ${n - sheetCount})`}`);
+    return same;
+  };
+
+  let allOk = true;
+  if (wants('group')) {
+    const rows = await loadSheet('group');
+    const n = rows.filter((r) => str(r[0]) && str(r[1])).length;
+    if (!await one('หมวดหมู่เมนู', n, 'SELECT COUNT(*) AS n FROM dbo.qcrd_menu_group')) allOk = false;
+  }
+  if (wants('menu')) {
+    const rows = await loadSheet('menu');
+    const codes = new Set(rows.map((r) => str(r[0])).filter(Boolean));
+    if (!await one('เมนู', codes.size, 'SELECT COUNT(*) AS n FROM dbo.qcrd_menu')) allOk = false;
+  }
+  if (wants('bom')) {
+    const rows = await loadSheet('bom');
+    const n = rows.filter((r) => str(r[0]) && str(r[3])).length;
+    if (!await one('แถวสูตร BOM', n, 'SELECT COUNT(*) AS n FROM dbo.qcrd_bom')) allOk = false;
+  }
+  if (wants('item')) {
+    const rows = await loadSheet('item');
+    const keys = new Set(rows.map((r) => normCode(r[0])).filter(Boolean));
+    // ตารางนี้ฝั่งสต๊อกก็เขียนด้วย SQL จึงอาจมีมากกว่าชีทได้ (ไม่ใช่ความผิดพลาด)
+    const rowsSql = await run('SELECT COUNT(*) AS n FROM dbo.stock_item');
+    const inSql = Number(rowsSql.recordset?.[0]?.n) || 0;
+    console.log(`  ${inSql >= keys.size ? '✔' : '⚠️'} วัตถุดิบ: ชีท ${keys.size} รหัส (ไม่ซ้ำ) · SQL ${inSql} แถว` +
+      (inSql > keys.size ? '  — SQL มากกว่าได้ ถ้าฝั่งสต๊อกเพิ่มไว้' : ''));
+    if (inSql < keys.size) allOk = false;
+
+    // ช่องที่เพิ่งเพิ่มเข้ามา ถ้าว่างทั้งตารางแปลว่ายังไม่ได้ย้ายชุด item
+    const filled = await run(`
+      SELECT SUM(CASE WHEN converter IS NOT NULL THEN 1 ELSE 0 END) AS conv,
+             SUM(CASE WHEN item_type IS NOT NULL THEN 1 ELSE 0 END) AS itype,
+             SUM(CASE WHEN sub_item1 IS NOT NULL THEN 1 ELSE 0 END) AS sub1
+      FROM dbo.stock_item`);
+    const f = filled.recordset?.[0] || {};
+    console.log(`     คอลัมน์ที่เพิ่มใหม่ที่มีค่าแล้ว: ตัวแปลงหน่วย ${f.conv || 0} · ประเภท ${f.itype || 0} · ไอเทมทดแทน ${f.sub1 || 0}`);
+  }
+
+  // สูตรที่อ้างวัตถุดิบซึ่งไม่มีในทะเบียน — ต้นทุนของแถวพวกนี้จะเป็น 0 เวลาบันทึกใหม่
+  if (wants('bom')) {
+    const orphan = await run(`
+      SELECT COUNT(DISTINCT b.item_key) AS n
+      FROM dbo.qcrd_bom b LEFT JOIN dbo.stock_item i ON i.item_key = b.item_key
+      WHERE i.item_key IS NULL`);
+    const n = Number(orphan.recordset?.[0]?.n) || 0;
+    console.log(`  ${n ? '⚠️' : '✔'} วัตถุดิบในสูตรที่ไม่มีในทะเบียน: ${n} รหัส`);
+  }
+
+  console.log(allOk ? '\n✅ ครบ — เปิด QCRD_SOURCE=sql ได้' : '\n⚠️ มีชุดที่จำนวนไม่ตรง ดูรายละเอียดข้างบนก่อนเปิดใช้');
+}
+
 /* --------------------------------- main --------------------------------- */
 
 async function main() {
   console.log(`ต้นทาง: ชีท ${QCRD_SS}`);
   if (INSPECT) { await inspectSheets(); return; }
+  if (VERIFY) { await verify(); return; }
   console.log(`ปลายทาง: ${DB_NAME}${DRY_RUN ? ' (dry-run)' : ''}`);
 
   if (wants('group')) { console.log('\n[หมวดหมู่เมนู]'); await migrateGroups(); }
