@@ -485,7 +485,9 @@ const TOOL_HANDLERS = {
 
   // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว) — dbo.hr_employee เดิมคือชีทแท็บ DATA
   async get_employees_summary({ branch }) {
-    const list = await pickSource(() => readEmployees(), () => gasPost(HR_GAS, { action: 'getEmployees', branch: 'all' }));
+    // พนักงานยึด dbo.hr_employee ที่เดียวเหมือนหน้ารายชื่อ — ไม่ถอยไปอ่านชีท
+    // ไม่งั้น AI จะตอบจากข้อมูลเก่าที่ไม่ตรงกับที่หน้าเว็บแก้ไว้
+    const list = await readEmployees();
     let emps = (list || []).filter(e => e.hrCode && String(e.fullName || '').trim() !== 'ชื่อ - สกุล');
     if (branch) emps = emps.filter(e => String(e.branch).toUpperCase() === String(branch).toUpperCase());
     const byBranch = {};

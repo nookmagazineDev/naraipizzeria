@@ -20,8 +20,8 @@ const LABEL_OF = Object.fromEntries(EDIT_FIELDS.map(f => [f.key, f.label]));
 
 /*
  * NARAI OFFICE — รายชื่อพนักงาน (โหมดดูอย่างเดียว)
- * ดึงผ่าน /api/stock-gas → action=getEmployees ซึ่งอ่านจาก dbo.hr_employee เมื่อ SHEETS_SOURCE=sql
- * (ยังไม่ได้ตั้ง = ถอยไปอ่านชีท DATA ผ่าน Apps Script เหมือนเดิม)
+ * ดึงผ่าน /api/stock-gas → action=getEmployees ซึ่งอ่านจาก dbo.hr_employee (ฐาน InventoryNarai) ที่เดียว
+ * ทั้งอ่านและบันทึกยึดฐานเดียวกัน ไม่ถอยไปชีท DATA แล้ว — ต่อฐานไม่ได้จะขึ้น error ให้เห็น
  * แสดงผลให้เหมือนหน้า "รายชื่อพนักงาน" ของ narai-branch.vercel.app
  */
 
@@ -79,7 +79,6 @@ export default function EmployeeList() {
   const [editEmp, setEditEmp] = useState(null);   // { ...ค่าที่กำลังแก้, _orig }
   const [savingEmp, setSavingEmp] = useState(false);
   const [toast, setToast] = useState(null);       // { ok, msg }
-  const [readNote, setReadNote] = useState('');  // เตือนว่ารายชื่อที่เห็นอยู่อ่านมาจากไหน (ชีท/SQL)
 
   useEffect(() => { fetchEmployees(); }, []);
 
@@ -125,48 +124,30 @@ export default function EmployeeList() {
       if (Object.keys(changed).length === 0) { setToast({ ok: false, msg: 'ไม่มีการเปลี่ยนแปลง' }); setSavingEmp(false); return; }
       const res = await apiCall('saveEmployee', { hrCode: editEmp.hrCode, ...changed });
 
-      // บอกตามที่เขียนได้จริง ไม่ใช่ตามจำนวนช่องที่ผู้ใช้แก้
-      // ฝั่งชีทคืน updated = ช่องที่เขียนลงชีทได้ · skipped = ช่องที่ "หาคอลัมน์ในหัวตารางไม่เจอ"
-      // ของเดิมขึ้นว่าสำเร็จทุกครั้งโดยไม่ดูสองค่านี้ ช่องที่ชีทไม่มีคอลัมน์รองรับจึงหายเงียบ ๆ
-      // (ฝั่ง SQL คืน { updated: <จำนวนแถว>, fields } ซึ่งไม่มี skipped — เช็กชนิดก่อนใช้)
-      const d = res.data || {};
-      const wrote = Array.isArray(d.updated) ? d.updated.length : (Number(d.updated) ? Object.keys(changed).length : 0);
-      const skipped = Array.isArray(d.skipped) ? d.skipped : [];
-      if (wrote === 0) {
-        throw new Error(skipped.length
-          ? `ไม่มีช่องไหนถูกบันทึก — หาคอลัมน์ของ ${skipped.map(k => LABEL_OF[k] || k).join(', ')} ในชีทไม่เจอ`
-          : 'ไม่มีช่องไหนถูกบันทึก (ลองใหม่อีกครั้ง)');
-      }
+      // ดูที่ฐานตอบกลับก่อน — updated คือจำนวนแถวที่คำสั่ง UPDATE โดนจริง (ต้องเป็น 1)
+      // ของเดิมขึ้นว่าสำเร็จทุกครั้งโดยไม่ดูค่านี้เลย ช่องที่ไม่ได้เขียนจึงหายเงียบ ๆ
+      const wrote = Number((res.data || {}).updated) ? Object.keys(changed).length : 0;
+      if (wrote === 0) throw new Error('ไม่มีช่องไหนถูกบันทึกลงฐานข้อมูล (ลองใหม่อีกครั้ง)');
 
       // แล้วอ่านรายชื่อใหม่มาเทียบว่า "ค่าที่เพิ่งส่งไปติดจริงไหม"
-      // เพราะตัวบันทึกตอบว่าสำเร็จได้ทั้งที่เขียนคนละที่กับที่หน้านี้อ่าน (เขียน SQL แต่หน้าเว็บถอยไปอ่านชีท
-      // หรือ Apps Script เขียนลงสเปรดชีตอื่นเพราะไม่ได้ตั้ง EMP_SHEET_ID) — อาการคือ "ขึ้นสำเร็จแต่ข้อมูลไม่เปลี่ยน"
+      // ทั้งอ่านและเขียนยิงไป dbo.hr_employee ที่เดียวแล้ว ปกติต้องตรงกันเสมอ
+      // ถ้าไม่ตรง = ฐานไม่ได้รับค่านั้นจริง ต้องขึ้นเป็น error ไม่ใช่ปิดฟอร์มแล้วบอกว่าสำเร็จ
       const fresh = await fetchEmployees();
       if (fresh) {
         const after = fresh.find(e => String(e.hrCode ?? '') === String(editEmp.hrCode ?? ''));
         const stale = Object.keys(changed).filter(k => !sameValue(k, after ? after[k] : undefined, changed[k]));
         if (!after || stale.length) {
-          const where = res.source === 'sql'
-            ? 'เขียนลง SQL ไปแล้ว แต่รายชื่อที่หน้านี้อ่านกลับมาไม่ใช่ค่าที่เพิ่งเขียน — แปลว่าหน้านี้กำลังอ่านจากที่อื่น (ถอยไปอ่าน Google Sheets อยู่)'
-            : 'ตัวเขียนตอบว่าสำเร็จ แต่ค่าที่อ่านกลับมายังเป็นของเดิม — ตรวจว่า Apps Script เขียนลงสเปรดชีต/แท็บเดียวกับที่หน้านี้อ่านหรือเปล่า (ตัวแปร EMP_SHEET_ID / EMP_SHEET_NAME ในสคริปต์)';
           throw new Error((after
-            ? `กดบันทึกแล้วแต่ค่ายังเป็นของเดิม: ${stale.map(k => LABEL_OF[k] || k).join(', ')}`
-            : `บันทึกแล้วแต่หารหัส ${editEmp.hrCode} ในรายชื่อที่อ่านกลับมาไม่เจอ`) + ' — ' + where);
+            ? `กดบันทึกแล้วแต่ค่าที่อ่านกลับมาจากฐานยังเป็นของเดิม: ${stale.map(k => LABEL_OF[k] || k).join(', ')}`
+            : `บันทึกแล้วแต่หารหัส ${editEmp.hrCode} ในฐานข้อมูลไม่เจอ`)
+            + ' — ลองใหม่อีกครั้ง ถ้ายังเป็นเหมือนเดิมให้แจ้ง IT ตรวจ dbo.hr_employee');
         }
       }
 
-      setToast({
-        ok: skipped.length === 0,
-        msg: `บันทึก ${editEmp.hrCode} แล้ว ${wrote} ช่อง`
-          + (skipped.length ? ` · ไม่มีคอลัมน์ในชีท: ${skipped.map(k => LABEL_OF[k] || k).join(', ')}` : '')
-          + (res.source === 'sql' ? ' (SQL)' : ''),
-      });
+      setToast({ ok: true, msg: `บันทึก ${editEmp.hrCode} ลงฐานข้อมูลแล้ว ${wrote} ช่อง` });
       setEditEmp(null);   // ปิดฟอร์มเฉพาะตอนที่ยืนยันแล้วว่าข้อมูลเปลี่ยนจริง
     } catch (err) {
-      const msg = /unknown action/.test(err.message || '')
-        ? 'ยังไม่ได้เพิ่ม action saveEmployee ใน Apps Script (ดูวิธีในแชท)'
-        : (err.message || 'บันทึกไม่สำเร็จ');
-      setToast({ ok: false, msg });
+      setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
       setSavingEmp(false);
     }
@@ -186,9 +167,6 @@ export default function EmployeeList() {
         return true;
       });
       setEmployees(list);
-      // /api/stock-gas แนบมาเมื่ออ่าน SQL ไม่ได้แล้วถอยไปอ่านชีทแทน — ต้องบอกให้เห็น
-      // ไม่งั้นหน้าเว็บจะโชว์ข้อมูลชีทเก่าทั้งที่การแก้ไขทุกครั้งเขียนลง SQL
-      setReadNote(res.warning || '');
       return list;
     } catch (err) {
       setError(err.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลพนักงาน');
@@ -265,14 +243,6 @@ export default function EmployeeList() {
             </div>
           </div>
         </div>
-
-        {/* เตือนว่ากำลังอ่านคนละที่กับที่เขียน */}
-        {readNote && (
-          <div className="mx-6 mt-6 p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs flex items-start gap-2">
-            <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
-            <span>{readNote}</span>
-          </div>
-        )}
 
         {/* Error */}
         {error && (
