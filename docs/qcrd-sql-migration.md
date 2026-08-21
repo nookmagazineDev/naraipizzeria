@@ -149,6 +149,34 @@ https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=verify                
 
 จบแล้วค่อยตั้ง `QCRD_SOURCE=sql` ตามหัวข้อ "เปิดใช้จากหน้าเว็บ" ด้านล่าง
 
+### วิธีที่ 1.5 — เครื่องออฟฟิศเป็นตัวกลาง (ใช้เมื่อ SQL ไม่ได้เปิดออกเน็ต)
+
+ถ้า `step=probe` บอกว่าไม่มีพอร์ต SQL ไหนต่อได้จาก Vercel เลย (ซึ่งเป็นค่าที่ควรเป็นในแง่ความปลอดภัย)
+ให้ใช้เครื่องออฟฟิศที่รัน `host-server` อยู่แล้วเป็นตัวกลางแทน — ที่เครื่องนั้นรันคำสั่งเดียว:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-qcrd-office.ps1
+```
+
+สคริปต์จะหาโฟลเดอร์ที่รัน API อยู่ (ตัวที่ตอบ `http://localhost:14365/ping`), อัปเดตไฟล์ QC/RD
+(`git pull` ถ้าเป็นรีโป ไม่งั้นโหลดไฟล์จาก GitHub มาวาง), แทรก 2 บรรทัดใน `server.js` เพื่อเปิด
+`/qcrd/*` (สำรองไฟล์เดิมไว้ก่อน), ตั้ง `QCRD_WRITE_KEY`, รีสตาร์ท แล้วพิมพ์ลิงก์ย้ายข้อมูลออกมาให้
+
+จากนั้นย้ายข้อมูลจากเบราว์เซอร์เครื่องไหนก็ได้ (เครื่องออฟฟิศเป็นคนอ่านชีทและเขียน SQL เอง):
+
+```
+https://api.khanoykorshabu.com/qcrd/migrate?key=<KEY>&step=check
+https://api.khanoykorshabu.com/qcrd/migrate?key=<KEY>&step=schema&confirm=1
+https://api.khanoykorshabu.com/qcrd/migrate?key=<KEY>&step=group&confirm=1
+https://api.khanoykorshabu.com/qcrd/migrate?key=<KEY>&step=menu&confirm=1
+https://api.khanoykorshabu.com/qcrd/migrate?key=<KEY>&step=bom&confirm=1
+https://api.khanoykorshabu.com/qcrd/migrate?key=<KEY>&step=item&confirm=1
+https://api.khanoykorshabu.com/qcrd/migrate?key=<KEY>&step=verify
+```
+
+ทางนี้ไม่มีลิมิต 60 วินาทีเหมือน Vercel จึงจบในรอบเดียวทุก step
+เสร็จแล้วตั้งบน Vercel: `QCRD_SOURCE=sql` + `QCRD_WRITE_KEY=<ค่าเดียวกับเครื่องออฟฟิศ>`
+
 ### วิธีที่ 2 — รันสคริปต์เอง คำสั่งเดียวจบ
 
 เปิด PowerShell ที่โฟลเดอร์รีโป (`D:\...\naraipizzeria`) แล้วรัน:
@@ -261,6 +289,7 @@ set QCRD_WRITE_KEY=<สุ่มข้อความยาว ๆ มาสั�
 | `docs/schema-qcrd.sql` | ตารางใหม่ 3 ตาราง + คอลัมน์ที่เพิ่มใน `stock_item` |
 | `pages/api/qcrd-migrate.js` | ย้ายข้อมูลจากฝั่ง Vercel (วิธีที่ 1) — แบ่งเป็น step กดจากลิงก์ได้ |
 | `lib/qcrdMigrate.mjs` | การจับคอลัมน์ชีท → เรคคอร์ด → คำสั่ง SQL ใช้ร่วมกันทั้ง endpoint และสคริปต์ |
+| `scripts/setup-qcrd-office.ps1` | ตั้งเครื่องออฟฟิศให้เป็นตัวกลางในคำสั่งเดียว (อัปเดตไฟล์ → เปิด /qcrd/* → รีสตาร์ท) |
 | `scripts/migrate-qcrd.ps1` | ตัวรันคำสั่งเดียวจบที่เครื่องออฟฟิศ (สคีมา → ย้าย → ตรวจ) |
 | `scripts/migrate-qcrd.mjs` | ย้ายข้อมูลจากชีทเข้า SQL (`--inspect` / `--dry-run` / `--verify` / `--only=`) |
 | `scripts/run-sql.mjs` | รันไฟล์ `.sql` ด้วย node สำหรับเครื่องที่ไม่มี `sqlcmd` |
