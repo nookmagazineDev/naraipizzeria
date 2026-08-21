@@ -15,7 +15,8 @@
 //
 // ไม่ใส่ confirm=1 = ทดลอง (อ่านชีท นับแถว แต่ไม่เขียนอะไรลงฐาน)
 //
-// ⚠️ ต้องตั้ง env SHEETS_MIGRATE_KEY บน Vercel ก่อน ไม่ตั้ง = ปิดทางนี้ไว้ทั้งหมด
+// ⚠️ ต้องมีรหัสเปิดทางก่อน ไม่มี = ปิดทางนี้ไว้ทั้งหมด — ใช้ SHEETS_MIGRATE_KEY
+//    หรือ QCRD_MIGRATE_KEY ที่ตั้งไว้แล้วตอนย้าย QC/RD ก็ได้ (ตัวไหนตั้งไว้ก่อนใช้ตัวนั้น)
 //    และต้องตั้งรหัสฐานข้อมูล (QCRD_DB_USER/PASSWORD หรือ ZK_DB_/HR_DB_) ให้ต่อ SQL ตรงได้
 //    ต่อไม่ติดให้เรียก /api/qcrd-migrate?...&step=probe ไล่ดูว่าพอร์ตไหนเปิดจริง
 //
@@ -181,11 +182,13 @@ async function verify() {
 
 export default async function handler(req, res) {
   const q = { ...req.query, ...(typeof req.body === 'object' ? req.body : {}) };
-  const key = process.env.SHEETS_MIGRATE_KEY || '';
+  // ตั้ง SHEETS_MIGRATE_KEY แยกก็ได้ ไม่ตั้งก็ใช้รหัสเดิมของ QC/RD ได้เลย (คนเดียวกันเป็นคนกด
+  // และคุมฐานเดียวกัน) จะได้ไม่ต้องไปตั้ง env ใหม่บน Vercel แค่เพราะจะกดย้ายข้อมูลรอบนี้
+  const key = process.env.SHEETS_MIGRATE_KEY || process.env.QCRD_MIGRATE_KEY || '';
   if (!key) {
     return res.status(503).json({
       status: 'error',
-      message: 'ยังไม่ได้ตั้ง env SHEETS_MIGRATE_KEY บน Vercel — ทางนี้ถูกปิดไว้',
+      message: 'ยังไม่ได้ตั้ง env SHEETS_MIGRATE_KEY (หรือ QCRD_MIGRATE_KEY) บน Vercel — ทางนี้ถูกปิดไว้',
     });
   }
   if (str(q.key) !== key) return res.status(401).json({ status: 'error', message: 'key ไม่ถูกต้อง' });

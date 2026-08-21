@@ -47,7 +47,7 @@
 
 | env | ค่า | ไว้ทำอะไร |
 |---|---|---|
-| `SHEETS_MIGRATE_KEY` | ตั้งเอง (รหัสอะไรก็ได้ที่เดายาก) | เปิดใช้ `/api/sheets-migrate` — ไม่ตั้ง = ปิดทางนี้ทั้งหมด |
+| `SHEETS_MIGRATE_KEY` | ตั้งเอง (รหัสอะไรก็ได้ที่เดายาก) | เปิดใช้ `/api/sheets-migrate` — **ไม่ตั้งก็ได้ถ้ามี `QCRD_MIGRATE_KEY` อยู่แล้ว** ใช้รหัสตัวนั้นแทน ไม่มีสักตัว = ปิดทางนี้ทั้งหมด |
 | `SHEETS_SOURCE` | `sheet` (เริ่มต้น) / `sql` | สลับให้หน้าเว็บอ่าน-เขียน SQL แทนชีท |
 | `QCRD_SOURCE` | `sheet` (เริ่มต้น) / `sql` | คุมฝั่ง QC/RD + `/api/cost`, `/api/menugroup`, `/api/recipe` |
 
