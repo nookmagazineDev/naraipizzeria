@@ -45,6 +45,11 @@
 
 import process from 'node:process';
 import { openPool, describeTarget } from './qcrdDb.mjs';
+import {
+  mapGroups, mapMenus, mapBomByMenu, mapItems,
+  groupStmt, menuStmt, bomStmt, itemStmt, itemBranchStmt,
+  str, normCode,
+} from '../lib/qcrdMigrate.mjs';
 
 /* ---- ต้นทาง: ชีทต้นทุนเมนู (ค่าตรงกับ lib/qcrdSheet.js) ---- */
 const QCRD_SS = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
@@ -68,15 +73,8 @@ const SOURCES = {
   item: { sheet: 'item', gid: argVal('gid-item', '302875824') },
 };
 
-const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
-const num = (v) => {
-  const n = parseFloat(String(v ?? '').replace(/,/g, ''));
-  return Number.isFinite(n) ? n : null;
-};
-/* ต้องให้ผลตรงกับ normalizeId() ของ Apps Script และ normCode() ของ migrate-stock.mjs */
-const normCode = (v) => str(v).replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
-const TRUTHY = /^(y|yes|true|ture|1|ใช่)$/i;
-const DEFAULT_CONVERTER = 1000;   // ตรงกับ lib/qcrdSheet.js และ buildBomRows_
+/* การจับคอลัมน์ชีท -> เรคคอร์ด -> คำสั่ง SQL อยู่ใน lib/qcrdMigrate.mjs
+   ใช้ร่วมกับ /api/qcrd-migrate (ตัวย้ายข้อมูลฝั่ง Vercel) จะได้ไม่มีสองสำเนาให้แก้ตามกัน */
 
 /* --------------------------- อ่านชีทผ่าน export CSV --------------------------- */
 
@@ -150,216 +148,35 @@ async function runBatch(label, rows, buildStatement) {
 
 /* --------------------------- ส่วนที่ย้ายแต่ละชุด --------------------------- */
 
-/** ชีท 'menucodegroup': A=รหัสหมวด B=ชื่อหมวด */
 async function migrateGroups() {
-  const rows = await loadSheet('group');
-  const groups = [];
-  rows.forEach((r, index) => {
-    const code = str(r[0]);
-    const name = str(r[1]);
-    if (!code || !name) return;
-    groups.push({ code, name, sortOrder: index });
-  });
-  await runBatch('qcrd_menu_group', groups, (g) => ({
-    text: `
-      MERGE dbo.qcrd_menu_group AS t
-      USING (SELECT @group_code AS group_code) AS s ON t.group_code = s.group_code
-      WHEN MATCHED THEN UPDATE SET group_name = @group_name, sort_order = @sort_order, updated_at = SYSDATETIME()
-      WHEN NOT MATCHED THEN INSERT (group_code, group_name, sort_order)
-        VALUES (@group_code, @group_name, @sort_order);`,
-    params: { group_code: g.code, group_name: g.name, sort_order: g.sortOrder },
-  }));
+  const { rows } = mapGroups(await loadSheet('group'));
+  await runBatch('qcrd_menu_group', rows, (g) => groupStmt(g));
 }
 
-/** ชีท 'menu': A=Code B=NameThai C=MenuCode D=UnitPrice E=cost F=สถานะ G=ปริมาณที่ได้ H=หน่วยที่ได้ */
 async function migrateMenus() {
-  const rows = await loadSheet('menu');
-  const menus = [];
-  const seen = new Set();
-  let dup = 0;
-  rows.forEach((r, index) => {
-    const code = str(r[0]);
-    if (!code) return;
-    if (seen.has(code)) dup++;
-    seen.add(code);
-    menus.push({
-      code,
-      key: normCode(code),
-      name: str(r[1]) || code,
-      group: str(r[2]),
-      price: num(r[3]),
-      cost: num(r[4]),
-      status: str(r[5]),
-      yieldQty: num(r[6]),
-      yieldUnit: str(r[7]),
-      sortOrder: index,
-    });
-  });
-  if (dup) console.log(`  ⚠️ รหัสเมนูซ้ำในชีท ${dup} แถว — แถวท้ายสุดจะทับแถวก่อนหน้า`);
-  await runBatch('qcrd_menu', menus, (m) => ({
-    text: `
-      MERGE dbo.qcrd_menu AS t
-      USING (SELECT @menu_code AS menu_code) AS s ON t.menu_code = s.menu_code
-      WHEN MATCHED THEN UPDATE SET
-        menu_key = @menu_key, menu_name = @menu_name, group_code = @group_code,
-        price = @price, cost = @cost, status = @status,
-        yield_qty = @yield_qty, yield_unit = @yield_unit, sort_order = @sort_order,
-        updated_at = SYSDATETIME()
-      WHEN NOT MATCHED THEN INSERT
-        (menu_code, menu_key, menu_name, group_code, price, cost, status, yield_qty, yield_unit, sort_order)
-        VALUES (@menu_code, @menu_key, @menu_name, @group_code, @price, @cost, @status,
-                @yield_qty, @yield_unit, @sort_order);`,
-    params: {
-      menu_code: m.code, menu_key: m.key, menu_name: m.name, group_code: m.group || null,
-      price: m.price, cost: m.cost, status: m.status || null,
-      yield_qty: m.yieldQty, yield_unit: m.yieldUnit || null, sort_order: m.sortOrder,
-    },
-  }));
+  const { rows, stats } = mapMenus(await loadSheet('menu'));
+  if (stats.duplicateCodes) {
+    console.log(`  ⚠️ รหัสเมนูซ้ำในชีท ${stats.duplicateCodes} แถว — แถวท้ายสุดจะทับแถวก่อนหน้า`);
+  }
+  await runBatch('qcrd_menu', rows, (m) => menuStmt(m));
 }
 
-/** ชีท 'BOM': A=เลขPOS B=ชื่อเมนู C=ลำดับ D=รหัส E=ชื่อ F=ยอดใช้ H=ตัวแปลง J=ราคา
- *  K/M=ต้นทุนต่อหน่วยเล็ก N=ต้นทุนแถว O–R=ที่มา S=แท็ก T=ไม่ตัด BOM */
 async function migrateBom() {
-  const rows = await loadSheet('bom');
-  /* จัดกลุ่มตามเมนูก่อน เพราะฝั่งเขียนลบสูตรเดิมของเมนูนั้นทั้งชุดแล้วใส่ใหม่
-     (ถ้าใส่ทีละแถวโดยไม่ลบก่อน สูตรเก่าที่ถูกถอดออกไปแล้วจะค้างอยู่ตลอดไป) */
-  const byMenu = new Map();
-  let skipped = 0;
-  rows.forEach((r) => {
-    const menuCode = str(r[0]);
-    const itemCode = str(r[3]);
-    if (!menuCode || !itemCode) { if (menuCode || itemCode) skipped++; return; }
-    const list = byMenu.get(menuCode) || [];
-    list.push({
-      menuName: str(r[1]),
-      seq: list.length + 1,                     // เรียงใหม่ 1..n ตามลำดับแถวในชีท
-      itemCode,
-      itemKey: normCode(itemCode),
-      itemName: str(r[4]),
-      qty: num(r[5]) ?? 0,
-      converter: num(r[7]),
-      itemPrice: num(r[9]),
-      unitCost: num(r[10]) ?? num(r[12]),
-      lineCost: num(r[13]),
-      srcCode: str(r[14]),
-      srcName: str(r[15]),
-      srcFactor: num(r[16]),
-      srcBase: num(r[17]),
-      tag: str(r[18]),
-      noDeduct: TRUTHY.test(str(r[19])) ? 1 : 0,
-    });
-    byMenu.set(menuCode, list);
-  });
-  if (skipped) console.log(`  ข้ามแถว BOM ที่ไม่มีรหัสเมนูหรือรหัสวัตถุดิบ ${skipped} แถว`);
-
-  const menus = [...byMenu.entries()].map(([menuCode, items]) => ({ menuCode, items }));
-  console.log(`  qcrd_bom: ${menus.length} เมนู / ${menus.reduce((s, m) => s + m.items.length, 0)} แถว`);
-  await runBatch('qcrd_bom', menus, (m) => {
-    const params = { menu_code: m.menuCode };
-    const values = m.items.map((it, i) => {
-      Object.assign(params, {
-        [`n${i}`]: it.menuName || null, [`q${i}`]: it.seq,
-        [`c${i}`]: it.itemCode, [`k${i}`]: it.itemKey, [`m${i}`]: it.itemName || null,
-        [`y${i}`]: it.qty, [`v${i}`]: it.converter, [`p${i}`]: it.itemPrice,
-        [`u${i}`]: it.unitCost, [`l${i}`]: it.lineCost,
-        [`sc${i}`]: it.srcCode || null, [`sn${i}`]: it.srcName || null,
-        [`sf${i}`]: it.srcFactor, [`sb${i}`]: it.srcBase,
-        [`tg${i}`]: it.tag || null, [`nd${i}`]: it.noDeduct,
-      });
-      return `(@menu_code, @n${i}, @q${i}, @c${i}, @k${i}, @m${i}, @y${i}, @v${i}, @p${i}, @u${i}, @l${i},`
-        + ` @sc${i}, @sn${i}, @sf${i}, @sb${i}, @tg${i}, @nd${i})`;
-    });
-    return {
-      text: `DELETE FROM dbo.qcrd_bom WHERE menu_code = @menu_code;
-             INSERT INTO dbo.qcrd_bom
-               (menu_code, menu_name, seq, item_code, item_key, item_name, qty, converter, item_price,
-                unit_cost, line_cost, src_code, src_name, src_factor, src_base, tag, no_deduct)
-             VALUES ${values.join(', ')};`,
-      params,
-    };
-  });
+  const { rows, stats } = mapBomByMenu(await loadSheet('bom'));
+  if (stats.skipped) console.log(`  ข้ามแถว BOM ที่ไม่มีรหัสเมนูหรือรหัสวัตถุดิบ ${stats.skipped} แถว`);
+  console.log(`  qcrd_bom: ${rows.length} เมนู / ${stats.bomRows} แถว`);
+  await runBatch('qcrd_bom', rows, (m) => bomStmt(m));
 }
 
-/** ชีท 'item': A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ F,G,H=ไอเทมทดแทน I=ตัวแปลง
- *  J=สาขาที่ใช้ K=itemid(POS) L=หน่วยเบิก N=หมวดสโตร์ O=Plan/ประเภท P=ใช้กับ
- *
- *  คอลัมน์ K/L/plan_only เป็นของฝั่งสต๊อก — ที่นี่เขียนเฉพาะตอนสร้างแถวใหม่
- *  แถวที่มีอยู่แล้วจะไม่แตะ (COALESCE) เพื่อไม่ให้ค่าที่ฝั่งสต๊อกดูแลอยู่หายไป */
 async function migrateItems() {
-  const rows = await loadSheet('item');
-  const byKey = new Map();
-  let dup = 0, skipped = 0;
-  rows.forEach((r, index) => {
-    const code = str(r[0]);
-    const name = str(r[1]);
-    if (!code && !name) return;
-    const key = normCode(code);
-    if (!key) { skipped++; return; }
-    if (byKey.has(key)) dup++;
-    const colO = str(r[14]);
-    byKey.set(key, {           // รหัสซ้ำ = แถวท้ายสุดของชีทชนะ (ตรงกับที่ชีทใช้ค่าล่าสุด)
-      key, code, name,
-      price: num(r[2]),
-      unit: str(r[3]),
-      status: str(r[4]),
-      subs: [str(r[5]), str(r[6]), str(r[7])],
-      converter: num(r[8]),
-      branches: String(r[9] ?? '').toLowerCase().split(/[,\s]+/).map((b) => b.trim()).filter(Boolean),
-      posItemId: str(r[10]),
-      requestUnit: str(r[11]),
-      storeCat: str(r[13]),
-      // คอลัมน์ O ถูกใช้ชนกันสองความหมาย — ดูจากค่าที่อยู่ในช่องว่าเป็นแบบไหนแล้วลงให้ถูกช่อง
-      planOnly: TRUTHY.test(colO) ? 1 : null,
-      itemType: TRUTHY.test(colO) ? null : (colO || null),
-      usedWhen: str(r[15]) || null,
-      sortOrder: index,
-    });
-  });
-  if (skipped) console.log(`  ข้ามแถวที่ไม่มีรหัสวัตถุดิบ ${skipped} แถว`);
-  if (dup) console.log(`  ⚠️ รหัสวัตถุดิบซ้ำ (หลัง normalize) ${dup} แถว — ยุบเหลือแถวท้ายสุดของแต่ละรหัส`);
-
-  const items = [...byKey.values()];
-  await runBatch('stock_item (คอลัมน์ฝั่ง QC/RD)', items, (it) => ({
-    text: `
-      MERGE dbo.stock_item AS t
-      USING (SELECT @item_key AS item_key) AS s ON t.item_key = s.item_key
-      WHEN MATCHED THEN UPDATE SET
-        item_code = @item_code, item_name = @item_name, unit = @unit, price = @price,
-        status = @status, store_cat = @store_cat, converter = @converter,
-        sub_item1 = @sub1, sub_item2 = @sub2, sub_item3 = @sub3,
-        item_type = COALESCE(@item_type, t.item_type),
-        used_when = COALESCE(@used_when, t.used_when),
-        plan_only = COALESCE(@plan_only, t.plan_only),
-        sort_order = @sort_order, updated_at = SYSDATETIME()
-      WHEN NOT MATCHED THEN INSERT
-        (item_key, item_code, item_name, unit, price, status, store_cat, converter,
-         sub_item1, sub_item2, sub_item3, item_type, used_when,
-         pos_item_id, request_unit, plan_only, sort_order)
-        VALUES (@item_key, @item_code, @item_name, @unit, @price, @status, @store_cat, @converter,
-                @sub1, @sub2, @sub3, @item_type, @used_when,
-                @pos_item_id, @request_unit, COALESCE(@plan_only, 0), @sort_order);`,
-    params: {
-      item_key: it.key, item_code: it.code, item_name: it.name,
-      unit: it.unit || null, price: it.price, status: it.status || null,
-      store_cat: it.storeCat || null, converter: it.converter,
-      sub1: it.subs[0] || null, sub2: it.subs[1] || null, sub3: it.subs[2] || null,
-      item_type: it.itemType, used_when: it.usedWhen, plan_only: it.planOnly,
-      pos_item_id: it.posItemId || null, request_unit: it.requestUnit || null,
-      sort_order: it.sortOrder,
-    },
-  }));
-
-  // สาขาที่ใช้วัตถุดิบ — ลบของเดิมของรหัสนั้นก่อนแล้วใส่ชุดใหม่ทั้งชุด
-  const branchRows = items.filter((it) => it.branches.length > 0);
-  await runBatch('stock_item_branch', branchRows, (it) => {
-    const params = { item_key: it.key };
-    const values = it.branches.map((b, i) => { params[`b${i}`] = b; return `(@item_key, @b${i})`; });
-    return {
-      text: `DELETE FROM dbo.stock_item_branch WHERE item_key = @item_key;
-             INSERT INTO dbo.stock_item_branch (item_key, branch) VALUES ${values.join(', ')};`,
-      params,
-    };
-  });
+  const { rows, stats } = mapItems(await loadSheet('item'));
+  if (stats.skipped) console.log(`  ข้ามแถวที่ไม่มีรหัสวัตถุดิบ ${stats.skipped} แถว`);
+  if (stats.duplicateCodes) {
+    console.log(`  ⚠️ รหัสวัตถุดิบซ้ำ (หลัง normalize) ${stats.duplicateCodes} แถว — ยุบเหลือแถวท้ายสุดของแต่ละรหัส`);
+  }
+  await runBatch('stock_item (คอลัมน์ฝั่ง QC/RD)', rows, (it) => itemStmt(it));
+  // สาขาที่ใช้วัตถุดิบ — เขียนใหม่ทั้งชุดต่อรหัส
+  await runBatch('stock_item_branch', rows.filter((it) => it.branches.length > 0), (it) => itemBranchStmt(it));
 }
 
 /* ------------------------------- โหมดตรวจ ------------------------------- */

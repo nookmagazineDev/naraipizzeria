@@ -106,7 +106,38 @@
 ตั้ง `QCRD_DB_HOST=inventory.dyndns.tv` แล้วใช้ login ชุดเดียวกับ `HR_DB_USER`/`HR_DB_PASSWORD`
 (เครื่องที่รันต้องเปิด Google Sheets ได้ด้วย เพราะต้องอ่านชีทต้นทาง)
 
-### วิธีเร็ว — คำสั่งเดียวจบ
+### วิธีที่ 1 — ให้ Vercel ย้ายให้ (ไม่ต้องเปิดเครื่องออฟฟิศเลย)
+
+Vercel เข้าถึงได้ทั้งชีทและ SQL Server อยู่แล้ว จึงสั่งให้มันย้ายเองได้ ผ่าน `/api/qcrd-migrate`
+
+**ตั้ง env บน Vercel ก่อน** (Settings > Environment Variables แล้ว Redeploy):
+
+| ตัวแปร | ค่า |
+|---|---|
+| `QCRD_MIGRATE_KEY` | สุ่มข้อความยาว ๆ มาสักชุด — ไม่ตั้ง = ปิดทางนี้ไว้ทั้งหมด |
+| `QCRD_DB_USER` / `QCRD_DB_PASSWORD` | login ที่มีสิทธิ์ใน `InventoryNarai` (มี `HR_DB_USER`/`HR_DB_PASSWORD` อยู่แล้วก็ไม่ต้องตั้ง) |
+
+**แล้วเปิดลิงก์ทีละบรรทัด** (เปลี่ยน `<โดเมน>` เป็นโดเมนของ Dashboard และ `<KEY>` เป็นค่าที่ตั้งไว้):
+
+```
+https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=check                 ← ดูสถานะก่อน ไม่แตะข้อมูล
+https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=schema&confirm=1      ← สร้างตาราง/เพิ่มคอลัมน์
+https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=group&confirm=1       ← หมวดหมู่เมนู
+https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=menu&confirm=1        ← เมนู
+https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=bom&confirm=1         ← สูตร BOM
+https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=item&confirm=1        ← วัตถุดิบ
+https://<โดเมน>/api/qcrd-migrate?key=<KEY>&step=verify                ← เทียบจำนวนชีท ↔ SQL
+```
+
+- **ไม่ใส่ `&confirm=1` = ทดลอง** อ่านชีทแล้วบอกจำนวนแถวเฉย ๆ ไม่เขียนอะไร ลองก่อนได้ทุก step
+- Vercel ตัดที่ 60 วิ ถ้าชุดไหนใหญ่จนไม่จบ จะตอบ `"done": false` พร้อม `nextOffset`
+  → เปิดลิงก์เดิมต่อท้ายด้วย `&offset=<เลขนั้น>` จนกว่าจะได้ `"done": true`
+- ทุก step รันซ้ำได้ ไม่เกิดข้อมูลซ้ำ
+- เสร็จแล้ว **ลบ `QCRD_MIGRATE_KEY` ทิ้ง** เพื่อปิดทางนี้ (เปิดค้างไว้ = ใครเดา key ถูกก็สั่งย้ายทับได้)
+
+จบแล้วค่อยตั้ง `QCRD_SOURCE=sql` ตามหัวข้อ "เปิดใช้จากหน้าเว็บ" ด้านล่าง
+
+### วิธีที่ 2 — รันสคริปต์เอง คำสั่งเดียวจบ
 
 เปิด PowerShell ที่โฟลเดอร์รีโป (`D:\...\naraipizzeria`) แล้วรัน:
 
@@ -128,7 +159,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\migrate-qcrd.ps1
 | `-SkipSchema` | เคยสร้างตารางแล้ว |
 | `-Only menu,bom` | ย้ายเฉพาะบางชุด (`group,menu,bom,item`) |
 
-### วิธีทีละขั้น (ถ้าอยากคุมเอง)
+### วิธีที่ 3 — ทีละขั้น (ถ้าอยากคุมเอง)
 
 ```powershell
 # 1) สร้างตาราง + เพิ่มคอลัมน์ (ครั้งเดียว, รันซ้ำได้)
@@ -216,6 +247,8 @@ set QCRD_WRITE_KEY=<สุ่มข้อความยาว ๆ มาสั�
 | ไฟล์ | หน้าที่ |
 |---|---|
 | `docs/schema-qcrd.sql` | ตารางใหม่ 3 ตาราง + คอลัมน์ที่เพิ่มใน `stock_item` |
+| `pages/api/qcrd-migrate.js` | ย้ายข้อมูลจากฝั่ง Vercel (วิธีที่ 1) — แบ่งเป็น step กดจากลิงก์ได้ |
+| `lib/qcrdMigrate.mjs` | การจับคอลัมน์ชีท → เรคคอร์ด → คำสั่ง SQL ใช้ร่วมกันทั้ง endpoint และสคริปต์ |
 | `scripts/migrate-qcrd.ps1` | ตัวรันคำสั่งเดียวจบที่เครื่องออฟฟิศ (สคีมา → ย้าย → ตรวจ) |
 | `scripts/migrate-qcrd.mjs` | ย้ายข้อมูลจากชีทเข้า SQL (`--inspect` / `--dry-run` / `--verify` / `--only=`) |
 | `scripts/run-sql.mjs` | รันไฟล์ `.sql` ด้วย node สำหรับเครื่องที่ไม่มี `sqlcmd` |
