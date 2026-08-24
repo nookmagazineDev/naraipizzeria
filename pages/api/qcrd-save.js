@@ -1,16 +1,12 @@
 // QC/RD ฝั่ง "เขียน" — ทางเดียวที่หน้าเว็บใช้บันทึก (lib/qcrdApi.js ยิงมาที่นี่)
 //
-// ส่งต่อไปที่ไหน ขึ้นกับ env QCRD_SOURCE เหมือนฝั่งอ่านใน /api/qcrd:
-//   sheet (ค่าเริ่มต้น) → /api/qcrd-gas (Apps Script เขียนลงชีทต้นทุนเมนู)
-//   sql                → เขียนลงฐาน InventoryNarai — ต่อ SQL ตรงจาก Vercel ถ้าตั้งรหัสไว้
-//                        ไม่งั้นยิงไป host API POST /qcrd/save (ดู lib/qcrdSource.js)
+// ส่งต่อไป /api/qcrd-gas (Apps Script เขียนลงชีทต้นทุนเมนู) ที่เดียวกับที่ /api/qcrd อ่าน
+// action: saveMenu · saveMenuStatus · saveMenuGroup · saveItem · addItem · deleteItem ·
+// updateItemUnits · sortBom
 //
-// action ทั้งสองทางชื่อเดียวกันและรับ payload ชุดเดียวกัน: saveMenu · saveMenuStatus ·
-// saveMenuGroup · saveItem · addItem · deleteItem · updateItemUnits · sortBom
-// สลับโหมดจึงไม่ต้องแก้หน้าเว็บเลย
-//
-// ฝั่งเขียนไม่มี fallback โดยตั้งใจ — ถ้า SQL ล่มแล้วแอบไปเขียนชีทแทน ข้อมูลสองที่จะแยกจากกัน
-// ทันทีโดยไม่มีใครรู้ตัว ปล่อยให้ error ขึ้นหน้าเว็บตรง ๆ ดีกว่า
+// ทาง SQL ปิดไว้แล้ว (usingSql() คืน false เสมอ ดู lib/qcrdSource.js) — เมื่อก่อนเขียนลง
+// InventoryNarai ผ่านเครื่องออฟฟิศ พอ host-server ไม่ได้รันก็บันทึกไม่ได้เลยทั้งหน้า
+// โค้ดฝั่ง SQL ข้างล่างเก็บไว้เผื่อเปิดใช้อีกรอบ ตอนนี้ไม่ถูกเรียก
 import { usingSql, saveQcrdSql } from '../../lib/qcrdSource';
 import gasHandler from './qcrd-gas';
 

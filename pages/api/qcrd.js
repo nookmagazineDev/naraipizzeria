@@ -1,12 +1,10 @@
 // QC/RD — อ่านเมนู / สูตร BOM / วัตถุดิบ / หมวดหมู่เมนู
 //
-// มีสองทาง เลือกด้วย env QCRD_SOURCE:
-//   sheet (ค่าเริ่มต้น) — ชีทต้นทุนเมนู 1v8WRT… ผ่าน lib/qcrdSheet.js (ใช้ร่วมกับ /api/usage-bom)
-//   sql                — ตาราง qcrd_* / stock_item ในฐาน InventoryNarai
-//                        ต่อ SQL ตรงจาก Vercel ถ้าตั้งรหัสไว้ ไม่งั้นผ่าน host API
-//                        (ดู lib/qcrdSource.js · โครงตารางใน docs/schema-qcrd.sql)
-// โหมด sql ถ้าเรียก host API ไม่ได้ จะถอยไปอ่านชีทให้ แล้วแนบ warning มากับผลลัพธ์
-// ส่วน "เขียน" ใช้ /api/qcrd-save (ไปที่ SQL หรือ Apps Script ตาม QCRD_SOURCE เหมือนกัน)
+// อ่านจากชีทต้นทุนเมนู 1v8WRT… ผ่าน lib/qcrdSheet.js (ตัวเดียวกับที่ /api/usage-bom ใช้)
+// ส่วน "เขียน" ใช้ /api/qcrd-save → Apps Script เขียนกลับลงชีทเล่มเดียวกัน อ่านกับเขียนอยู่ที่เดียว
+//
+// ทาง SQL (ตาราง qcrd_* / stock_item ในฐาน InventoryNarai) ปิดไว้แล้ว — usingSql() คืน false เสมอ
+// โค้ดฝั่ง SQL ข้างล่างจึงไม่ถูกเรียก เก็บไว้เผื่อเปิดใช้อีกรอบ (ดู lib/qcrdSource.js)
 import { fetchQcrdSheet as fetchSheet, TRUTHY } from '../../lib/qcrdSheet';
 import { usingSql, fetchQcrdSql, sqlRoute } from '../../lib/qcrdSource';
 

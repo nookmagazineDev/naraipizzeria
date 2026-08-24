@@ -79,7 +79,7 @@ Protocol TCP · External 14330 · Internal 172.28.1.48 : 1433
 | `SHEETS_SOURCE` | `sheet` (เริ่มต้น) / `sql` | สลับให้หน้าเว็บอ่าน-เขียน SQL แทนชีท (**ไม่คุมส่วนพนักงาน** — พนักงานยึดชีทเสมอ) |
 | `SHEETS_API_BASE` | URL ของ host API | ไม่ตั้ง = ใช้ `QCRD_API_BASE` หรือ `STORE_API_BASE` เดิม |
 | `SHEETS_WRITE_KEY` | ให้ตรงกับเครื่องโฮสต์ | กุญแจฝั่งเขียน — ไม่ตั้งก็ใช้ `QCRD_WRITE_KEY` เดิมได้ |
-| `QCRD_SOURCE` | `sheet` (เริ่มต้น) / `sql` | คุมฝั่ง QC/RD + `/api/cost`, `/api/menugroup`, `/api/recipe` |
+| `QCRD_SOURCE` | — | **เลิกใช้แล้ว** QC/RD กลับไปอ่าน-เขียนชีท (ดู `docs/qcrd-sql-migration.md`) |
 | `SHEETS_MIGRATE_KEY` | ตั้งเอง | เปิดใช้ `/api/sheets-migrate` — ไม่ตั้งก็ใช้ `QCRD_MIGRATE_KEY` เดิมได้ |
 
 **ทางที่ 2 ไม่ต้องมีรหัสฐานข้อมูลบน Vercel เลย** — Vercel ไม่ได้ต่อ SQL เอง แค่ยิง HTTP ไปหา host API
