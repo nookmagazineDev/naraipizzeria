@@ -37,7 +37,9 @@ const { mountSheets } = require('./sheets-db'); // แพลน/ปิดรอ�
 const app = express();
 app.use(compression()); // ต้องมาก่อน route
 app.use(cors());
-const PORT = 14365;
+// เครื่องที่ร้านมี API ตัวอื่นของโปรเจค Narai-branch (office-server) รันอยู่ด้วย
+// ถ้าพอร์ตชนกันให้ตั้ง env PORT ก่อนรัน เช่น  $env:PORT = '14366'  (ค่าเริ่มต้นคือ 14365)
+const PORT = Number(process.env.PORT) || 14365;
 
 // ── ตารางที่เก็บข้อมูล "รายบิล/การชำระ" (cpaidbetweendate) ──
 //    ตารางจริง = dbo.Cpaid / คอลัมน์วันที่ปิดบิล = Date

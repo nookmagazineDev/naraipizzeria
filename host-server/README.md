@@ -22,6 +22,14 @@ npm install
 node server.js
 ```
 
+พอร์ตเริ่มต้นคือ **14365** ถ้าเครื่องนั้นมี API ตัวอื่นถือพอร์ตนี้อยู่แล้ว (เช่น `office-server`
+ของโปรเจค Narai-branch) ให้ย้ายพอร์ตด้วย env `PORT` แล้วชี้ tunnel มาที่พอร์ตใหม่:
+
+```powershell
+$env:PORT = '14366'
+node server.js
+```
+
 หรือถ้าอยากลงรวมไว้ที่รากรีโป (ทำงานเหมือนกัน node ไล่หา node_modules ขึ้นไปให้เอง):
 
 ```bash
