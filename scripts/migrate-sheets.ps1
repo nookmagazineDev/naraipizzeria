@@ -17,7 +17,7 @@
 #  ตัวเลือก
 #     -Yes                   ไม่ต้องถามยืนยัน (ใช้ตอนรันซ้ำ/รันอัตโนมัติ)
 #     -SkipSchema            ข้ามขั้นสร้างตาราง (เคยรันแล้ว)
-#     -Only plan,expense     ย้ายเฉพาะบางชุด (plan,closing,expenseref,expense,employee)
+#     -Only plan,expense     ย้ายเฉพาะบางชุด (plan,closing,expenseref,expense)
 #     -DbName ชื่อฐาน         ฐานปลายทาง (ค่าเริ่มต้น InventoryNarai)
 #
 #  ⚠️ ไฟล์นี้ต้องบันทึกเป็น UTF-8 "พร้อม BOM" เท่านั้น
