@@ -1,3 +1,4 @@
+import { fetchScript } from '../../lib/upstream.mjs';
 // อ่านข้อมูลสต๊อกจาก Google Apps Script ผ่าน GET เพื่อให้ CDN/เบราว์เซอร์แคชได้
 // (/api/stock-gas เป็น POST — CDN แคชไม่ได้ ทุกครั้งจึงต้องรอ Apps Script ใหม่ทุกรอบ)
 // ใช้เฉพาะ action ที่เป็นการอ่านอย่างเดียว — การเขียน (saveStock ฯลฯ) ยังใช้ /api/stock-gas เหมือนเดิม
@@ -33,11 +34,12 @@ export default async function handler(req, res) {
   });
 
   try {
-    const upstream = await fetch(SCRIPT_URL, {
+    // action ในไฟล์นี้เป็นการอ่านล้วน (READ_ACTIONS) จึงลองใหม่ได้ปลอดภัยเมื่อ GAS สะดุด
+    const upstream = await fetchScript(SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(payload),
-      redirect: 'follow',
+      retries: 1,
     });
     const text = await upstream.text();
     let json;

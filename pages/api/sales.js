@@ -1,11 +1,11 @@
+import { STORE_API_BASE, HEAVY_UPSTREAM_OPTS, fetchUpstream, replyUpstreamError } from '../../lib/upstream.mjs';
+// base URL / timeout / retry / ข้อความ error อยู่ที่ lib/upstream.mjs ชุดเดียวกับ Narai-branch
 // เดิมเป็น Edge Function — Vercel Edge runtime มี hard timeout ราว ~25 วินาที
 // ซึ่งไม่พอกับช่วงที่ host/SQL ตอบช้า (ยิ่งดึงทุกสาขาพร้อมกัน) ทำให้ได้หน้า error
 // ของแพลตฟอร์ม ("An error occurred...") แทน JSON แล้วฝั่งเว็บ parse ไม่ออก
 // → เปลี่ยนเป็น Node.js serverless function ธรรมดา (เหมือน API อื่นในโปรเจกต์)
 // เพื่อใช้ maxDuration ที่นานกว่า Edge ได้มาก
 export const config = { maxDuration: 60 };
-
-const STORE_API_BASE = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 
 export default async function handler(req, res) {
   const { start, end, outlet } = req.query;
@@ -16,16 +16,16 @@ export default async function handler(req, res) {
   try {
     let url = `${STORE_API_BASE}/cpaidbetweendate?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
     if (outlet) url += `&outlet=${encodeURIComponent(outlet)}`;
-    const upstream = await fetch(url, {
-      cache: 'no-store',
-      signal: AbortSignal.timeout(55000),
-      headers: { 'ngrok-skip-browser-warning': 'true' },
-    });
-    if (!upstream.ok) throw new Error(`Upstream HTTP ${upstream.status}`);
+    // ดึงข้ามหลายวัน host ต้องคำนวณนาน — รอยาวใกล้เพดาน maxDuration แล้วลองใหม่ถ้าล้มเร็ว
+    const upstream = await fetchUpstream(url, HEAVY_UPSTREAM_OPTS);
+    if (!upstream.ok) {
+      const msg = `เซิร์ฟเวอร์ที่ออฟฟิศตอบผิดพลาด (HTTP ${upstream.status})`;
+      // หน้าแดชบอร์ดอ่านสาเหตุจากคีย์ error — ส่ง message คู่กันให้เข้าชุดกับ API ตัวอื่น
+      return res.status(502).json({ status: 'error', message: msg, error: msg });
+    }
     const data = await upstream.json();
     return res.status(200).json(data);
   } catch (err) {
-    console.error('Sales API proxy error:', err.message);
-    return res.status(502).json({ error: err.message });
+    return replyUpstreamError(res, err, 'sales');
   }
 }

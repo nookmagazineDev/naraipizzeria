@@ -7,6 +7,7 @@
 // ทั้งสองแท็บย้ายเข้า SQL แล้ว (dbo.qcrd_menu + dbo.qcrd_menu_group) และตัวอ่านฝั่ง SQL
 // join ให้เสร็จตั้งแต่ในฐาน (readMenus คืน groupName มาด้วย) จึงเหลือการอ่านรอบเดียว
 import { usingSql, fetchQcrdSql, sqlRoute } from '../../lib/qcrdSource';
+import { fetchSheet } from '../../lib/upstream.mjs';
 
 const SHEET_ID = '1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw';
 const GID_MENU = '0';
@@ -30,7 +31,7 @@ function parseCSV(text) {
 }
 
 async function csv(gid) {
-  const r = await fetch(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`, { cache: 'no-store', redirect: 'follow' });
+  const r = await fetchSheet(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${gid}`);
   if (!r.ok) throw new Error(`Google Sheets HTTP ${r.status} (gid ${gid})`);
   return parseCSV(await r.text());
 }

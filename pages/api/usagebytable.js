@@ -2,7 +2,11 @@
 //   GET /usagebytable?branch&outletId&startDate&endDate&menuCode(&menu) -> { status, data:[{table, qty}] }
 // เดิม proxy ไปที่ Narai Usage API เครื่องเก่า (port 8787) ซึ่งใช้คนละฐานกับยอดใช้
 // ทำให้ "ขาย" ระดับเมนูกับผลรวมของโต๊ะไม่ตรงกัน (เคยเจอเมนู P20 ต่างกันเท่าตัว)
-const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
+// base URL / timeout / retry / CORS / ข้อความ error อยู่ที่ lib/upstream.mjs ชุดเดียวกับ Narai-branch
+import { STORE_API_BASE, HEAVY_UPSTREAM_OPTS, fetchUpstream, applyCors, replyUpstreamError } from '../../lib/upstream.mjs';
+
+// ปลายทางคำนวณข้ามหลายวันได้นาน — ให้เวลาฟังก์ชันเท่ากับ API พี่น้อง (ดู HEAVY_UPSTREAM_OPTS)
+export const config = { maxDuration: 60 };
 
 const BRANCH_OUTLET = {
   sjp: 7, zjp: 7, crm: 12, xcm: 19, slr: 37, sum: 51, xum: 59, scs: 61,
@@ -21,12 +25,7 @@ const isExcludedItem = c => {
 const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
-
-  if (req.method === 'OPTIONS') { res.status(200).end(); return; }
+  if (applyCors(req, res)) return;
 
   const { branch, startDate, endDate, menu, menuCode, outletId } = req.query;
   if (!branch || !startDate || !endDate || (!menu && !menuCode)) {
@@ -44,8 +43,10 @@ export default async function handler(req, res) {
   const wantName = String(menu || '').trim().toLowerCase();
 
   try {
-    const r = await fetch(`${STORE_API}/ctranbetweendate?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}&outlet=${encodeURIComponent(oid)}`);
-    if (!r.ok) throw new Error(`host API HTTP ${r.status}`);
+    const params = new URLSearchParams({ start: startDate, end: endDate, outlet: String(oid) });
+    // ชุดแถวเดียวกับ /api/usage-bom — คำนวณข้ามหลายวัน ต้องใช้ชุด timeout/retry ของงานหนัก
+    const r = await fetchUpstream(`${STORE_API_BASE}/ctranbetweendate?${params.toString()}`, HEAVY_UPSTREAM_OPTS);
+    if (!r.ok) throw new Error(`เซิร์ฟเวอร์ที่ออฟฟิศตอบผิดพลาด (HTTP ${r.status})`);
     const dj = await r.json();
     const rows = Array.isArray(dj) ? dj : dj.data || [];
 
@@ -74,7 +75,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ status: 'success', data });
   } catch (error) {
-    console.error('usagebytable error:', error);
-    return res.status(502).json({ status: 'error', message: error.message });
+    return replyUpstreamError(res, error, 'usagebytable');
   }
 }

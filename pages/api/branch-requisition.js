@@ -1,3 +1,5 @@
+import { fetchSheet } from '../../lib/upstream.mjs';
+
 // จัดซื้อ — เบิกของสาขา: อ่านชีท "ใบเบิก" (บันทึกทุกครั้งที่สาขากดเบิก) + ชีท "data" (ข้อมูลไอเทม)
 // สเปรดชีต: https://docs.google.com/spreadsheets/d/12Wb7tMXfT548XvK1H0Cp6uOysjS8ksmMFzQZ-Rpay2k
 // ทำ pivot: แถว = ไอเทม, คอลัมน์ = สาขา, ช่อง = จำนวนที่เบิกรวม (sum จากชีทใบเบิกเอง ไม่ใช้ยอดสำเร็จรูปในชีท data
@@ -25,7 +27,7 @@ const num = v => { const n = parseFloat(String(v).replace(/,/g, '')); return isN
 
 async function fetchSheetByName(name) {
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(name)}`;
-  const r = await fetch(url, { cache: 'no-store', redirect: 'follow' });
+  const r = await fetchSheet(url);
   if (!r.ok) throw new Error(`Google Sheets HTTP ${r.status} (${name})`);
   return parseCSV(await r.text());
 }

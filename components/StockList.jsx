@@ -238,32 +238,6 @@ export default function StockList() {
     setItems(newItems);
   };
 
-  // --- Generate order number: YY + MM + running (0001) ---
-  const generateOrderNo = async (outletId) => {
-    const now = new Date();
-    const yy = String(now.getFullYear()).slice(-2);
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const prefix = `${yy}${mm}`;
-    try {
-      const res = await fetch(`/api/pending_orders?outletId=${encodeURIComponent(outletId)}`);
-      const data = await res.json();
-      let maxRun = 0;
-      if (data.status === 'success' && Array.isArray(data.all)) {
-        data.all.forEach(order => {
-          const no = String(order.no || order.No || order.Ord_No || '');
-          if (no.startsWith(prefix)) {
-            const run = parseInt(no.slice(prefix.length), 10);
-            if (!isNaN(run) && run > maxRun) maxRun = run;
-          }
-        });
-      }
-      const nextRun = String(maxRun + 1).padStart(4, '0');
-      return `${prefix}${nextRun}`;
-    } catch {
-      return `${prefix}0001`;
-    }
-  };
-
   // --- Fetch pending orders ---
   const fetchPendingOrders = async () => {
     const outletId = isAll
@@ -328,15 +302,36 @@ export default function StockList() {
               ? (branches.find(b => b.name === effectiveBranch)?.outletId || '')
               : (user?.outletId || '');
             if (outletId) {
-              const orderNo = await generateOrderNo(outletId);
-              const orderRes = await fetch(
-                `/api/insert_order?outletId=${encodeURIComponent(outletId)}&deldate=${encodeURIComponent(requestDate)}&no=${encodeURIComponent(orderNo)}`
-              );
+              // ส่งรายการที่ขอเบิกไปให้ /api/insert_order เขียนลง myfbdata.orderd โดยตรง
+              // (ชุดเดียวกับที่ Narai-branch ใช้) — เลขที่ใบเบิกฝั่งนั้นเดินจากตัวนับของสาขาให้เอง
+              const orderItems = itemsToSave
+                .filter(item => Number(item.requested) > 0)
+                .map(item => ({
+                  itemId: item.itemId,
+                  itemCode: item.productId,
+                  itemName: item.name,
+                  qty: Number(item.requested),
+                  unit: item.unit,
+                  price: Number(item.price) || 0,
+                }));
+              const orderRes = await fetch('/api/insert_order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  outletId,
+                  branch: effectiveBranch,
+                  deldate: requestDate,
+                  items: orderItems,
+                }),
+              });
               const orderData = await orderRes.json();
               if (orderData.status === 'success') {
-                toast.success(`📋 ส่งใบเบิกสำเร็จ! เลขที่ใบเบิก: ${orderNo}`, { duration: 6000 });
+                toast.success(`📋 ส่งใบเบิกสำเร็จ! เลขที่ใบเบิก: ${orderData.orderNo}`, { duration: 6000 });
               } else {
-                toast.error(`ส่งใบเบิกไม่สำเร็จ: ${orderData.message || 'เกิดข้อผิดพลาด'}`);
+                const detail = Array.isArray(orderData.missing) && orderData.missing.length
+                  ? `${orderData.message}\n${orderData.missing.slice(0, 5).join('\n')}`
+                  : (orderData.message || 'เกิดข้อผิดพลาด');
+                toast.error(`ส่งใบเบิกไม่สำเร็จ: ${detail}`);
               }
             }
           } catch (err) {

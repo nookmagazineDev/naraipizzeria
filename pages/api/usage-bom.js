@@ -12,7 +12,8 @@ import { usingSql, fetchQcrdSql } from '../../lib/qcrdSource';
 // ค่า default ของ Vercel คือ 10 วินาที ซึ่งไม่พอ — ตั้งเท่ากับ /api/detail และ /api/sales
 export const config = { maxDuration: 60 };
 
-const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
+// base URL / timeout / retry / ข้อความ error อยู่ที่ lib/upstream.mjs ชุดเดียวกับ Narai-branch
+import { STORE_API_BASE, HEAVY_UPSTREAM_OPTS, fetchUpstream, replyUpstreamError } from '../../lib/upstream.mjs';
 
 const BRANCH_OUTLET = {
   sjp: 7, zjp: 7, crm: 12, xcm: 19, slr: 37, sum: 51, xum: 59, scs: 61,
@@ -112,15 +113,11 @@ export default async function handler(req, res) {
   try {
     const [{ map: bom, stats: bomStats }, detRes] = await Promise.all([
       fetchBom(),
-      // ตัดจบเองที่ 55 วิ ให้ทันคืน error ที่อ่านรู้เรื่องก่อน maxDuration 60 จะฆ่า function
-      // header ngrok: ถ้า host API อยู่หลัง tunnel จะได้ JSON ไม่ใช่หน้าเตือนของ ngrok ที่เป็น HTML
-      fetch(`${STORE_API}/ctranbetweendate?start=${startDate}&end=${endDate}&outlet=${oid}`, {
-        cache: 'no-store',
-        signal: AbortSignal.timeout(55000),
-        headers: { 'ngrok-skip-browser-warning': 'true' },
-      }),
+      // ตัดจบเองที่ ~55 วิ ให้ทันคืน error ที่อ่านรู้เรื่องก่อน maxDuration 60 จะฆ่า function
+      // (fetchUpstream ใส่ header ngrok-skip-browser-warning ให้เองแล้ว ไม่งั้น tunnel จะตอบ HTML)
+      fetchUpstream(`${STORE_API_BASE}/ctranbetweendate?start=${startDate}&end=${endDate}&outlet=${oid}`, HEAVY_UPSTREAM_OPTS),
     ]);
-    if (!detRes.ok) throw new Error(`host API HTTP ${detRes.status}`);
+    if (!detRes.ok) throw new Error(`เซิร์ฟเวอร์ที่ออฟฟิศตอบผิดพลาด (HTTP ${detRes.status})`);
     const dj = await detRes.json();
     const rows = Array.isArray(dj) ? dj : dj.data || [];
 
@@ -197,7 +194,6 @@ export default async function handler(req, res) {
       },
     });
   } catch (error) {
-    console.error('usage-bom error:', error.message);
-    return res.status(502).json({ status: 'error', message: error.message });
+    return replyUpstreamError(res, error, 'usage-bom');
   }
 }

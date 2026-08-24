@@ -1,3 +1,4 @@
+import { fetchScript } from '../../lib/upstream.mjs';
 // Proxy ไป Google Apps Script ของสต๊อก (getBranches / getStockItems / getStockTotal / saveStock ฯลฯ)
 //
 // ยกเว้นสองอย่างที่ย้ายเข้า SQL แล้ว: รายชื่อพนักงาน (getEmployees) กับการแก้ข้อมูลพนักงาน (saveEmployee)
@@ -39,11 +40,11 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
-    const upstream = await fetch(SCRIPT_URL, {
+    // fetchScript = timeout 60 วิ ไม่ลองใหม่ (คำสั่งเขียน ยิงซ้ำ = ได้แถวซ้ำในชีท)
+    const upstream = await fetchScript(SCRIPT_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body,
-      redirect: 'follow',
     });
     const text = await upstream.text();
     let json;

@@ -1,3 +1,4 @@
+import { fetchScript } from '../../lib/upstream.mjs';
 // Proxy ไป Google Apps Script ของชีท QC/RD (1v8WRT… — menu/BOM/item)
 // deploy สคริปต์จาก qcrd-apps-script.gs แล้วตั้ง URL ผ่าน env QCRD_GAS_URL บน Vercel
 // หรือใส่ตรง ๆ ตรง fallback ด้านล่าง
@@ -45,11 +46,11 @@ function diagnose(status, finalUrl, text) {
 }
 
 async function callGas(body) {
-  const upstream = await fetch(SCRIPT_URL, {
+  // fetchScript = timeout 60 วิ ไม่ลองใหม่ (คำสั่งเขียน ยิงซ้ำ = ได้แถวซ้ำในชีท)
+  const upstream = await fetchScript(SCRIPT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body,
-    redirect: 'follow',
   });
   const text = await upstream.text();
   return { status: upstream.status, finalUrl: upstream.url, text };

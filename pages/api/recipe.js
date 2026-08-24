@@ -6,6 +6,7 @@
 //   ชีท RcpDtls หยุดอัปเดตไปแล้ว ส่วน BOM ยังถูกแก้ทุกครั้งที่บันทึกสูตรจากหน้าเว็บ
 //   ทั้งสองทางคืนโครงเดียวกัน หน้าเว็บจึงไม่ต้องแก้อะไร
 import { usingSql, fetchQcrdSql, sqlRoute } from '../../lib/qcrdSource';
+import { fetchSheet } from '../../lib/upstream.mjs';
 
 const SHEET_ID = '1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg';
 const SHEET_NAME = 'RcpDtls';
@@ -30,7 +31,7 @@ function toSortedLists(menuSets) {
 
 async function recipeFromSheet() {
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}`;
-  const fetchRes = await fetch(url);
+  const fetchRes = await fetchSheet(url);
   if (!fetchRes.ok) throw new Error(`Google Sheet Error: ${fetchRes.status}`);
 
   const text = await fetchRes.text();

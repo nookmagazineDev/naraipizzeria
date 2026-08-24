@@ -11,8 +11,9 @@
 // ค่าใช้จ่ายอื่นๆ / พนักงาน / แพลนสั่งของ ย้ายเข้า SQL แล้ว (SHEETS_SOURCE=sql)
 // เครื่องมือของ AI ต้องอ่านที่เดียวกับหน้าเว็บ ไม่งั้นหลังย้ายเสร็จ AI จะยังตอบจากชีทที่หยุดอัปเดตไปแล้ว
 import { usingSql as usingSheetsSql, readExpenses, readEmployees, readPlan } from '../../lib/sheetsSource';
+import { STORE_API_BASE, HEAVY_UPSTREAM_OPTS, fetchUpstream, fetchSheet, fetchScript } from '../../lib/upstream.mjs';
 
-const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
+const STORE_API = STORE_API_BASE;
 // GAS ค่าใช้จ่าย/พนักงาน (ตัวเดียวกับ proxy) — ส่วนชีท Google อยู่ในทะเบียน SHEETS ด้านล่าง
 const EXPENSE_GAS = process.env.EXPENSE_GAS_URL || 'https://script.google.com/macros/s/AKfycbwcRP65mAO0jWusYr1OfcgxpW8GU7yv0t85VcnQ3ShTjEROaXCF2d3MNo_VffNho6Y/exec';
 const HR_GAS = 'https://script.google.com/macros/s/AKfycbwIOFT32mCznuUzCpLZnyBrYrjkdYRskUdVEVXEkP2CeMNd2qzT7dAqd7Vfsz2ZKbF2Fw/exec';
@@ -109,7 +110,8 @@ let cacheRows = 0;
 async function fetchRows(path) {
   const hit = ROW_CACHE.get(path);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.rows;
-  const r = await fetch(`${STORE_API}${path}`);
+  // อ่านอย่างเดียว → ลองใหม่ได้ถ้า host API สะดุด (เครื่องมือของ AI เป็น read-only ทั้งหมด)
+  const r = await fetchUpstream(`${STORE_API}${path}`, HEAVY_UPSTREAM_OPTS);
   if (!r.ok) throw new Error(`host API HTTP ${r.status}`);
   const j = await r.json();
   const rows = Array.isArray(j) ? j : j.data || [];
@@ -150,7 +152,7 @@ async function fetchDetails(start, end, branch) {
 // เรียก endpoint /zk/* (ฐานข้อมูล ZKBio Time — เครื่องสแกนนิ้ว) ผ่าน host API ตัวเดียวกัน
 // ต่อไม่ได้/ยังไม่ตั้งค่า → โยน error พร้อมข้อความจริงจาก host ให้ AI บอกผู้ใช้ตรง ๆ
 async function fetchZk(path) {
-  const r = await fetch(`${STORE_API}${path}`);
+  const r = await fetchUpstream(`${STORE_API}${path}`);
   const j = await r.json().catch(() => null);
   if (!r.ok) throw new Error(j?.error || `host API HTTP ${r.status} (${path})`);
   return Array.isArray(j) ? j : j?.data || [];
@@ -941,7 +943,7 @@ async function fetchTab(sheetKey, tabName) {
   const url = gid
     ? `https://docs.google.com/spreadsheets/d/${src.id}/export?format=csv&gid=${gid}`
     : `https://docs.google.com/spreadsheets/d/${src.id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tabName)}`;
-  const r = await fetch(url, { cache: 'no-store', redirect: 'follow' });
+  const r = await fetchSheet(url);
   if (!r.ok) throw new Error(`Google Sheets HTTP ${r.status} (${sheetKey}/${tabName})`);
   const rows = parseCSV(await r.text());
   sheetCache[key] = { rows, at: Date.now() };
@@ -977,11 +979,10 @@ async function pickSource(fromSql, fromSheet) {
 }
 
 async function gasPost(url, payload) {
-  const r = await fetch(url, {
+  const r = await fetchScript(url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(payload),
-    redirect: 'follow',
   });
   const j = await r.json();
   if (j.status !== 'success') throw new Error(j.message || 'GAS error');

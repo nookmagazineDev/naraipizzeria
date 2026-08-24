@@ -1,3 +1,4 @@
+import { fetchScript } from '../../lib/upstream.mjs';
 // หลังบ้านของหน้า "ค่าใช้จ่ายอื่นๆ"
 //
 // ที่มาเดิม: proxy ไป Google Apps Script ของชีท 1YXOaA… (ตั้ง URL ผ่าน env EXPENSE_GAS_URL)
@@ -21,11 +22,11 @@ const WRITE_ACTIONS = {
 };
 
 async function callGas(body) {
-  const upstream = await fetch(SCRIPT_URL, {
+  // fetchScript = timeout 60 วิ ไม่ลองใหม่ (มีทั้งอ่านและเขียน ยิงซ้ำฝั่งเขียน = ได้แถวซ้ำ)
+  const upstream = await fetchScript(SCRIPT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body,
-    redirect: 'follow',
   });
   const text = await upstream.text();
   try { return { json: JSON.parse(text) }; }

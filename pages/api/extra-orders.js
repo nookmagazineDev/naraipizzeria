@@ -1,3 +1,5 @@
+import { fetchSheet } from '../../lib/upstream.mjs';
+
 // ดึงออเดอร์เพิ่มเติมจาก Google Sheet (ระบบสั่งอาหารภายนอก) แล้วแปลงให้อยู่ในรูปแบบ
 // เดียวกับ API บิล (sales) และรายการ (details) เพื่อนำไปรวมในรายงาน โดยตั้งเป็นโต๊ะ 800
 // แยกสาขาตามคอลัมน์ L (RecordedBy) เช่น xum → 59, xcm → 19 (เดิม hardcode เป็น XUM หมด)
@@ -67,8 +69,8 @@ export default async function handler(req, res) {
     const ordersUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${GID}`;
     const payUrl = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(PAY_SHEET)}`;
     const [ordersRes, payRes] = await Promise.all([
-      fetch(ordersUrl, { cache: 'no-store' }),
-      fetch(payUrl, { cache: 'no-store' }),
+      fetchSheet(ordersUrl),
+      fetchSheet(payUrl),
     ]);
     if (!ordersRes.ok) throw new Error(`Google Sheets HTTP ${ordersRes.status}`);
     const text = await ordersRes.text();

@@ -4,6 +4,7 @@
 // ตอนนี้ชีทนั้นย้ายเข้า SQL แล้ว (dbo.qcrd_menu) — เปิด QCRD_SOURCE=sql เมื่อไหร่ก็อ่านจากฐานแทน
 // อ่านฐานไม่ได้ถอยไปอ่านชีทให้ หน้ารายงานจะได้ไม่ล้มทั้งหน้าเพราะต้นทุนช่องเดียว
 import { usingSql, fetchQcrdSql, sqlRoute } from '../../lib/qcrdSource';
+import { fetchSheet } from '../../lib/upstream.mjs';
 
 const SHEET_URL =
   'https://docs.google.com/spreadsheets/d/1v8WRTaUiEqjtRXzX2g2i5Z8p9FAUvQ37gkdZC8TzhWw/export?format=csv&gid=0';
@@ -28,7 +29,7 @@ function parseCSVLine(line) {
 }
 
 async function costFromSheet() {
-  const response = await fetch(SHEET_URL, { cache: 'no-store' });
+  const response = await fetchSheet(SHEET_URL);
   if (!response.ok) throw new Error(`Google Sheets HTTP ${response.status}`);
   const lines = (await response.text()).split('\n');
   const costMap = {};

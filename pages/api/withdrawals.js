@@ -1,25 +1,11 @@
-import mysql from 'mysql2/promise';
+import { queryRead, replyDbError } from '../../lib/mysql';
+
+export const config = { maxDuration: 60 };
 
 // ใบเบิก (รายการเอกสารโอน/รับเข้าสาขา) — ดึงตรงจาก MySQL: inventory.dyndns.tv / myfbdata.trans
 // จัดกลุ่มตาม Trn_InvNo (เลขที่ใบเบิก) พร้อมรายการสินค้าในแต่ละใบ
 // ใช้เกณฑ์เดียวกับใบรับ: Trn_Type IN ('TRF','RCV') ที่ Trn_To = เลขสาขา ในช่วง Trn_DocDate
-
-let pool;
-function getPool() {
-  if (!pool) {
-    pool = mysql.createPool({
-      host: process.env.MYSQL_HOST || 'inventory.dyndns.tv',
-      port: Number(process.env.MYSQL_PORT) || 3306,
-      user: process.env.MYSQL_USER || 'root',
-      password: process.env.MYSQL_PASSWORD || '',
-      database: process.env.MYSQL_DATABASE || 'myfbdata',
-      waitForConnections: true,
-      connectionLimit: 5,
-      connectTimeout: 15000,
-    });
-  }
-  return pool;
-}
+// pool/retry/ข้อความ error อยู่ที่ lib/mysql.js ชุดเดียวกับ Narai-branch
 
 const r2 = (n) => Number((Number(n) || 0).toFixed(2));
 
@@ -52,17 +38,37 @@ export default async function handler(req, res) {
   const outletId = queryOutletId || branchMap[branchKey] || branchKey;
 
   try {
-    const [rows] = await getPool().query(
+    // ตาราง trans มี 1.4 ล้านแถว ไม่มี index ตามสาขา/วันที่ — คิวรีตรงๆ กวาดทั้งตาราง (~5 วิ)
+    // เร่งด้วยการบีบช่วงเลขเอกสาร (Trn_DocNo) ให้ MySQL ใช้ PRIMARY KEY (Trn_Type, Trn_DocNo นำหน้า)
+    // เลขเอกสารเดินจากตัวนับกลาง config: TRF ใช้ Cfg_LstIss, RCV ใช้ Cfg_LstRcv (~15 เลข/วัน)
+    let docNoFilter = '';
+    let docNoParams = [];
+    try {
+      const cfg = await queryRead('SELECT Cfg_LstIss AS iss, Cfg_LstRcv AS rcv FROM config LIMIT 1');
+      const lastIss = Number(cfg[0]?.iss) || 0;
+      const lastRcv = Number(cfg[0]?.rcv) || 0;
+      const days = Math.max(1, Math.ceil((new Date(endDate) - new Date(startDate)) / 86400000) + 1)
+        + Math.max(0, Math.ceil((Date.now() - new Date(endDate)) / 86400000)); // ย้อนถึงช่วงที่ขอ
+      const span = days * 25 + 300; // อัตราจริง ~15 เลข/วัน — เผื่อไว้ ~1.7 เท่า (ยิ่งกว้างยิ่งช้า)
+      if (lastIss > 0 && lastRcv > 0) {
+        docNoFilter = `AND ((Trn_Type = 'TRF' AND Trn_DocNo BETWEEN ? AND ?)
+                         OR (Trn_Type = 'RCV' AND Trn_DocNo BETWEEN ? AND ?))`;
+        docNoParams = [lastIss - span, lastIss + 50, lastRcv - span, lastRcv + 50];
+      }
+    } catch (e) { /* อ่านตัวนับไม่ได้ → ใช้คิวรีเต็มตาราง */ }
+
+    const rows = await queryRead(
       `SELECT Trn_InvNo AS invNo, Trn_Type AS docType, Trn_DocNo AS docNo,
               DATE_FORMAT(Trn_DocDate, '%Y-%m-%d') AS docDate,
               Trn_itemCode AS itemCode, Trn_itemName AS itemName,
               Trn_InvQty AS qty, Trn_Unit AS unit, Trn_UnitPr AS unitPrice
          FROM trans
         WHERE Trn_Type IN ('TRF','RCV')
+          ${docNoFilter}
           AND Trn_To = ?
           AND Trn_DocDate BETWEEN ? AND ?
         ORDER BY Trn_DocDate DESC, Trn_InvNo DESC, Trn_Seq ASC`,
-      [outletId, startDate, endDate]
+      [...docNoParams, outletId, startDate, endDate]
     );
 
     // จัดกลุ่มเป็นใบเบิกตาม Trn_InvNo
@@ -108,7 +114,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ status: 'success', data });
   } catch (error) {
-    console.error('MySQL withdrawals error:', error);
-    return res.status(500).json({ status: 'error', message: error.message });
+    return replyDbError(res, error, 'withdrawals');
   }
 }
