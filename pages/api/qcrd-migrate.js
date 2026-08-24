@@ -75,7 +75,8 @@ async function writeBatched(records, buildStmt, { deadline, startAt = 0, describ
   return { done, batches, finished: true };
 }
 
-async function runStep(step, { confirm, offset, deadline, extra = [] }) {
+/** ทำ step เดียว — /api/qcrd-sync ยืมไปใช้ตอนดันชีทขึ้น SQL ด้วยทางต่อ SQL ตรง */
+export async function runStep(step, { confirm, offset, deadline, extra = [] }) {
   if (step === 'probe') return probeEndpoints(extra);
 
   if (step === 'schema') {

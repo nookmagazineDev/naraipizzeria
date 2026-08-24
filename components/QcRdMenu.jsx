@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save } from 'lucide-react';
-import { apiCall } from '../lib/qcrdApi';
+import { apiCall, syncNote, syncOk } from '../lib/qcrdApi';
 
 /*
  * QC/RD — เมนู: รายชื่อเมนู + สูตร (BOM) ของแต่ละเมนู
@@ -305,10 +305,11 @@ export default function QcRdMenu() {
       // เมนูอื่นที่ดึงสูตรของเมนูนี้ไปใช้ ถูกคิดยอดใหม่ให้ตามสูตรล่าสุดโดย Apps Script
       const cascaded = res.data?.cascaded || [];
       setToast({
-        ok: true,
+        ok: syncOk(res),
         msg: `บันทึก "${editMenu.name}" สำเร็จ (${res.data?.bomRows ?? rows.length} วัตถุดิบ`
           + `${unitEdits.length ? ` · หน่วย ${unitSaved}/${unitEdits.length} รายการ` : ''})`
-          + (cascaded.length ? ` · อัปเดตเมนูที่ผูกไว้ ${cascaded.length} เมนู: ${cascaded.map(c => c.name || c.code).join(', ')}` : ''),
+          + (cascaded.length ? ` · อัปเดตเมนูที่ผูกไว้ ${cascaded.length} เมนู: ${cascaded.map(c => c.name || c.code).join(', ')}` : '')
+          + syncNote(res),
       });
       setEditMenu(null);
       loadAll();
@@ -325,9 +326,12 @@ export default function QcRdMenu() {
     setTogglingCode(m.code);
     setToast(null);
     try {
-      await apiCall('saveMenuStatus', { code: m.code, status: next });
+      const res = await apiCall('saveMenuStatus', { code: m.code, status: next });
       setMenus(prev => prev.map(x => x.code === m.code ? { ...x, status: next } : x));
-      setToast({ ok: true, msg: `${next === 'ใช้งาน' ? 'เปิด' : 'ปิด'}ใช้งาน "${m.name}" แล้ว` });
+      setToast({
+        ok: syncOk(res),
+        msg: `${next === 'ใช้งาน' ? 'เปิด' : 'ปิด'}ใช้งาน "${m.name}" แล้ว` + syncNote(res),
+      });
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'เปลี่ยนสถานะไม่สำเร็จ' });
     } finally {
@@ -962,8 +966,8 @@ function GroupManager({ groups, menus, onClose, onSaved }) {
     setBusy(key);
     setMsg(null);
     try {
-      await apiCall('saveMenuGroup', payload);
-      setMsg({ ok: true, msg: okMsg });
+      const res = await apiCall('saveMenuGroup', payload);
+      setMsg({ ok: syncOk(res), msg: okMsg + syncNote(res) });
       onSaved();
     } catch (err) {
       setMsg({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });

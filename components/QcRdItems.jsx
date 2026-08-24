@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle } from 'lucide-react';
-import { apiCall } from '../lib/qcrdApi';
+import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud } from 'lucide-react';
+import { apiCall, syncNote, syncOk, syncSql } from '../lib/qcrdApi';
 
 /*
  * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน / หมวดสโตร์
@@ -51,6 +51,7 @@ export default function QcRdItems() {
   const [deleteTarget, setDeleteTarget] = useState(null); // { code, name, row }
   const [deleting, setDeleting] = useState(false);
   const [source, setSource] = useState('sheet');   // ข้อมูลชุดนี้มาจากชีทหรือ SQL
+  const [syncing, setSyncing] = useState(false);   // กำลังดันชีทขึ้น SQL เอง (ปุ่ม "อัพขึ้น SQL")
 
   const load = () => {
     setLoading(true);
@@ -110,13 +111,36 @@ export default function QcRdItems() {
     });
   }, [items, search, unitFilter, statusFilter, storeFilter, typeFilter]);
 
+  // ดันทะเบียนวัตถุดิบทั้งชีทขึ้น dbo.stock_item / stock_item_branch เอง
+  // ปกติ /api/qcrd-save ดันให้อัตโนมัติหลังบันทึกอยู่แล้ว ปุ่มนี้ไว้ใช้ตอนรอบนั้นดันไม่ขึ้น
+  // (เครื่องออฟฟิศดับอยู่ตอนกดบันทึก) หรืออยากยืนยันว่าชีทกับฐานตรงกันแล้ว
+  const pushToSql = async () => {
+    setSyncing(true);
+    setToast(null);
+    try {
+      const res = await syncSql('item', { verify: true });
+      const check = (res.results || []).find(r => r.step === 'verify');
+      const item = (check?.checks || []).find(c => c.label === 'วัตถุดิบ');
+      setToast({
+        ok: res.status === 'success',
+        msg: res.status === 'success'
+          ? `อัพวัตถุดิบขึ้น SQL แล้ว${item ? ` · ชีท ${item.sheet.toLocaleString()} · SQL ${item.sql.toLocaleString()} รายการ` : ''}`
+          : res.message || 'อัพขึ้น SQL ไม่สำเร็จ',
+      });
+    } catch (err) {
+      setToast({ ok: false, msg: err.message || 'อัพขึ้น SQL ไม่สำเร็จ' });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const saveUnits = async () => {
     setSaving(true);
     setToast(null);
     try {
       const units = items.filter(i => i.unitSource === 'auto' && i.unit).map(i => ({ code: i.code, unit: i.unit }));
       const res = await apiCall('updateItemUnits', { units });
-      setToast({ ok: true, msg: `บันทึกหน่วยแล้ว ${res.data?.updated ?? 0} รายการ` });
+      setToast({ ok: syncOk(res), msg: `บันทึกหน่วยแล้ว ${res.data?.updated ?? 0} รายการ${syncNote(res)}` });
       load();
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
@@ -155,7 +179,7 @@ export default function QcRdItems() {
     setSavingItem(true);
     setToast(null);
     try {
-      await apiCall(editItem.isNew ? 'addItem' : 'saveItem', {
+      const res = await apiCall(editItem.isNew ? 'addItem' : 'saveItem', {
         code, name: editItem.name.trim(),
         status: editItem.status, subs: editItem.subs.slice(0, 3),
         price: editItem.price, unit: (editItem.unit || '').trim(), converter: editItem.converter,
@@ -164,7 +188,10 @@ export default function QcRdItems() {
         itemType: editItem.itemType === PACKAGING ? PACKAGING : MATERIAL,
         usedWhen: editItem.itemType === PACKAGING ? (editItem.usedWhen || USED_WHEN[0]) : '',
       });
-      setToast({ ok: true, msg: editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ` });
+      setToast({
+        ok: syncOk(res),
+        msg: (editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ`) + syncNote(res),
+      });
       setEditItem(null);
       load();
     } catch (err) {
@@ -179,8 +206,15 @@ export default function QcRdItems() {
     setDeleting(true);
     setToast(null);
     try {
-      await apiCall('deleteItem', { code: deleteTarget.code, row: deleteTarget.row });
-      setToast({ ok: true, msg: `ลบ ${deleteTarget.code} สำเร็จ` });
+      const res = await apiCall('deleteItem', { code: deleteTarget.code, row: deleteTarget.row });
+      // ตัวดันขึ้น SQL ใช้ MERGE (เพิ่ม/อัปเดต) ไม่ลบแถวที่หายไปจากชีท — แถวใน dbo.stock_item
+      // จึงยังอยู่ และหน้านับสต๊อกยังเห็นอยู่ ต้องบอกวิธีที่ได้ผลจริงไปเลย
+      setToast({
+        ok: syncOk(res),
+        msg: `ลบ ${deleteTarget.code} ออกจากชีทแล้ว · หน้านับสต๊อกยังเห็นอยู่ `
+          + `(การลบไม่ตามขึ้น SQL) ถ้าต้องการซ่อนด้วย ให้ตั้งสถานะเป็น "ปิดการใช้งาน" แทนการลบ`
+          + syncNote(res),
+      });
       setDeleteTarget(null);
       load();
     } catch (err) {
@@ -216,6 +250,12 @@ export default function QcRdItems() {
                 <CheckCircle size={13} />{toast.msg}
               </span>
             )}
+            <button onClick={pushToSql} disabled={syncing}
+              title="ดันทะเบียนวัตถุดิบจากชีทขึ้น SQL (dbo.stock_item) เพื่อให้หน้านับสต๊อกของสาขาเห็นของที่แก้จากหน้านี้"
+              className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 disabled:text-slate-300 border border-slate-200 text-slate-600 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+              {syncing ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+              อัพขึ้น SQL
+            </button>
             <button onClick={openNew}
               title="เพิ่มวัตถุดิบใหม่ลงชีท item"
               className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
