@@ -483,9 +483,9 @@ const TOOL_HANDLERS = {
     };
   },
 
-  // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว) — dbo.hr_employee เดิมคือชีทแท็บ DATA
+  // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว) — narai_hr.dbo.hr_employee ที่เดียวกับตารางงาน/กะ
   async get_employees_summary({ branch }) {
-    // พนักงานยึด dbo.hr_employee ที่เดียวเหมือนหน้ารายชื่อ — ไม่ถอยไปอ่านชีท
+    // พนักงานยึดตารางเดียวกับหน้ารายชื่อ (narai_hr.dbo.hr_employee) — ไม่ถอยไปอ่านชีท
     // ไม่งั้น AI จะตอบจากข้อมูลเก่าที่ไม่ตรงกับที่หน้าเว็บแก้ไว้
     const list = await readEmployees();
     let emps = (list || []).filter(e => e.hrCode && String(e.fullName || '').trim() !== 'ชื่อ - สกุล');

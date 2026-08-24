@@ -1,7 +1,8 @@
 // Proxy ไป Google Apps Script ของสต๊อก (getBranches / getStockItems / getStockTotal / saveStock ฯลฯ)
 //
 // ยกเว้นสองอย่างที่ย้ายเข้า SQL แล้ว: รายชื่อพนักงาน (getEmployees) กับการแก้ข้อมูลพนักงาน (saveEmployee)
-// สองตัวนี้ **ยึด dbo.hr_employee ในฐาน InventoryNarai อย่างเดียว** ไม่ขึ้นกับ SHEETS_SOURCE
+// สองตัวนี้ **ยึด narai_hr.dbo.hr_employee อย่างเดียว** ไม่ขึ้นกับ SHEETS_SOURCE
+// (ฐานเดียวกับตารางงาน/กะ — รวมมาจาก InventoryNarai.dbo.hr_employee แล้ว ดู docs/schema-hr-employee.sql)
 // และไม่ถอยไปอ่าน/เขียนชีท DATA อีกแล้ว — ชีทเป็นแค่ต้นทางตอนย้ายข้อมูลเข้าฐานเท่านั้น
 // (อ่านที่หนึ่งแต่เขียนอีกที่หนึ่งคือต้นเหตุของอาการ "กดบันทึกขึ้นสำเร็จ แต่ข้อมูลไม่เปลี่ยน"
 //  ต่อฐานไม่ได้เมื่อไหร่ให้ฟ้องไปตรง ๆ ดีกว่าโชว์ข้อมูลเก่าจากชีทโดยที่คนใช้ไม่รู้ตัว)

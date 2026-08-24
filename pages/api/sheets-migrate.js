@@ -28,16 +28,17 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { probeEndpoints, extraTargets } from '../../lib/sqlProbe.mjs';
 import {
-  fetchPlanRows, fetchClosingRows, fetchExpenseRefs, fetchExpenses, fetchEmployees,
+  fetchPlanRows, fetchClosingRows, fetchExpenseRefs, fetchExpenses,
 } from '../../lib/sheetsSheet.mjs';
 import { isConfigured as hasDirectDb, describeTarget, runQuery, credentials } from '../../lib/qcrdPool';
 import { SHEETS_API_BASE } from '../../lib/sheetsSource';
 import { combine, PARAM_LIMIT } from '../../lib/qcrdMigrate.mjs';
 import {
-  mapPlan, mapClosing, mapExpenseRefs, mapExpenses, mapEmployees,
-  planStmt, closingStmt, expenseRefStmt, expenseStmt, employeeStmt,
+  mapPlan, mapClosing, mapExpenseRefs, mapExpenses,
+  planStmt, closingStmt, expenseRefStmt, expenseStmt,
   str,
 } from '../../lib/sheetsMigrate.mjs';
+import { HR_EMPLOYEE_TABLE } from '../../lib/sheetsSql.mjs';
 
 export const config = { maxDuration: 60 };
 
@@ -45,6 +46,10 @@ export const config = { maxDuration: 60 };
 const BUDGET_MS = 45000;
 
 // ชุดข้อมูล -> วิธีอ่านชีท, วิธีแปลง, วิธีเขียน, ตารางปลายทาง
+//
+// ไม่มีชุด employee แล้ว — รายชื่อพนักงานย้ายไปรวมที่ narai_hr.dbo.hr_employee (ฐานเดียวกับตารางงาน/กะ)
+// ซึ่งหน้าเว็บแก้อยู่ทุกวัน ย้ายจากชีททับซ้ำอีกจะเอาข้อมูลเก่ากลับมาทับของจริง
+// step=check ยังบอกให้ว่ามองเห็นตารางนั้นไหม เพราะเป็นอาการที่คนเจอบ่อยเวลาหน้าพนักงานอ่านไม่ขึ้น
 const SETS = {
   plan: {
     label: 'แพลนสั่งของ',
@@ -78,17 +83,9 @@ const SETS = {
     stmt: expenseStmt,
     describe: (r) => `${r.period} ${r.type} ${r.branch}`,
   },
-  employee: {
-    label: 'พนักงาน',
-    table: 'dbo.hr_employee',
-    read: fetchEmployees,
-    map: mapEmployees,
-    stmt: employeeStmt,
-    describe: (r) => `รหัส ${r.hrCode}`,
-  },
 };
 
-const ORDER = ['plan', 'closing', 'expenseref', 'expense', 'employee'];
+const ORDER = ['plan', 'closing', 'expenseref', 'expense'];
 
 /** ยิงทีละก้อน โดยรวมหลายแถวเป็นคำสั่งเดียวเท่าที่พารามิเตอร์ยังไม่เกินลิมิต */
 async function writeBatched(records, buildStmt, { deadline, startAt = 0, describe }) {
@@ -297,7 +294,7 @@ export default async function handler(req, res) {
                OBJECT_ID(N'dbo.stock_closing') AS t_closing,
                OBJECT_ID(N'dbo.expense_ref') AS t_expense_ref,
                OBJECT_ID(N'dbo.expense_entry') AS t_expense,
-               OBJECT_ID(N'dbo.hr_employee') AS t_employee`).catch((e) => ({ error: e.message }));
+               OBJECT_ID(N'${HR_EMPLOYEE_TABLE}') AS t_employee`).catch((e) => ({ error: e.message }));
       if (perms.error) {
         const cannotConnect = /Failed to connect|ETIMEOUT|ECONNREFUSED|ENOTFOUND|ESOCKET/i.test(perms.error);
         return res.status(200).json({
@@ -314,9 +311,11 @@ export default async function handler(req, res) {
         stock_closing: Boolean(p.t_closing),
         expense_ref: Boolean(p.t_expense_ref),
         expense_entry: Boolean(p.t_expense),
-        hr_employee: Boolean(p.t_employee),
       };
       const missing = Object.entries(tables).filter(([, v]) => !v).map(([k2]) => k2);
+      // พนักงานอยู่คนละฐาน แยกรายงานต่างหาก — step=schema ที่นี่ไม่ได้สร้างตัวนี้ให้
+      // มองไม่เห็น = ยังไม่ได้รัน docs/schema-hr-employee.sql หรือ login ยังไม่มีสิทธิ์ในฐานนั้น
+      const employeeTable = { name: HR_EMPLOYEE_TABLE, exists: Boolean(p.t_employee) };
       return res.status(200).json({
         status: 'success', step, db: describeTarget(),
         credentialsFrom: credentials().from,
@@ -324,13 +323,17 @@ export default async function handler(req, res) {
         canCreateTable: p.can_create === 1,
         canWrite: p.can_insert === 1,
         tables,
+        employeeTable,
         sheetsSource: process.env.SHEETS_SOURCE || 'sheet',
         hint: missing.length
           ? (p.can_create === 1
             ? `ยังไม่มีตาราง: ${missing.join(', ')} — เรียก &step=schema&confirm=1 ก่อน`
             : `ยังไม่มีตาราง: ${missing.join(', ')} และ login นี้สร้างตารางไม่ได้ — ` +
               'ให้สิทธิ์ db_ddladmin เพิ่ม หรือรัน docs/schema-sheets.sql ที่เครื่องออฟฟิศครั้งเดียว')
-          : 'ตารางพร้อมแล้ว — เรียก &step=all&confirm=1 เพื่อย้ายข้อมูลทุกชุด แล้วปิดท้ายด้วย &step=verify',
+          : (!employeeTable.exists
+            ? `ตารางชุดนี้พร้อมแล้ว แต่มองไม่เห็น ${employeeTable.name} (หน้าพนักงานจะอ่านไม่ขึ้น) — ` +
+              'รัน docs/schema-hr-employee.sql ที่เครื่องออฟฟิศ และให้สิทธิ์ login นี้ในฐาน narai_hr ด้วย'
+            : 'ตารางพร้อมแล้ว — เรียก &step=all&confirm=1 เพื่อย้ายข้อมูลทุกชุด แล้วปิดท้ายด้วย &step=verify'),
       });
     }
 

@@ -195,9 +195,16 @@ powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart
 | GET | `/sheets/plan` | แพลนสั่งของทุกสาขา (dbo.stock_plan) |
 | GET | `/sheets/closing?branch=crm` | ยอดยกมาล่าสุดของสาขานั้น (dbo.stock_closing) |
 | GET | `/sheets/expense-ref` `/sheets/expense` | รหัสค่าใช้จ่าย · ค่าใช้จ่ายที่บันทึกแล้ว |
-| GET | `/sheets/employee` | รายชื่อพนักงาน (dbo.hr_employee) |
+| GET | `/sheets/employee` | รายชื่อพนักงาน (narai_hr.dbo.hr_employee — คนละฐานกับตัวอื่น) |
 | POST | `/sheets/save` | บันทึกค่าใช้จ่าย/แก้ข้อมูลพนักงาน (ต้องมี header `x-api-key`) |
-| GET | `/sheets/ping` | เช็กว่าตาราง 5 ตารางพร้อมไหม + เขียนได้ไหม |
+| GET | `/sheets/ping` | เช็กว่าตาราง 5 ตารางพร้อมไหม + เขียนได้ไหม (บอกชื่อตารางพนักงานที่ใช้อยู่ด้วย) |
+
+> **รายชื่อพนักงานอยู่ฐาน `narai_hr` ไม่ใช่ `InventoryNarai`** — เป็นฐานเดียวกับตารางงาน/กะ ของ
+> Narai-branch (`dbo.hr_timesheet` อ้าง `hr_code` ของฐานนั้น) รวมมาไว้ที่เดียวแล้ว เพื่อไม่ให้
+> รายชื่อสองที่เพี้ยนกัน สองฐานอยู่ SQL instance เดียวกัน host-server จึงยิงข้ามฐานด้วยชื่อสามส่วน
+> บน connection เดิม ไม่ต้องตั้ง env ชุดใหม่ ขอแค่ login ที่ใช้ต่อมีสิทธิ์ในฐาน `narai_hr` ด้วย
+> (`/sheets/ping` จะบอกให้ถ้ายังไม่มีสิทธิ์ · วิธีให้สิทธิ์อยู่ท้าย `docs/schema-hr-employee.sql`)
+> ย้ายฐานอีกเมื่อไหร่ตั้ง env `HR_EMPLOYEE_TABLE` ทับได้
 
 ทุก endpoint คืน `{ data: [...] }` (ยกเว้น debug) โดยชื่อคอลัมน์แปลงเป็นตัวพิมพ์เล็กตัวแรก
 ให้ตรงกับที่ frontend ใช้

@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════
-//  ย้าย แพลนสั่งของ · ปิดรอบสิ้นเดือน · ค่าใช้จ่ายอื่นๆ · พนักงาน จาก Google Sheets -> SQL Server
+//  ย้าย แพลนสั่งของ · ปิดรอบสิ้นเดือน · ค่าใช้จ่ายอื่นๆ จาก Google Sheets -> SQL Server
 //  รันจากเครื่องที่ต่อ SQL Server ได้ (ปกติคือเครื่องออฟฟิศ ต่อ localhost\SQLEXPRESS)
 //
 //  วิธีใช้
@@ -9,7 +9,10 @@
 //    node scripts/migrate-sheets.mjs --only=plan,expense ย้ายเฉพาะบางชุด
 //    node scripts/migrate-sheets.mjs --verify           เทียบจำนวนต้นทาง ↔ SQL
 //
-//  ชุดข้อมูล: plan · closing · expenseref · expense · employee
+//  ชุดข้อมูล: plan · closing · expenseref · expense
+//
+//  ไม่มีชุด employee แล้ว — รายชื่อพนักงานย้ายไปรวมที่ narai_hr.dbo.hr_employee (ฐานเดียวกับตารางงาน/กะ)
+//  ซึ่งหน้าเว็บแก้อยู่ทุกวัน ย้ายจากชีททับซ้ำอีกจะเอาข้อมูลเก่ากลับมาทับของจริง (docs/schema-hr-employee.sql)
 //
 //  ทำไมต้องมีตัวนี้ทั้งที่มี /api/sheets-migrate อยู่แล้ว
 //    endpoint นั้นให้ Vercel เป็นคนย้าย ซึ่งต้องต่อ SQL ตรงได้ — ที่ร้านตอนนี้ SQL ไม่ได้เปิด
@@ -21,11 +24,11 @@
 import process from 'node:process';
 import { openPool, describeTarget } from './qcrdDb.mjs';
 import {
-  fetchPlanRows, fetchClosingRows, fetchExpenseRefs, fetchExpenses, fetchEmployees,
+  fetchPlanRows, fetchClosingRows, fetchExpenseRefs, fetchExpenses,
 } from '../lib/sheetsSheet.mjs';
 import {
-  mapPlan, mapClosing, mapExpenseRefs, mapExpenses, mapEmployees,
-  planStmt, closingStmt, expenseRefStmt, expenseStmt, employeeStmt,
+  mapPlan, mapClosing, mapExpenseRefs, mapExpenses,
+  planStmt, closingStmt, expenseRefStmt, expenseStmt,
 } from '../lib/sheetsMigrate.mjs';
 
 const SETS = {
@@ -45,13 +48,9 @@ const SETS = {
     label: 'ค่าใช้จ่ายอื่นๆ', table: 'dbo.expense_entry',
     read: fetchExpenses, map: mapExpenses, stmt: expenseStmt,
   },
-  employee: {
-    label: 'พนักงาน', table: 'dbo.hr_employee',
-    read: fetchEmployees, map: mapEmployees, stmt: employeeStmt,
-  },
 };
 
-const ORDER = ['plan', 'closing', 'expenseref', 'expense', 'employee'];
+const ORDER = ['plan', 'closing', 'expenseref', 'expense'];
 
 // SQL Server รับได้ 2100 พารามิเตอร์ต่อคำสั่ง — เผื่อไว้ที่ 2000
 const PARAM_LIMIT = 2000;

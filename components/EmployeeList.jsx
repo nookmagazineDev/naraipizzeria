@@ -20,7 +20,8 @@ const LABEL_OF = Object.fromEntries(EDIT_FIELDS.map(f => [f.key, f.label]));
 
 /*
  * NARAI OFFICE — รายชื่อพนักงาน (โหมดดูอย่างเดียว)
- * ดึงผ่าน /api/stock-gas → action=getEmployees ซึ่งอ่านจาก dbo.hr_employee (ฐาน InventoryNarai) ที่เดียว
+ * ดึงผ่าน /api/stock-gas → action=getEmployees ซึ่งอ่านจาก narai_hr.dbo.hr_employee ที่เดียว
+ * (ฐานเดียวกับตารางงาน/กะ ที่ narai-branch ใช้ — รายชื่อจึงเป็นชุดเดียวกันทั้งสองเว็บ)
  * ทั้งอ่านและบันทึกยึดฐานเดียวกัน ไม่ถอยไปชีท DATA แล้ว — ต่อฐานไม่ได้จะขึ้น error ให้เห็น
  * แสดงผลให้เหมือนหน้า "รายชื่อพนักงาน" ของ narai-branch.vercel.app
  */
@@ -130,7 +131,7 @@ export default function EmployeeList() {
       if (wrote === 0) throw new Error('ไม่มีช่องไหนถูกบันทึกลงฐานข้อมูล (ลองใหม่อีกครั้ง)');
 
       // แล้วอ่านรายชื่อใหม่มาเทียบว่า "ค่าที่เพิ่งส่งไปติดจริงไหม"
-      // ทั้งอ่านและเขียนยิงไป dbo.hr_employee ที่เดียวแล้ว ปกติต้องตรงกันเสมอ
+      // ทั้งอ่านและเขียนยิงไปตารางเดียวกันแล้ว ปกติต้องตรงกันเสมอ
       // ถ้าไม่ตรง = ฐานไม่ได้รับค่านั้นจริง ต้องขึ้นเป็น error ไม่ใช่ปิดฟอร์มแล้วบอกว่าสำเร็จ
       const fresh = await fetchEmployees();
       if (fresh) {
@@ -140,7 +141,7 @@ export default function EmployeeList() {
           throw new Error((after
             ? `กดบันทึกแล้วแต่ค่าที่อ่านกลับมาจากฐานยังเป็นของเดิม: ${stale.map(k => LABEL_OF[k] || k).join(', ')}`
             : `บันทึกแล้วแต่หารหัส ${editEmp.hrCode} ในฐานข้อมูลไม่เจอ`)
-            + ' — ลองใหม่อีกครั้ง ถ้ายังเป็นเหมือนเดิมให้แจ้ง IT ตรวจ dbo.hr_employee');
+            + ' — ลองใหม่อีกครั้ง ถ้ายังเป็นเหมือนเดิมให้แจ้ง IT ตรวจ narai_hr.dbo.hr_employee');
         }
       }
 

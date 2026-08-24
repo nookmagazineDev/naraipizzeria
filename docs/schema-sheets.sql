@@ -10,8 +10,7 @@
      ชีทค่าใช้จ่าย 1YXOaA--qL71kxtCtqOVHF4LYTNLxc64-NNuhwKeVYZw
        แท็บ 'ข้อมูลค่าใช้อื่น'   -> dbo.expense_ref
        แท็บ 'ค่าใช้จ่ายอื่น'     -> dbo.expense_entry
-     ชีทพนักงาน (แท็บ DATA ที่ Apps Script ของสต๊อกผูกอยู่)
-                                -> dbo.hr_employee
+     (ชีทพนักงานย้ายไปฐาน narai_hr แล้ว — ดู docs/schema-hr-employee.sql)
 
    วิธีรัน (บนเครื่องที่ต่อ SQL Server ได้):
      sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i docs\schema-sheets.sql
@@ -153,34 +152,19 @@ CREATE INDEX IX_expense_entry_branch ON dbo.expense_entry (branch, period)
     INCLUDE (exp_type, total);
 GO
 
-/* ========================= พนักงาน (แท็บ DATA ของชีทสต๊อก) =========================
-   หน้า "รายชื่อพนักงาน" อ่านผ่าน Apps Script action=getEmployees และแก้ผ่าน saveEmployee
-   ชีทจับคอลัมน์จาก "ชื่อหัวตาราง" ไม่ใช่ตำแหน่ง (ดู EMP_HEADER_ALIASES ใน
-   employee-apps-script.gs) ตารางนี้จึงเก็บเป็นฟิลด์ตรง ๆ ตามชื่อที่หน้าเว็บใช้
+/* ========================= พนักงาน — ย้ายออกไปฐาน narai_hr แล้ว =========================
+   ไฟล์นี้ไม่สร้าง dbo.hr_employee ให้อีก
 
-   วันเริ่มงานเก็บเป็นข้อความตามที่ชีทเขียน (มีทั้ง พ.ศ. '31/03/2545' และ ค.ศ. '2002-03-31')
-   หน้าเว็บมี parseThaiDate() แปลงเองอยู่แล้ว — ถ้าดันแปลงตอนย้าย จะเดาพลาดกับปี พ.ศ.
-   ที่ตกอยู่ในช่วงที่เป็น ค.ศ. ได้ด้วย (เช่น 2545 กับ 2002) แล้วอายุงานเพี้ยนทั้งระบบ */
-IF OBJECT_ID(N'dbo.hr_employee', N'U') IS NULL
-CREATE TABLE dbo.hr_employee (
-    hr_code     NVARCHAR(50)   NOT NULL,   -- รหัส HR (คีย์ที่หน้าเว็บใช้อ้าง)
-    full_name   NVARCHAR(255)  NULL,       -- ชื่อ - สกุล
-    branch      NVARCHAR(50)   NULL,       -- สาขา
-    emp_type    NVARCHAR(50)   NULL,       -- ประเภท (รายเดือน/รายวัน)
-    status      NVARCHAR(50)   NULL,       -- สถานะ (ทำงาน/ลาออก)
-    position    NVARCHAR(100)  NULL,       -- ตำแหน่ง
-    start_date  NVARCHAR(30)   NULL,       -- วันเริ่มงาน (ข้อความตามชีท)
-    loga        NVARCHAR(50)   NULL,       -- เลขที่ LOGA
-    new_code    NVARCHAR(50)   NULL,       -- รหัสใหม่
-    photo_url   NVARCHAR(500)  NULL,       -- ลิงก์รูป
-    sort_order  INT            NOT NULL CONSTRAINT DF_hr_employee_sort DEFAULT (0),
-    updated_at  DATETIME2(0)   NOT NULL CONSTRAINT DF_hr_employee_updated DEFAULT (SYSDATETIME()),
-    CONSTRAINT PK_hr_employee PRIMARY KEY (hr_code)
-);
-GO
-IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_hr_employee_branch')
-CREATE INDEX IX_hr_employee_branch ON dbo.hr_employee (branch, status) INCLUDE (full_name, position);
-GO
+   รายชื่อพนักงานเคยอยู่สองที่: InventoryNarai.dbo.hr_employee (ที่ไฟล์นี้เคยสร้าง) กับ
+   narai_hr.dbo.hr_employee ที่ตารางงาน/กะ ของ Narai-branch ใช้อยู่ — สองที่แก้กันคนละรอบ
+   ข้อมูลจึงเพี้ยนกัน รวมเหลือตารางเดียวที่ narai_hr ไปแล้ว เพราะประวัติกะผูกกับ hr_code
+   ของฐานนั้น ย้ายกลับทางอื่นไม่ได้
+
+     โครงตาราง + สคริปต์รวมข้อมูล -> docs/schema-hr-employee.sql
+     ชื่อตารางที่โค้ดใช้             -> HR_EMPLOYEE_TABLE ใน lib/sheetsSql.mjs
+
+   InventoryNarai.dbo.hr_employee ที่มีอยู่เดิมเหลือไว้เป็นสำเนาสำรอง ไม่มีใครอ่าน/เขียนแล้ว
+   (ไม่ต้องลบ เก็บไว้เทียบย้อนหลังได้) */
 
 /* ============================================================================
    ให้สิทธิ์ login ที่เว็บใช้ต่อเข้ามา (รันครั้งเดียว — ถ้าเคยรันตอน schema-qcrd.sql

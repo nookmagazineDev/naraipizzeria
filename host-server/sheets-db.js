@@ -2,6 +2,8 @@
 //  แพลนสั่งของ · ปิดรอบสิ้นเดือน · ค่าใช้จ่ายอื่นๆ · พนักงาน บน SQL Server
 //  ฐานข้อมูล InventoryNarai (ตัวเดียวกับ QC/RD และหน้านับสต๊อก)
 //  โครงตารางอยู่ใน docs/schema-sheets.sql
+//  ยกเว้นพนักงานที่อยู่ฐาน narai_hr ตัวเดียวกับตารางงาน/กะ (docs/schema-hr-employee.sql)
+//  — ยิงข้ามฐานด้วยชื่อสามส่วนบน pool เดิม เพราะสองฐานอยู่ instance เดียวกัน
 //
 //  ไฟล์นี้คือฝั่ง "เปิดเป็น endpoint" ของข้อมูลที่ย้ายออกจาก Google Sheets รอบที่สอง
 //  ทุก action ที่หน้าเว็บเคยยิงไป Apps Script มีครบที่นี่ ชื่อและรูปแบบ payload เหมือนเดิม
@@ -39,6 +41,9 @@ function getCore() {
   return corePromise;
 }
 
+/** ชื่อตารางพนักงานตัวจริง (คนละฐานกับตารางอื่น) — เอามาจากที่เดียวกับที่ query ใช้ */
+const hrTable = () => import('../lib/sheetsSql.mjs').then(m => m.HR_EMPLOYEE_TABLE);
+
 const str = v => (v === null || v === undefined ? '' : String(v).trim());
 
 function mountSheets(app) {
@@ -53,27 +58,37 @@ function mountSheets(app) {
       });
 
   app.get('/sheets/ping', async (req, res) => {
+    const HR = await hrTable().catch(() => 'narai_hr.dbo.hr_employee');
     try {
       // นับทีเดียวทุกตาราง — ตารางไหนยังไม่ได้สร้างจะเห็นเป็น error ทันทีว่าตัวไหนขาด
+      // พนักงานอยู่คนละฐาน จึงนับด้วยชื่อสามส่วน (ต่อไม่ถึงฐานนั้นจะฟ้องตรงนี้เลย)
       const r = await q(`
         SELECT (SELECT COUNT(*) FROM dbo.stock_plan)     AS plan,
                (SELECT COUNT(*) FROM dbo.stock_closing)  AS closing,
                (SELECT COUNT(*) FROM dbo.expense_ref)    AS expenseRef,
                (SELECT COUNT(*) FROM dbo.expense_entry)  AS expense,
-               (SELECT COUNT(*) FROM dbo.hr_employee)    AS employee`);
+               (SELECT COUNT(*) FROM ${HR})              AS employee`);
       res.json({
         status: 'success',
         rows: r[0] || {},
+        employeeTable: HR,
         writeEnabled: Boolean(WRITE_KEY),
       });
     } catch (e) {
+      const hrProblem = e.message.toLowerCase().includes(String(HR).split('.')[0].toLowerCase());
       res.status(500).json({
         status: 'error',
         message: e.message,
-        hint: /Invalid object name/i.test(e.message)
-          ? 'ยังไม่ได้สร้างตาราง — รัน docs\\schema-sheets.sql ที่เครื่องนี้ก่อน ' +
-            '(หรือใช้ scripts\\migrate-sheets.ps1 ซึ่งสร้างให้ในตัว)'
-          : undefined,
+        employeeTable: HR,
+        hint: /is not able to access the database|Cannot open database/i.test(e.message)
+          ? `login ที่ host-server ใช้ยังไม่มีสิทธิ์ในฐานของ ${HR} — รันท้ายไฟล์ docs\\schema-hr-employee.sql ` +
+            '(ส่วน GRANT) ที่เครื่องนี้ก่อน'
+          : /Invalid object name/i.test(e.message)
+            ? (hrProblem
+              ? `ยังไม่มีตาราง ${HR} — รัน docs\\schema-hr-employee.sql ที่เครื่องนี้ก่อน`
+              : 'ยังไม่ได้สร้างตาราง — รัน docs\\schema-sheets.sql ที่เครื่องนี้ก่อน ' +
+                '(หรือใช้ scripts\\migrate-sheets.ps1 ซึ่งสร้างให้ในตัว)')
+            : undefined,
       });
     }
   });
@@ -83,7 +98,7 @@ function mountSheets(app) {
   app.get('/sheets/closing', read('readClosing', req => str(req.query.branch).toLowerCase()));
   app.get('/sheets/expense-ref', read('readExpenseRefs'));
   app.get('/sheets/expense', read('readExpenses'));
-  app.get('/sheets/employee', read('readEmployees'));
+  app.get('/sheets/employee', read('readEmployees'));   // ฐาน narai_hr (ดูหัวไฟล์)
 
   app.post('/sheets/save', express.json({ limit: '2mb' }), (req, res) => {
     if (!WRITE_KEY) {
