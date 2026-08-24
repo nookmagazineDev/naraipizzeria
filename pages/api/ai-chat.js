@@ -8,9 +8,9 @@
 // เลือกโมเดลผ่าน env GEMINI_MODEL — ถ้าไม่ตั้ง จะใช้ค่า default ในบรรทัด GEMINI_MODEL ด้านล่าง
 // (คำตอบจาก /api/ai-chat มีฟิลด์ model บอกว่ารอบนั้นตอบด้วยโมเดลไหนจริง ๆ)
 
-// ค่าใช้จ่ายอื่นๆ / พนักงาน / แพลนสั่งของ ย้ายเข้า SQL แล้ว (SHEETS_SOURCE=sql)
-// เครื่องมือของ AI ต้องอ่านที่เดียวกับหน้าเว็บ ไม่งั้นหลังย้ายเสร็จ AI จะยังตอบจากชีทที่หยุดอัปเดตไปแล้ว
-import { usingSql as usingSheetsSql, readExpenses, readEmployees, readPlan } from '../../lib/sheetsSource';
+// ค่าใช้จ่ายอื่นๆ / แพลนสั่งของ ย้ายเข้า SQL แล้ว (SHEETS_SOURCE=sql) ส่วนพนักงานยังอยู่ที่ชีท
+// เครื่องมือของ AI ต้องอ่านที่เดียวกับหน้าเว็บ ไม่งั้น AI จะตอบจากข้อมูลคนละที่กับที่หน้าเว็บแสดง
+import { usingSql as usingSheetsSql, readExpenses, readPlan } from '../../lib/sheetsSource';
 
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 // GAS ค่าใช้จ่าย/พนักงาน (ตัวเดียวกับ proxy) — ส่วนชีท Google อยู่ในทะเบียน SHEETS ด้านล่าง
@@ -483,11 +483,11 @@ const TOOL_HANDLERS = {
     };
   },
 
-  // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว) — dbo.hr_employee เดิมคือชีทแท็บ DATA
+  // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว) — อ่านจากชีทแท็บ DATA
   async get_employees_summary({ branch }) {
-    // พนักงานยึด dbo.hr_employee ที่เดียวเหมือนหน้ารายชื่อ — ไม่ถอยไปอ่านชีท
-    // ไม่งั้น AI จะตอบจากข้อมูลเก่าที่ไม่ตรงกับที่หน้าเว็บแก้ไว้
-    const list = await readEmployees();
+    // อ่านจากชีทผ่าน Apps Script ที่เดียวกับหน้ารายชื่อพนักงาน (ไม่ผ่าน dbo.hr_employee)
+    // ไม่งั้น AI จะตอบจากข้อมูลคนละที่กับที่หน้าเว็บแสดง/แก้ไว้
+    const list = await gasPost(HR_GAS, { action: 'getEmployees', branch: 'all' });
     let emps = (list || []).filter(e => e.hrCode && String(e.fullName || '').trim() !== 'ชื่อ - สกุล');
     if (branch) emps = emps.filter(e => String(e.branch).toUpperCase() === String(branch).toUpperCase());
     const byBranch = {};
