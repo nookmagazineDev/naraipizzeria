@@ -51,6 +51,30 @@ node server.js
 
 > 🔐 รหัสผ่านที่หลุดไป git แล้วต้อง **เปลี่ยนรหัส SQL login ใหม่ทันที** (ดูหัวข้อด้านล่าง)
 
+### รีสตาร์ทหลัง git pull
+
+`node` ที่รันอยู่ถือโค้ดเวอร์ชันตอนที่มันเริ่ม — `git pull` เฉย ๆ ไม่ทำให้ endpoint ใหม่โผล่
+(อาการ: `/qcrd/*` หรือ `/sheets/*` ขึ้น **HTTP 404** ทั้งที่ pull แล้ว) ต้องปิดตัวเก่าก่อนเสมอ:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart
+```
+
+**เครื่องที่มี tunnel ถาวรอยู่แล้ว** (cloudflared named tunnel `tunnel run --token-file` หรือ ngrok
+ที่ตั้ง domain ไว้ = URL คงที่) สคริปต์จะตรวจเจอเองแล้วรีสตาร์ทแค่ API ไม่เปิด quick tunnel ซ้อน
+สั่งตรง ๆ ก็ได้ด้วย `-NoTunnel`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart -NoTunnel
+```
+
+เช็กว่าโค้ดใหม่ถูกโหลดแล้ว:
+
+```powershell
+curl.exe http://localhost:14365/qcrd/ping     # ต้องได้ writeEnabled:true + จำนวนเมนู
+curl.exe http://localhost:14365/sheets/ping   # ตาราง 5 ตารางพร้อมไหม
+```
+
 เปิด ngrok ชี้ที่ port 14365:
 
 ```bash
