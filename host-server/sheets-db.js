@@ -1,11 +1,14 @@
 // ════════════════════════════════════════════════════════════
-//  แพลนสั่งของ · ปิดรอบสิ้นเดือน · ค่าใช้จ่ายอื่นๆ · พนักงาน บน SQL Server
+//  แพลนสั่งของ · ปิดรอบสิ้นเดือน · ค่าใช้จ่ายอื่นๆ บน SQL Server
 //  ฐานข้อมูล InventoryNarai (ตัวเดียวกับ QC/RD และหน้านับสต๊อก)
 //  โครงตารางอยู่ใน docs/schema-sheets.sql
 //
 //  ไฟล์นี้คือฝั่ง "เปิดเป็น endpoint" ของข้อมูลที่ย้ายออกจาก Google Sheets รอบที่สอง
 //  ทุก action ที่หน้าเว็บเคยยิงไป Apps Script มีครบที่นี่ ชื่อและรูปแบบ payload เหมือนเดิม
-//    saveOtherExpense · bulkImport · deleteExpenseByMonth · saveEmployee
+//    saveOtherExpense · bulkImport · deleteExpenseByMonth
+//
+//  หมายเหตุ: พนักงานย้ายไปอยู่ฐาน narai_hr แล้ว (ตารางเดียวกับที่ Narai-branch ใช้ลงตารางงาน)
+//  ดู host-server/hr-db.js กับ docs/schema-hr-employee.sql — /sheets/employee จึงถูกปลดออก
 //
 //  endpoint
 //    GET  /sheets/ping                     เช็กว่าต่อฐานได้ไหม + ตารางครบไหม + เขียนได้ไหม
@@ -13,7 +16,6 @@
 //    GET  /sheets/closing?branch=crm       ยอดยกมาล่าสุดของสาขานั้น
 //    GET  /sheets/expense-ref              รหัสค่าใช้จ่าย (ประเภท/สาขา/รหัส)
 //    GET  /sheets/expense                  ค่าใช้จ่ายที่บันทึกแล้วทั้งหมด
-//    GET  /sheets/employee                 รายชื่อพนักงาน
 //    POST /sheets/save   { action, ... }   เขียน (ต้องมี header x-api-key)
 //
 //  ⚠️ เขียนได้ต้องตั้ง env SHEETS_WRITE_KEY (หรือใช้ QCRD_WRITE_KEY เดิมก็ได้) บนเครื่องโฮสต์
@@ -59,8 +61,7 @@ function mountSheets(app) {
         SELECT (SELECT COUNT(*) FROM dbo.stock_plan)     AS plan,
                (SELECT COUNT(*) FROM dbo.stock_closing)  AS closing,
                (SELECT COUNT(*) FROM dbo.expense_ref)    AS expenseRef,
-               (SELECT COUNT(*) FROM dbo.expense_entry)  AS expense,
-               (SELECT COUNT(*) FROM dbo.hr_employee)    AS employee`);
+               (SELECT COUNT(*) FROM dbo.expense_entry)  AS expense`);
       res.json({
         status: 'success',
         rows: r[0] || {},
@@ -83,7 +84,7 @@ function mountSheets(app) {
   app.get('/sheets/closing', read('readClosing', req => str(req.query.branch).toLowerCase()));
   app.get('/sheets/expense-ref', read('readExpenseRefs'));
   app.get('/sheets/expense', read('readExpenses'));
-  app.get('/sheets/employee', read('readEmployees'));
+  // พนักงานย้ายไป /hr/employee (ฐาน narai_hr) แล้ว — ดู host-server/hr-db.js
 
   app.post('/sheets/save', express.json({ limit: '2mb' }), (req, res) => {
     if (!WRITE_KEY) {

@@ -10,7 +10,9 @@
 
 // ค่าใช้จ่ายอื่นๆ / พนักงาน / แพลนสั่งของ ย้ายเข้า SQL แล้ว (SHEETS_SOURCE=sql)
 // เครื่องมือของ AI ต้องอ่านที่เดียวกับหน้าเว็บ ไม่งั้นหลังย้ายเสร็จ AI จะยังตอบจากชีทที่หยุดอัปเดตไปแล้ว
-import { usingSql as usingSheetsSql, readExpenses, readEmployees, readPlan } from '../../lib/sheetsSource';
+import { usingSql as usingSheetsSql, readExpenses, readPlan } from '../../lib/sheetsSource';
+// รายชื่อพนักงานอยู่คนละฐานกับข้อมูลชุดอื่น (narai_hr — ตารางเดียวกับที่ Narai-branch ใช้)
+import { readEmployees } from '../../lib/hrEmployee.mjs';
 import { STORE_API_BASE, HEAVY_UPSTREAM_OPTS, fetchUpstream, fetchSheet, fetchScript } from '../../lib/upstream.mjs';
 
 const STORE_API = STORE_API_BASE;

@@ -88,7 +88,9 @@ const SETS = {
   },
 };
 
-const ORDER = ['plan', 'closing', 'expenseref', 'expense', 'employee'];
+// ถอด 'employee' ออกแล้ว — พนักงานย้ายไปฐาน narai_hr (ดู docs/schema-hr-employee.sql)
+// ถ้าเผลอรันชุดนี้ซ้ำ ข้อมูลจะลงตารางเก่าใน InventoryNarai ที่ไม่มีใครอ่านแล้ว
+const ORDER = ['plan', 'closing', 'expenseref', 'expense'];
 
 /** ยิงทีละก้อน โดยรวมหลายแถวเป็นคำสั่งเดียวเท่าที่พารามิเตอร์ยังไม่เกินลิมิต */
 async function writeBatched(records, buildStmt, { deadline, startAt = 0, describe }) {

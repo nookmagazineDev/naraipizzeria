@@ -9,7 +9,7 @@
 //    node scripts/migrate-sheets.mjs --only=plan,expense ย้ายเฉพาะบางชุด
 //    node scripts/migrate-sheets.mjs --verify           เทียบจำนวนต้นทาง ↔ SQL
 //
-//  ชุดข้อมูล: plan · closing · expenseref · expense · employee
+//  ชุดข้อมูล: plan · closing · expenseref · expense  (พนักงานย้ายไปฐาน narai_hr แล้ว)
 //
 //  ทำไมต้องมีตัวนี้ทั้งที่มี /api/sheets-migrate อยู่แล้ว
 //    endpoint นั้นให้ Vercel เป็นคนย้าย ซึ่งต้องต่อ SQL ตรงได้ — ที่ร้านตอนนี้ SQL ไม่ได้เปิด
@@ -51,7 +51,8 @@ const SETS = {
   },
 };
 
-const ORDER = ['plan', 'closing', 'expenseref', 'expense', 'employee'];
+// ถอด 'employee' ออกแล้ว — พนักงานย้ายไปฐาน narai_hr (ดู docs/schema-hr-employee.sql)
+const ORDER = ['plan', 'closing', 'expenseref', 'expense'];
 
 // SQL Server รับได้ 2100 พารามิเตอร์ต่อคำสั่ง — เผื่อไว้ที่ 2000
 const PARAM_LIMIT = 2000;

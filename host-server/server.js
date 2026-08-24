@@ -19,6 +19,10 @@
 //         | /sheets/employee        → แพลนสั่งของ · ปิดรอบสิ้นเดือน · ค่าใช้จ่ายอื่นๆ · พนักงาน
 //    POST /sheets/save { action, ... } → บันทึกค่าใช้จ่าย/แก้ข้อมูลพนักงาน (ต้องมี x-api-key)
 //    GET  /sheets/ping           → เช็กว่าตาราง 5 ตารางพร้อมไหม + เขียนได้ไหม
+//  endpoint พนักงาน (ฐาน narai_hr — ตารางเดียวกับที่ Narai-branch ลงตารางงาน):
+//    GET  /hr/employee | /hr/schedule-employees?branch=… → รายชื่อพนักงาน
+//    POST /hr/save { action:'saveEmployee', ... } → แก้ข้อมูลพนักงาน (ต้องมี x-api-key)
+//    GET  /hr/ping               → เช็กว่าต่อฐาน narai_hr ได้ไหม + คอลัมน์ครบไหม
 //  endpoint ช่วย debug:
 //    GET /tables                 → รายชื่อตารางทั้งหมด
 //    GET /columns?table=ชื่อ      → คอลัมน์ของตาราง (default = Ctrans)
@@ -32,7 +36,8 @@ const sql = require('mssql');
 const cors = require('cors');
 const compression = require('compression'); // บีบ JSON ด้วย gzip → ส่งผ่าน ngrok เร็วขึ้นมาก
 const { mountQcrd } = require('./qcrd-db'); // QC/RD บน InventoryNarai (ดู docs/schema-qcrd.sql)
-const { mountSheets } = require('./sheets-db'); // แพลน/ปิดรอบ/ค่าใช้จ่าย/พนักงาน (ดู docs/schema-sheets.sql)
+const { mountSheets } = require('./sheets-db'); // แพลน/ปิดรอบ/ค่าใช้จ่าย (ดู docs/schema-sheets.sql)
+const { mountHr } = require('./hr-db'); // พนักงาน บนฐาน narai_hr (ดู docs/schema-hr-employee.sql)
 
 const app = express();
 app.use(compression()); // ต้องมาก่อน route
@@ -417,6 +422,7 @@ mountQcrd(app);
 
 // ── แพลนสั่งของ · ปิดรอบสิ้นเดือน · ค่าใช้จ่ายอื่นๆ · พนักงาน (ฐานเดียวกัน ใช้ pool ร่วมกัน) ──
 mountSheets(app);
+mountHr(app);
 
 // ── เช็กว่า API ยังมีชีวิต ──
 app.get('/ping', (req, res) => res.json({ ok: true, time: new Date() }));

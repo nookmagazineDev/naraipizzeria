@@ -2,12 +2,13 @@ import { fetchScript } from '../../lib/upstream.mjs';
 // Proxy ไป Google Apps Script ของสต๊อก (getBranches / getStockItems / getStockTotal / saveStock ฯลฯ)
 //
 // ยกเว้นสองอย่างที่ย้ายเข้า SQL แล้ว: รายชื่อพนักงาน (getEmployees) กับการแก้ข้อมูลพนักงาน (saveEmployee)
-// สองตัวนี้ **ยึด dbo.hr_employee ในฐาน InventoryNarai อย่างเดียว** ไม่ขึ้นกับ SHEETS_SOURCE
+// สองตัวนี้ **ยึด dbo.hr_employee ในฐาน narai_hr อย่างเดียว** ไม่ขึ้นกับ SHEETS_SOURCE
+// (ตารางเดียวกับที่ Narai-branch ใช้ลงตารางงาน — ย้ายมาจาก InventoryNarai ด้วย docs/schema-hr-employee.sql)
 // และไม่ถอยไปอ่าน/เขียนชีท DATA อีกแล้ว — ชีทเป็นแค่ต้นทางตอนย้ายข้อมูลเข้าฐานเท่านั้น
 // (อ่านที่หนึ่งแต่เขียนอีกที่หนึ่งคือต้นเหตุของอาการ "กดบันทึกขึ้นสำเร็จ แต่ข้อมูลไม่เปลี่ยน"
 //  ต่อฐานไม่ได้เมื่อไหร่ให้ฟ้องไปตรง ๆ ดีกว่าโชว์ข้อมูลเก่าจากชีทโดยที่คนใช้ไม่รู้ตัว)
 // ส่วน action อื่น ๆ ของสต๊อกยังส่งต่อไป Apps Script เหมือนเดิมทุกตัว
-import { sqlRoute, readEmployees, saveEmployee } from '../../lib/sheetsSource';
+import { hrRoute, readEmployees, saveEmployee } from '../../lib/hrEmployee.mjs';
 
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwIOFT32mCznuUzCpLZnyBrYrjkdYRskUdVEVXEkP2CeMNd2qzT7dAqd7Vfsz2ZKbF2Fw/exec';
 
@@ -27,13 +28,13 @@ export default async function handler(req, res) {
       const data = action === 'getEmployees' ? await readEmployees() : await saveEmployee(payload);
       return res.status(200).json({ status: 'success', source: 'sql', data });
     } catch (err) {
-      console.error(`stock-gas: ${action} กับ SQL ไม่ได้ (${sqlRoute()}):`, err.message);
+      console.error(`stock-gas: ${action} กับ SQL ไม่ได้ (${hrRoute()}):`, err.message);
       return res.status(502).json({
         status: 'error',
         message: action === 'saveEmployee'
-          ? `บันทึกลง SQL ไม่สำเร็จ (${err.message}) — ยังไม่ได้บันทึกอะไรลงไป ลองใหม่อีกครั้ง [${sqlRoute()}]`
-          : `อ่านข้อมูลพนักงานจาก SQL ไม่ได้ (${err.message}) — ข้อมูลพนักงานอยู่ที่ฐาน InventoryNarai ` +
-            `ที่เดียว ตรวจว่าเครื่องออฟฟิศ/ทางเชื่อมยังทำงานอยู่ไหม [${sqlRoute()}]`,
+          ? `บันทึกลง SQL ไม่สำเร็จ (${err.message}) — ยังไม่ได้บันทึกอะไรลงไป ลองใหม่อีกครั้ง [${hrRoute()}]`
+          : `อ่านข้อมูลพนักงานจาก SQL ไม่ได้ (${err.message}) — ข้อมูลพนักงานอยู่ที่ฐาน narai_hr ` +
+            `ที่เดียว ตรวจว่าเครื่องออฟฟิศ/ทางเชื่อมยังทำงานอยู่ไหม [${hrRoute()}]`,
       });
     }
   }

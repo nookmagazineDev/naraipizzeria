@@ -1,4 +1,5 @@
 import { fetchScript } from '../../lib/upstream.mjs';
+import { readScheduleEmployees, hrRoute } from '../../lib/hrEmployee.mjs';
 // อ่านข้อมูลสต๊อกจาก Google Apps Script ผ่าน GET เพื่อให้ CDN/เบราว์เซอร์แคชได้
 // (/api/stock-gas เป็น POST — CDN แคชไม่ได้ ทุกครั้งจึงต้องรอ Apps Script ใหม่ทุกรอบ)
 // ใช้เฉพาะ action ที่เป็นการอ่านอย่างเดียว — การเขียน (saveStock ฯลฯ) ยังใช้ /api/stock-gas เหมือนเดิม
@@ -12,6 +13,20 @@ const READ_ACTIONS = {
   getStockTotal: { params: ['endDate'], sMaxAge: 60 },
   getScheduleEmployees: { params: ['branch'], sMaxAge: 300 },
 };
+
+/**
+ * รายชื่อพนักงานของสาขา (ผู้นับสต๊อก/ผู้เบิก) — อ่านจาก dbo.hr_employee ฐาน narai_hr
+ * ตารางเดียวกับหน้ารายชื่อพนักงานและกับตารางงานของ Narai-branch ชื่อในดรอปดาวน์จึงตรงกันทุกที่
+ *
+ * ถอยไปอ่านชีทได้ถ้าฐานล่ม เพราะเป็นการอ่านล้วน (แค่เอาชื่อมาให้เลือก) — แนบ warning ไปด้วย
+ * ฝั่งเขียนไม่มีการถอย (ดู /api/stock-gas) เพราะเขียนสองที่สลับกันแปลว่าข้อมูลจะไม่ตรงกันทันที
+ */
+async function scheduleEmployeesFromSql(branch) {
+  const list = await readScheduleEmployees(branch);
+  // ฐานยังว่าง = ยังไม่ได้ย้ายข้อมูลเข้ามา ให้ถอยไปชีทแทนการโชว์ดรอปดาวน์เปล่า
+  if (!Array.isArray(list) || list.length === 0) throw new Error('ยังไม่มีรายชื่อพนักงานของสาขานี้ในฐานข้อมูล');
+  return list;
+}
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -33,6 +48,19 @@ export default async function handler(req, res) {
     if (req.query[name] !== undefined) payload[name] = req.query[name];
   });
 
+  // พนักงานยึดฐาน narai_hr เป็นหลัก — ชีทเป็นแค่ทางถอยเวลาต่อฐานไม่ได้
+  let sqlWarning = '';
+  if (action === 'getScheduleEmployees') {
+    try {
+      const data = await scheduleEmployeesFromSql(payload.branch);
+      res.setHeader('Cache-Control', `public, s-maxage=${spec.sMaxAge}, stale-while-revalidate=3600`);
+      return res.status(200).json({ status: 'success', source: 'sql', data });
+    } catch (err) {
+      console.error(`stock-read: อ่านพนักงานจาก SQL ไม่ได้ (${hrRoute()}) — ถอยไปอ่านชีท:`, err.message);
+      sqlWarning = `อ่านรายชื่อพนักงานจากฐานข้อมูลไม่ได้ (${err.message}) — กำลังแสดงรายชื่อจากชีทแทน [${hrRoute()}]`;
+    }
+  }
+
   try {
     // action ในไฟล์นี้เป็นการอ่านล้วน (READ_ACTIONS) จึงลองใหม่ได้ปลอดภัยเมื่อ GAS สะดุด
     const upstream = await fetchScript(SCRIPT_URL, {
@@ -52,6 +80,8 @@ export default async function handler(req, res) {
     } else {
       res.setHeader('Cache-Control', 'no-store');
     }
+    // ถอยมาจาก SQL — บอกให้รู้ว่ารายชื่อชุดนี้อาจไม่ตรงกับฐาน (หน้าเว็บเอาไปขึ้นเตือนได้)
+    if (sqlWarning) return res.status(200).json({ ...json, source: 'sheet', warning: sqlWarning });
     return res.status(200).json(json);
   } catch (err) {
     res.setHeader('Cache-Control', 'no-store');

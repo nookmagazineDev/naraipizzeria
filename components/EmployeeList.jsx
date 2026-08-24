@@ -4,24 +4,31 @@ import { Users, Loader2, Search, Gift, Image as ImageIcon, AlertCircle, Pencil, 
 
 // ฟิลด์ที่แก้ไขได้ (hrCode เป็นคีย์ ไม่ให้แก้)
 // LABEL_OF ด้านล่างใช้แปลงชื่อฟิลด์เป็นชื่อไทยตอนรายงานว่าช่องไหนบันทึกไม่ได้
+// ครบทุกคอลัมน์ของ dbo.hr_employee ยกเว้นสองตัวที่แก้ไม่ได้โดยตั้งใจ:
+//   hr_code    เป็นคีย์ — ตารางงาน/ประวัติกะของ Narai-branch อ้างรหัสนี้ เปลี่ยนแล้วประวัติจะขาด
+//   updated_at ฐานตั้งเวลาให้เองทุกครั้งที่บันทึก
 const EDIT_FIELDS = [
   { key: 'fullName', label: 'ชื่อ - นามสกุล', type: 'text' },
   { key: 'branch', label: 'สาขา', type: 'text' },
   { key: 'status', label: 'สถานะ', type: 'select', options: ['ทำงาน', 'ลาออก'] },
-  { key: 'type', label: 'ประเภท', type: 'text' },
+  { key: 'type', label: 'ประเภท', type: 'text', hint: 'เช่น F/T, DAY, DAY9, P/T' },
   { key: 'position', label: 'ตำแหน่ง', type: 'text' },
+  { key: 'dailyWage', label: 'ค่าแรง/วัน', type: 'number', hint: 'ตัวเลขล้วน — ตารางงานของ Narai-branch ใช้ช่องนี้คิดค่าแรง' },
   { key: 'startDate', label: 'วันเริ่มทำงาน', type: 'text', hint: 'เช่น 31/03/2545 (พ.ศ.) หรือ 2002-03-31' },
+  { key: 'resignDate', label: 'วันที่ลาออก', type: 'date', hint: 'เว้นว่างถ้ายังทำงานอยู่' },
   { key: 'loga', label: 'เลขที่ LOGA', type: 'text' },
   { key: 'newCode', label: 'รหัสใหม่', type: 'text' },
   { key: 'photoUrl', label: 'ลิงก์รูป', type: 'text' },
+  { key: 'sortOrder', label: 'ลำดับการเรียง', type: 'number', hint: 'เลขน้อยขึ้นก่อน (0 = ยังไม่กำหนด)' },
 ];
 
 const LABEL_OF = Object.fromEntries(EDIT_FIELDS.map(f => [f.key, f.label]));
 
 /*
- * NARAI OFFICE — รายชื่อพนักงาน (โหมดดูอย่างเดียว)
- * ดึงผ่าน /api/stock-gas → action=getEmployees ซึ่งอ่านจาก dbo.hr_employee (ฐาน InventoryNarai) ที่เดียว
- * ทั้งอ่านและบันทึกยึดฐานเดียวกัน ไม่ถอยไปชีท DATA แล้ว — ต่อฐานไม่ได้จะขึ้น error ให้เห็น
+ * NARAI OFFICE — รายชื่อพนักงาน
+ * ดึงผ่าน /api/stock-gas → action=getEmployees ซึ่งอ่านจาก dbo.hr_employee (ฐาน narai_hr) ที่เดียว
+ * ตารางเดียวกับที่ Narai-branch ใช้ลงตารางงาน แก้ที่นี่แล้วอีกฝั่งเห็นทันที (และกลับกัน)
+ * ทั้งอ่านและบันทึกยึดตารางเดียวกัน ไม่ถอยไปชีท DATA แล้ว — ต่อฐานไม่ได้จะขึ้น error ให้เห็น
  * แสดงผลให้เหมือนหน้า "รายชื่อพนักงาน" ของ narai-branch.vercel.app
  */
 
@@ -103,7 +110,14 @@ export default function EmployeeList() {
 
   // เทียบค่าที่ส่งไปกับค่าที่อ่านกลับมา — วันเริ่มงานเทียบเป็น "วันเดียวกันไหม"
   // เพราะชีท/ฐานอาจเก็บคนละรูปแบบ (31/03/2545 กับ 2002-03-31 คือวันเดียวกัน)
+  const NUMERIC_FIELDS = new Set(EDIT_FIELDS.filter(f => f.type === 'number').map(f => f.key));
+
   const sameValue = (key, a, b) => {
+    if (NUMERIC_FIELDS.has(key)) {
+      const na = parseFloat(String(a ?? '').replace(/,/g, ''));
+      const nb = parseFloat(String(b ?? '').replace(/,/g, ''));
+      return (Number.isFinite(na) ? na : 0) === (Number.isFinite(nb) ? nb : 0);
+    }
     if (key === 'startDate') {
       const da = parseThaiDate(a);
       const db = parseThaiDate(b);
@@ -433,7 +447,7 @@ export default function EmployeeList() {
                       {f.options.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   ) : (
-                    <input value={editEmp[f.key]} onChange={e => setField(f.key, e.target.value)}
+                    <input type={f.type} value={editEmp[f.key]} onChange={e => setField(f.key, e.target.value)}
                       className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
                   )}
                   {f.hint && <p className="text-[10px] text-slate-400 mt-0.5">{f.hint}</p>}
