@@ -179,14 +179,26 @@ DECLARE @login SYSNAME = N'narai_web';   -- <<< แก้เป็นชื่�
 -- ครอบ TRY ไว้เพราะไฟล์นี้ถูกรันได้จากสองที่: ด้วย sa ที่เครื่องออฟฟิศ (ให้สิทธิ์ได้)
 -- และจากหน้าเว็บผ่าน /api/qcrd-migrate?step=schema ซึ่งใช้ login ธรรมดาที่ให้สิทธิ์ตัวเองไม่ได้
 -- ถ้าไม่ครอบไว้ ส่วนสร้างตารางที่สำเร็จไปแล้วจะถูกรายงานว่าล้มทั้งไฟล์เพราะบรรทัดนี้บรรทัดเดียว
+--
+-- ประกอบคำสั่งใส่ตัวแปรก่อนแล้วค่อยรัน — EXEC(...) รับได้แค่ literal กับตัวแปรมาต่อกัน
+-- ใส่ฟังก์ชันอย่าง QUOTENAME() ลงไปตรง ๆ ไม่ได้ จะพังตั้งแต่ตอน parse
+-- ("Incorrect syntax near 'QUOTENAME'") ซึ่ง BEGIN TRY ดักไม่ทันเพราะยังไม่ทันได้รัน
+DECLARE @sql NVARCHAR(MAX);
+
 BEGIN TRY
     IF SUSER_ID(@login) IS NOT NULL
     BEGIN
         IF DATABASE_PRINCIPAL_ID(@login) IS NULL
-            EXEC(N'CREATE USER ' + QUOTENAME(@login) + N' FOR LOGIN ' + QUOTENAME(@login));
-        EXEC(N'ALTER ROLE db_datareader ADD MEMBER ' + QUOTENAME(@login));
-        EXEC(N'ALTER ROLE db_datawriter ADD MEMBER ' + QUOTENAME(@login));
-        EXEC(N'ALTER ROLE db_ddladmin  ADD MEMBER ' + QUOTENAME(@login));
+        BEGIN
+            SET @sql = N'CREATE USER ' + QUOTENAME(@login) + N' FOR LOGIN ' + QUOTENAME(@login);
+            EXEC sys.sp_executesql @sql;
+        END
+        SET @sql = N'ALTER ROLE db_datareader ADD MEMBER ' + QUOTENAME(@login);
+        EXEC sys.sp_executesql @sql;
+        SET @sql = N'ALTER ROLE db_datawriter ADD MEMBER ' + QUOTENAME(@login);
+        EXEC sys.sp_executesql @sql;
+        SET @sql = N'ALTER ROLE db_ddladmin  ADD MEMBER ' + QUOTENAME(@login);
+        EXEC sys.sp_executesql @sql;
         PRINT N'ให้สิทธิ์ ' + @login + N' ในฐานนี้เรียบร้อย';
     END
     ELSE
