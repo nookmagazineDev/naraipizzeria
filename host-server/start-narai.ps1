@@ -10,8 +10,16 @@
 #  หลัง git pull ต้องใช้ -Restart ด้วย ไม่งั้นตัวเก่าที่ค้างอยู่จะไม่ถูกปิด
 #  แล้วโค้ดใหม่จะไม่ถูกโหลด (อาการ: endpoint ใหม่ขึ้น HTTP 404 ทั้งที่ pull แล้ว):
 #     powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart
+#
+#  ⚠️ เครื่องที่เปิด tunnel ถาวรไว้แล้ว (STORE_API_BASE เป็นโดเมนของตัวเอง เช่น
+#  api.khanoykorshabu.com ไม่ใช่ xxx.trycloudflare.com) ให้ใส่ -NoTunnel ด้วยเสมอ
+#  จะได้แค่รีสตาร์ท API เฉย ๆ ไม่ไปยุ่งกับ tunnel ที่รันอยู่ และไม่ต้องมี cloudflared ในเครื่อง:
+#     powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart -NoTunnel
 # ════════════════════════════════════════════════════════════
-param([switch]$Restart)   # -Restart = ปิด API ตัวเก่าที่ถือ port 14365 อยู่ก่อน แล้วเปิดใหม่
+param(
+  [switch]$Restart,    # ปิด API ตัวเก่าที่ถือ port 14365 อยู่ก่อน แล้วเปิดใหม่ (ต้องใช้ทุกครั้งหลัง git pull)
+  [switch]$NoTunnel    # รีสตาร์ทเฉพาะ API ไม่แตะ tunnel — สำหรับเครื่องที่เปิด tunnel ถาวรไว้แยกแล้ว
+)
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $cfProc = $null
@@ -29,19 +37,7 @@ try {
     Write-Host "    ใส่บรรทัด:  `$env:DB_PASSWORD = 'รหัสจริง'" -ForegroundColor Yellow
   }
 
-  # 2) หา cloudflared
-  $cf = (Get-Command cloudflared -ErrorAction SilentlyContinue).Source
-  if (-not $cf) {
-    foreach ($p in @(
-      "$env:ProgramFiles\cloudflared\cloudflared.exe",
-      "${env:ProgramFiles(x86)}\cloudflared\cloudflared.exe",
-      "$env:LOCALAPPDATA\Microsoft\WinGet\Links\cloudflared.exe")) {
-      if (Test-Path $p) { $cf = $p; break }
-    }
-  }
-  if (-not $cf) { throw "ไม่พบ cloudflared — ติดตั้งด้วย: winget install Cloudflare.cloudflared" }
-
-  # 3) เริ่ม API ถ้ายังไม่รัน
+  # 2) เริ่ม API ถ้ายังไม่รัน
   $listening = (Test-NetConnection -ComputerName localhost -Port 14365 -WarningAction SilentlyContinue).TcpTestSucceeded
   if ($listening -and $Restart) {
     # node ที่รันอยู่ถือโค้ดเวอร์ชันตอนที่มันเริ่ม — git pull เฉย ๆ ไม่ทำให้ endpoint ใหม่โผล่
@@ -60,7 +56,42 @@ try {
     Write-Host "✓ API รันอยู่แล้วที่ port 14365" -ForegroundColor Green
   }
 
-  # 4) เปิด Cloudflare Quick Tunnel
+  # 3) เช็กว่า API ตอบจริง — ขึ้น 404 ตรงนี้แปลว่าโค้ดใหม่ยังไม่ถูกโหลด (ลืม -Restart)
+  try {
+    $null = Invoke-RestMethod -Uri 'http://localhost:14365/ping' -TimeoutSec 10
+    Write-Host "✓ API ตอบแล้ว (/ping)" -ForegroundColor Green
+  } catch {
+    Write-Host "⚠️  API ยังไม่ตอบที่ /ping — $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "    ดูหน้าต่าง node ที่เพิ่งเปิดว่ามี error อะไรขึ้น" -ForegroundColor Yellow
+  }
+
+  # 4) tunnel — ข้ามไปเลยถ้าเครื่องนี้เปิด tunnel ถาวรไว้แยกแล้ว
+  if ($NoTunnel) {
+    Write-Host ""
+    Write-Host "════════════════════════════════════════════════════════════" -ForegroundColor Green
+    Write-Host "  ✅ API พร้อมใช้งานที่ http://localhost:14365" -ForegroundColor Green
+    Write-Host "  (ข้าม tunnel ตาม -NoTunnel — ตัวที่เปิดถาวรไว้ยังทำงานตามเดิม)" -ForegroundColor DarkGray
+    Write-Host "════════════════════════════════════════════════════════════" -ForegroundColor Green
+    return
+  }
+
+  # หา cloudflared (เช็กตรงนี้ ไม่ใช่ตั้งแต่ต้นไฟล์ — API จะได้ถูกรีสตาร์ทไปแล้ว
+  # ต่อให้เครื่องนี้ไม่มี cloudflared เพราะเปิด tunnel ด้วยวิธีอื่น)
+  $cf = (Get-Command cloudflared -ErrorAction SilentlyContinue).Source
+  if (-not $cf) {
+    foreach ($p in @(
+      "$env:ProgramFiles\cloudflared\cloudflared.exe",
+      "${env:ProgramFiles(x86)}\cloudflared\cloudflared.exe",
+      "$env:LOCALAPPDATA\Microsoft\WinGet\Links\cloudflared.exe")) {
+      if (Test-Path $p) { $cf = $p; break }
+    }
+  }
+  if (-not $cf) {
+    throw "ไม่พบ cloudflared — ถ้าเครื่องนี้เปิด tunnel ไว้แยกอยู่แล้ว ให้สั่งใหม่โดยใส่ -NoTunnel " +
+          "(API ถูกรีสตาร์ทไปเรียบร้อยแล้ว) หรือติดตั้งด้วย: winget install Cloudflare.cloudflared"
+  }
+
+  # 5) เปิด Cloudflare Quick Tunnel
   $log = Join-Path $env:TEMP "narai-cf.log"
   $out = "$log.out"
   Remove-Item $log,$out -Force -ErrorAction SilentlyContinue
@@ -69,7 +100,7 @@ try {
     -ArgumentList @('tunnel','--no-autoupdate','--url','http://localhost:14365') `
     -RedirectStandardError $log -RedirectStandardOutput $out -PassThru -WindowStyle Hidden
 
-  # 5) รอ URL
+  # 6) รอ URL
   $url = $null
   for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 1
@@ -80,7 +111,7 @@ try {
   }
   if (-not $url) { throw "ไม่ได้ URL ภายใน 30 วิ — ดู log: $log" }
 
-  # 6) แสดงผล + คัดลอก URL
+  # 7) แสดงผล + คัดลอก URL
   Write-Host ""
   Write-Host "════════════════════════════════════════════════════════════" -ForegroundColor Green
   Write-Host "  ✅ Tunnel พร้อมใช้งาน" -ForegroundColor Green
@@ -97,7 +128,7 @@ try {
   Write-Host "ปิดหน้าต่างนี้ / Ctrl+C = ปิด tunnel" -ForegroundColor DarkGray
   Write-Host "──────── log สด ────────" -ForegroundColor DarkGray
 
-  # 7) คงไว้ + สตรีม log
+  # 8) คงไว้ + สตรีม log
   Get-Content $log -Wait -Tail 2
 }
 finally {
