@@ -55,12 +55,14 @@ function mountSheets(app) {
   app.get('/sheets/ping', async (req, res) => {
     try {
       // นับทีเดียวทุกตาราง — ตารางไหนยังไม่ได้สร้างจะเห็นเป็น error ทันทีว่าตัวไหนขาด
+      // ชื่อ alias ต้องใส่วงเล็บเหลี่ยม: PLAN เป็นคำสงวนของ T-SQL ถ้าเขียน AS plan เฉย ๆ
+      // จะพังตั้งแต่ตอน parse ("Incorrect syntax near the keyword 'AS'") ก่อนถึงตารางเสียอีก
       const r = await q(`
-        SELECT (SELECT COUNT(*) FROM dbo.stock_plan)     AS plan,
-               (SELECT COUNT(*) FROM dbo.stock_closing)  AS closing,
-               (SELECT COUNT(*) FROM dbo.expense_ref)    AS expenseRef,
-               (SELECT COUNT(*) FROM dbo.expense_entry)  AS expense,
-               (SELECT COUNT(*) FROM dbo.hr_employee)    AS employee`);
+        SELECT (SELECT COUNT(*) FROM dbo.stock_plan)     AS [plan],
+               (SELECT COUNT(*) FROM dbo.stock_closing)  AS [closing],
+               (SELECT COUNT(*) FROM dbo.expense_ref)    AS [expenseRef],
+               (SELECT COUNT(*) FROM dbo.expense_entry)  AS [expense],
+               (SELECT COUNT(*) FROM dbo.hr_employee)    AS [employee]`);
       res.json({
         status: 'success',
         rows: r[0] || {},
