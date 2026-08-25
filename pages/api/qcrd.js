@@ -114,14 +114,23 @@ async function readFromSql(sheet) {
   return null;
 }
 
+// แคชคำตอบไว้ที่ CDN ของ Vercel — ชีทเมนูมีห้าพันกว่าแถว ชีท BOM ใหญ่กว่านั้นอีก
+// โหลดใหม่ทุกครั้งที่มีคนเปิดหน้าคือเสียเวลาฟรี ๆ เพราะสูตรไม่ได้เปลี่ยนทุกวินาที
+// หลังกดบันทึก หน้าเว็บต่อ ?t=<เวลา> มาด้วย ซึ่งเป็น URL คนละอันในสายตา CDN จึงได้ของใหม่เสมอ
+// stale-while-revalidate = คนถัดไปได้ของเก่าไปใช้ทันทีแล้วค่อยอัปเดตเบื้องหลัง ไม่ต้องรอ
+const CACHE_OK = 'public, s-maxage=30, stale-while-revalidate=120';
+
 export default async function handler(req, res) {
   const { sheet } = req.query;
+  // แคชเฉพาะตอนได้ข้อมูลจริง จะได้ไม่ค้าง error ไว้ให้คนถัดไป (ตั้งเป็น no-store ไว้ก่อน)
+  res.setHeader('Cache-Control', 'no-store');
 
   // โหมด SQL: ลอง host API ก่อน ไม่ได้ค่อยถอยไปอ่านชีท (ข้อมูลอาจเก่ากว่า จึงบอกไว้ใน warning)
   let warning = '';
   if (usingSql() && ['menu', 'bom', 'item', 'menugroup'].includes(sheet)) {
     try {
       const data = await readFromSql(sheet);
+      res.setHeader('Cache-Control', CACHE_OK);
       return res.status(200).json({ status: 'success', source: 'sql', via: sqlRoute(), data });
     } catch (err) {
       console.error('QC/RD SQL error:', err.message);
@@ -158,6 +167,7 @@ export default async function handler(req, res) {
             yieldUnit: (r[yieldUnitCol] || '').trim(),
           };
         });
+      res.setHeader('Cache-Control', CACHE_OK);
       return res.status(200).json({ status: 'success', source: 'sheet', warning, data });
     }
 
@@ -187,6 +197,7 @@ export default async function handler(req, res) {
           noDeduct: TRUTHY.test((r[19] || '').trim()),
         });
       });
+      res.setHeader('Cache-Control', CACHE_OK);
       return res.status(200).json({ status: 'success', data: map });
     }
 
@@ -220,6 +231,7 @@ export default async function handler(req, res) {
             _row: row,
           };
         });
+      res.setHeader('Cache-Control', CACHE_OK);
       return res.status(200).json({ status: 'success', source: 'sheet', warning, data });
     }
 
@@ -230,6 +242,7 @@ export default async function handler(req, res) {
         .filter(r => (r[0] || '').trim())
         .map(r => ({ code: (r[0] || '').trim(), name: (r[1] || '').trim() }))
         .filter(g => g.name);
+      res.setHeader('Cache-Control', CACHE_OK);
       return res.status(200).json({ status: 'success', source: 'sheet', warning, data });
     }
 

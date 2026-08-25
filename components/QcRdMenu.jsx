@@ -48,13 +48,18 @@ export default function QcRdMenu() {
   const [toast, setToast] = useState(null);
   const [formMsg, setFormMsg] = useState(null);     // ข้อความในฟอร์ม (ผลการดึงสูตร/รวมรายการซ้ำ)
 
-  const loadAll = () => {
-    setLoading(true);
+  // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งหน้า (ใช้หลังกดบันทึก)
+  // ของเดิมพอบันทึกเสร็จจะล้างตารางทิ้งแล้วโหลดใหม่ทั้งสี่ชุด (เมนูห้าพันกว่าแถว + สูตรทั้งชีท)
+  // คนกดจึงเห็นสปินเนอร์ค้างทุกครั้งที่แก้ของนิดเดียว — แบบ quiet ตารางเดิมยังอยู่ให้ทำงานต่อได้
+  // ?t= กันไม่ให้ CDN คืนของที่แคชไว้ก่อนหน้าการบันทึกรอบนี้
+  const loadAll = ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
+    const bust = quiet ? `&t=${Date.now()}` : '';
     Promise.all([
-      fetch('/api/qcrd?sheet=menu').then(r => r.json()),
-      fetch('/api/qcrd?sheet=bom').then(r => r.json()),
-      fetch('/api/qcrd?sheet=item').then(r => r.json()),
-      fetch('/api/qcrd?sheet=menugroup').then(r => r.json()),
+      fetch(`/api/qcrd?sheet=menu${bust}`).then(r => r.json()),
+      fetch(`/api/qcrd?sheet=bom${bust}`).then(r => r.json()),
+      fetch(`/api/qcrd?sheet=item${bust}`).then(r => r.json()),
+      fetch(`/api/qcrd?sheet=menugroup${bust}`).then(r => r.json()),
     ]).then(([m, b, it, g]) => {
       if (m.status === 'success') setMenus(m.data || []); else setError(m.message || 'โหลดรายการเมนูไม่สำเร็จ');
       // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ขึ้นเตือนไว้ ไม่งั้นจะนึกว่าที่แก้ไปหายไป
@@ -62,9 +67,9 @@ export default function QcRdMenu() {
       if (b.status === 'success') setBom(b.data || {});
       if (it.status === 'success') setItems(it.data || []);
       if (g.status === 'success') setGroups(g.data || []);
-    }).catch(err => setError(err.message)).finally(() => setLoading(false));
+    }).catch(err => setError(err.message)).finally(() => { if (!quiet) setLoading(false); });
   };
-  useEffect(loadAll, []);
+  useEffect(() => { loadAll(); }, []);
 
   // ข้อมูลวัตถุดิบตามรหัส (สถานะ/ตัวทดแทน) ใช้ฟ้องในสูตรเมื่อวัตถุดิบถูกปิดใช้งาน
   const itemMap = useMemo(() => {
@@ -312,7 +317,7 @@ export default function QcRdMenu() {
           + syncNote(res),
       });
       setEditMenu(null);
-      loadAll();
+      loadAll({ quiet: true });
     } catch (err) {
       setFormMsg({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
@@ -774,7 +779,7 @@ export default function QcRdMenu() {
       {groupModal && (
         <GroupManager groups={groupList} menus={menus}
           onClose={() => setGroupModal(false)}
-          onSaved={loadAll} />
+          onSaved={() => loadAll({ quiet: true })} />
       )}
     </div>
   );

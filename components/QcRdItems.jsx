@@ -53,9 +53,11 @@ export default function QcRdItems() {
   const [source, setSource] = useState('sheet');   // ข้อมูลชุดนี้มาจากชีทหรือ SQL
   const [syncing, setSyncing] = useState(false);   // กำลังดันชีทขึ้น SQL เอง (ปุ่ม "อัพขึ้น SQL")
 
-  const load = () => {
-    setLoading(true);
-    fetch('/api/qcrd?sheet=item')
+  // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งตาราง (ใช้หลังกดบันทึก — ตารางเดิมยังอ่านได้ระหว่างรอ)
+  // fresh = ต่อ ?t= กันไม่ให้ CDN คืนของที่แคชไว้ก่อนหน้าการบันทึกรอบนี้
+  const load = ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
+    fetch(`/api/qcrd?sheet=item${quiet ? `&t=${Date.now()}` : ''}`)
       .then(r => r.json())
       .then(res => {
         if (res.status === 'success') {
@@ -69,9 +71,9 @@ export default function QcRdItems() {
         else setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
       })
       .catch(err => setError(err.message))
-      .finally(() => setLoading(false));
+      .finally(() => { if (!quiet) setLoading(false); });
   };
-  useEffect(load, []);
+  useEffect(() => { load(); }, []);
 
   const nameMap = useMemo(() => {
     const m = {};
@@ -141,7 +143,7 @@ export default function QcRdItems() {
       const units = items.filter(i => i.unitSource === 'auto' && i.unit).map(i => ({ code: i.code, unit: i.unit }));
       const res = await apiCall('updateItemUnits', { units });
       setToast({ ok: syncOk(res), msg: `บันทึกหน่วยแล้ว ${res.data?.updated ?? 0} รายการ${syncNote(res)}` });
-      load();
+      load({ quiet: true });
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
@@ -193,7 +195,7 @@ export default function QcRdItems() {
         msg: (editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ`) + syncNote(res),
       });
       setEditItem(null);
-      load();
+      load({ quiet: true });
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
@@ -207,16 +209,14 @@ export default function QcRdItems() {
     setToast(null);
     try {
       const res = await apiCall('deleteItem', { code: deleteTarget.code, row: deleteTarget.row });
-      // ตัวดันขึ้น SQL ใช้ MERGE (เพิ่ม/อัปเดต) ไม่ลบแถวที่หายไปจากชีท — แถวใน dbo.stock_item
-      // จึงยังอยู่ และหน้านับสต๊อกยังเห็นอยู่ ต้องบอกวิธีที่ได้ผลจริงไปเลย
+      // ดันรายรายการเรียก deleteItem ฝั่ง SQL ด้วย ซึ่งลบแถวใน stock_item จริง การลบจึงตามขึ้นไป
+      // (ต่างจากตอนดันทั้งชุดด้วยปุ่ม "อัพขึ้น SQL" ที่ใช้ MERGE แล้วไม่ลบอะไร)
       setToast({
         ok: syncOk(res),
-        msg: `ลบ ${deleteTarget.code} ออกจากชีทแล้ว · หน้านับสต๊อกยังเห็นอยู่ `
-          + `(การลบไม่ตามขึ้น SQL) ถ้าต้องการซ่อนด้วย ให้ตั้งสถานะเป็น "ปิดการใช้งาน" แทนการลบ`
-          + syncNote(res),
+        msg: `ลบ ${deleteTarget.code} สำเร็จ` + syncNote(res),
       });
       setDeleteTarget(null);
-      load();
+      load({ quiet: true });
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'ลบไม่สำเร็จ' });
     } finally {

@@ -4,8 +4,13 @@
 // action: saveMenu · saveMenuStatus · saveMenuGroup · saveItem · addItem · deleteItem ·
 // updateItemUnits · sortBom
 //
-// บันทึกลงชีทสำเร็จแล้ว "ดันขึ้น SQL" ต่อให้อัตโนมัติ (/api/qcrd-sync) เฉพาะชุดข้อมูลที่เกี่ยว
-// เพราะหน้านับสต๊อกของ Narai-branch อ่าน dbo.stock_item / stock_item_branch จากฐาน ไม่ได้อ่านชีท
+// บันทึกลงชีทสำเร็จแล้ว "ดันขึ้น SQL" ต่อให้อัตโนมัติ เพราะหน้านับสต๊อกของ Narai-branch
+// อ่าน dbo.stock_item / stock_item_branch จากฐาน ไม่ได้อ่านชีท
+//
+// ดันแบบ "รายรายการ" — ส่ง action/payload ชุดเดิมให้ฝั่ง SQL ทำตาม (ชื่อ action ตรงกันทั้งสองฝั่ง)
+// ไม่ใช่การอ่านชีททั้งใบมา MERGE ใหม่ทุกครั้ง ซึ่งกินเวลาหลายสิบวินาทีต่อการกดบันทึกหนึ่งครั้ง
+// ตัวดันทั้งชุดย้ายไปอยู่หลังปุ่ม "อัพขึ้น SQL" อย่างเดียว ไว้ซ่อมตอนชีทกับฐานหลุดกัน
+//
 // ชีทยังเป็นต้นทางเสมอ SQL เป็นสำเนา — ดันไม่สำเร็จก็ไม่ทำให้การบันทึกลงชีทเสีย แค่แนบผลกลับไป
 // ในฟิลด์ sync ให้หน้าเว็บบอกผู้ใช้ว่ายังไม่ขึ้นฐาน (กดปุ่ม "อัพขึ้น SQL" ซ้ำได้)
 // ปิดการดันอัตโนมัติ: ตั้ง env QCRD_SYNC_ON_SAVE=off บน Vercel
@@ -14,14 +19,15 @@
 // โค้ดฝั่งนั้นเก็บไว้เผื่อเปิดใช้อีกรอบ ตอนนี้ไม่ถูกเรียก
 import { usingSql, saveQcrdSql } from '../../lib/qcrdSource';
 import gasHandler from './qcrd-gas';
-import { syncToSql, STEPS_FOR_ACTION } from './qcrd-sync';
+import { syncOneToSql, STEPS_FOR_ACTION } from './qcrd-sync';
 
 // saveMenu ที่มีเมนูผูกกันหลายชั้นใช้เวลานานกว่าค่าเริ่มต้น 10 วินาทีของ Vercel
 export const config = { maxDuration: 60 };
 
 // เผื่อเวลาไว้ตอบกลับก่อนโดน platform ตัดที่ 60 วิ — บันทึกลงชีทเสร็จแล้วเหลือเท่าไหร่ ค่อยเอาไปดัน
+// ดันรายรายการใช้เวลาหลักร้อยมิลลิวินาที 3 วิจึงเหลือเฟือ (เผื่อ host API อืดไว้แล้ว)
 const TOTAL_BUDGET_MS = 50000;
-const MIN_SYNC_MS = 6000;
+const MIN_SYNC_MS = 3000;
 
 const syncEnabled = () => String(process.env.QCRD_SYNC_ON_SAVE || '').toLowerCase() !== 'off';
 
@@ -81,10 +87,10 @@ export default async function handler(req, res) {
   // ดันไม่ขึ้นไม่ทำให้การบันทึกลงชีทเสีย — แนบผลไปให้หน้าเว็บบอกผู้ใช้เอง
   let sync;
   try {
-    sync = await syncToSql(steps, { budgetMs });
+    sync = await syncOneToSql(body, { timeoutMs: Math.min(20000, budgetMs) });
   } catch (err) {
-    sync = { ok: false, steps, message: err.message };
+    sync = { ok: false, action, message: err.message };
   }
-  if (!sync.ok) console.error(`qcrd-save: ${action} ดันขึ้น SQL ไม่สำเร็จ:`, sync.message);
-  return res.status(captured.statusCode).json({ ...saved, sync });
+  if (sync && !sync.ok) console.error(`qcrd-save: ${action} ดันขึ้น SQL ไม่สำเร็จ:`, sync.message);
+  return res.status(captured.statusCode).json(sync ? { ...saved, sync } : saved);
 }

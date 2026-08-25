@@ -5,6 +5,12 @@
 // ถ้าไม่ดันขึ้นไป วัตถุดิบที่เพิ่ม/แก้/ปิดใช้งานจากหน้า QC/RD จะไม่ไปโผล่ที่หน้านับสต๊อกเลย
 // (เมนู/สูตร BOM/หมวดหมู่ ดันขึ้นด้วยได้ เพื่อให้ตาราง qcrd_* ตรงกับชีทเสมอ)
 //
+// มีสองแบบ:
+//   1) รายรายการ (syncOneToSql) — ใช้หลังกดบันทึกทุกครั้ง ส่ง action เดิมให้ฝั่ง SQL ทำตาม
+//      แตะแค่แถวที่แก้ จบในหลักร้อยมิลลิวินาที และ deleteItem ลบจริง (การลบตามขึ้นไปด้วย)
+//   2) ทั้งชุด (syncToSql) — ปุ่ม "อัพขึ้น SQL" / เปิด URL เอง ไว้ซ่อมตอนชีทกับฐานหลุดกัน
+//      อ่านชีททั้งใบแล้ว MERGE ทุกแถว ช้ากว่ามาก จึงไม่เอามาใส่ในทางบันทึกปกติ
+//
 //   POST /api/qcrd-sync            { steps: ['item'] }        ← เรียกจากหน้าเว็บ
 //   GET  /api/qcrd-sync?steps=item,menu,bom,group&verify=1     ← เปิดจากเบราว์เซอร์ก็ได้
 //
@@ -16,7 +22,7 @@
 // ⚠️ การลบไม่ตามขึ้นไป — ตัวดันใช้ MERGE (เพิ่ม/อัปเดต) ไม่ลบแถวที่หายไปจากชีท
 //    จะเอาวัตถุดิบออกจากหน้านับสต๊อก ให้ตั้งสถานะเป็น "ปิดการใช้งาน" ในชีทแทนการลบแถว
 //    (หน้านับสต๊อกกรองสถานะนี้ออกอยู่แล้ว) ใส่ &verify=1 เพื่อดูว่าชีทกับ SQL มีกี่แถวห่างกันแค่ไหน
-import { QCRD_API_BASE, hasDirectDb, sqlRoute } from '../../lib/qcrdSource';
+import { QCRD_API_BASE, hasDirectDb, sqlRoute, saveQcrdSql } from '../../lib/qcrdSource';
 import { runStep } from './qcrd-migrate';
 
 export const config = { maxDuration: 60 };
@@ -37,6 +43,28 @@ export const STEPS_FOR_ACTION = {
 };
 
 const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
+
+/**
+ * ดันเฉพาะรายการที่เพิ่งบันทึก — ส่ง action/payload ชุดเดียวกับที่ส่งไป Apps Script
+ * ให้ฝั่ง SQL ทำตาม (ชื่อ action กับรูปแบบ payload ตรงกันทั้งสองฝั่งอยู่แล้ว)
+ *
+ * เร็วกว่าดันทั้งชุดมาก: UPDATE แถวเดียว เทียบกับอ่านชีททั้งใบ (เมนูห้าพันกว่าแถว) แล้ว MERGE ทุกแถว
+ * ผลพลอยได้: deleteItem ฝั่ง SQL ลบแถวจริง การลบจึงตามขึ้นไปด้วย ต่างจากตอนดันทั้งชุดที่ใช้ MERGE
+ *
+ * ไม่โยน error — คืน { ok:false, message } ให้ผู้เรียกแนบไปกับผลบันทึก
+ * (บันทึกลงชีทสำเร็จไปแล้ว ห้ามให้ขั้นนี้ทำให้ทั้งคำขอกลายเป็นล้มเหลว)
+ */
+export async function syncOneToSql(body, { timeoutMs = 15000 } = {}) {
+  const action = str(body?.action);
+  if (!STEPS_FOR_ACTION[action]) return null;   // action ที่ไม่มีคู่ฝั่ง SQL — ไม่ต้องดัน
+  const t0 = Date.now();
+  try {
+    const res = await saveQcrdSql(body, { timeoutMs });
+    return { ok: true, action, scope: 'record', tookMs: Date.now() - t0, data: res?.data ?? res };
+  } catch (err) {
+    return { ok: false, action, scope: 'record', tookMs: Date.now() - t0, message: err.message };
+  }
+}
 
 /** เรียงตาม ALL_STEPS เสมอ (หมวดหมู่ต้องมาก่อนเมนู เมนูต้องมาก่อนสูตร) และตัดตัวที่ไม่รู้จักทิ้ง */
 export function normalizeSteps(steps) {
