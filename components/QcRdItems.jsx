@@ -224,9 +224,9 @@ export default function QcRdItems() {
     }
   };
 
+  // เต็มความกว้างจอ — ตารางนี้มีสิบกว่าคอลัมน์ (สาขาที่ใช้ · หมวดสโตร์ · ไอเทมทดแทน)
+  // การบีบไว้ที่ max-w-6xl ทำให้ต้องเลื่อนแนวนอนตลอดทั้งที่จอกว้างพอ
   return (
-    {/* เต็มความกว้างจอ — ตารางนี้มีสิบกว่าคอลัมน์ (สาขาที่ใช้ · หมวดสโตร์ · ไอเทมทดแทน)
-        การบีบไว้ที่ max-w-6xl ทำให้ต้องเลื่อนแนวนอนตลอดทั้งที่จอกว้างพอ */}
     <div className="w-full space-y-5">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex flex-wrap items-center justify-between gap-3">
