@@ -78,7 +78,10 @@ export default function EmployeeList() {
   const [branchFilter, setBranchFilter] = useState('');
   const [editEmp, setEditEmp] = useState(null);   // { ...ค่าที่กำลังแก้, _orig }
   const [savingEmp, setSavingEmp] = useState(false);
-  const [toast, setToast] = useState(null);       // { ok, msg }
+  const [toast, setToast] = useState(null);       // { ok, msg } — โชว์ที่หัวหน้า (เห็นตอนฟอร์มปิดแล้ว)
+  // ข้อความในฟอร์มแก้ไข — ต้องมีแยกจาก toast เพราะ modal เป็น fixed z-50 คลุมทั้งจอ
+  // เวลาบันทึกไม่ผ่าน ฟอร์มจะไม่ปิด ข้อความที่หัวหน้าจึงถูกบัง คนกดเลยเห็นแค่ "กดแล้วไม่มีอะไรเกิดขึ้น"
+  const [formMsg, setFormMsg] = useState(null);   // { ok, msg }
 
   useEffect(() => { fetchEmployees(); }, []);
 
@@ -96,6 +99,7 @@ export default function EmployeeList() {
     EDIT_FIELDS.forEach(f => {
       base[f.key] = f.key === 'startDate' ? startDateForInput(emp[f.key]) : (emp[f.key] ?? '');
     });
+    setFormMsg(null);
     setEditEmp({ hrCode: emp.hrCode, ...base, _orig: { ...base } });
   };
 
@@ -115,13 +119,14 @@ export default function EmployeeList() {
   const saveEmployee = async () => {
     setSavingEmp(true);
     setToast(null);
+    setFormMsg(null);
     try {
       // ส่งเฉพาะฟิลด์ที่เปลี่ยน (กันเขียนทับค่าเดิมโดยไม่ตั้งใจ)
       const changed = {};
       EDIT_FIELDS.forEach(f => {
         if (String(editEmp[f.key] ?? '') !== String(editEmp._orig[f.key] ?? '')) changed[f.key] = editEmp[f.key];
       });
-      if (Object.keys(changed).length === 0) { setToast({ ok: false, msg: 'ไม่มีการเปลี่ยนแปลง' }); setSavingEmp(false); return; }
+      if (Object.keys(changed).length === 0) { setFormMsg({ ok: false, msg: 'ไม่มีการเปลี่ยนแปลง' }); setSavingEmp(false); return; }
       const res = await apiCall('saveEmployee', { hrCode: editEmp.hrCode, ...changed });
 
       // บอกตามที่เขียนลงชีทได้จริง ไม่ใช่ตามจำนวนช่องที่ผู้ใช้แก้
@@ -162,7 +167,8 @@ export default function EmployeeList() {
       const msg = /unknown action/i.test(err.message || '')
         ? 'ยังไม่ได้เพิ่ม action saveEmployee ใน Apps Script (ดูวิธีในไฟล์ employee-apps-script.gs)'
         : (err.message || 'บันทึกไม่สำเร็จ');
-      setToast({ ok: false, msg });
+      setFormMsg({ ok: false, msg });   // ในฟอร์ม — ฟอร์มยังเปิดอยู่ ต้องเห็นตรงนี้
+      setToast({ ok: false, msg });     // ที่หัวหน้าด้วย เผื่อผู้ใช้ปิดฟอร์มไปแล้ว
     } finally {
       setSavingEmp(false);
     }
@@ -456,7 +462,15 @@ export default function EmployeeList() {
               ))}
             </div>
 
-            <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-2">
+            <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-3">
+              {formMsg && (
+                <span className={`flex-1 inline-flex items-start gap-1.5 text-xs font-semibold ${formMsg.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {formMsg.ok
+                    ? <CheckCircle size={14} className="flex-shrink-0 mt-px" />
+                    : <AlertCircle size={14} className="flex-shrink-0 mt-px" />}
+                  <span>{formMsg.msg}</span>
+                </span>
+              )}
               <button onClick={() => setEditEmp(null)} disabled={savingEmp}
                 className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
               <button onClick={saveEmployee} disabled={savingEmp}
