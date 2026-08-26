@@ -13,6 +13,19 @@
 // เปิด GET /api/stock-gas จากเบราว์เซอร์ = health check ดูว่า deployment ยังตอบอยู่ไหม
 import { diagnoseGas } from '../../lib/gasDiagnose';
 
+// อ่านรายชื่อพนักงาน/รายการสต๊อกทั้งชีทนานเกินค่าเริ่มต้น 10 วินาทีของ Vercel ได้
+export const config = { maxDuration: 60 };
+
+// action ที่อ่านอย่างเดียว — ปลอดภัยที่จะยิงซ้ำเมื่อ GAS คืนหน้า HTML แทน JSON
+// (Google คืนหน้า error เป็นครั้งคราวตอนติดโควตา/execution timeout ยิงใหม่มักผ่านเลย)
+// ฝั่งเขียนห้ามยิงซ้ำเด็ดขาด — รอบแรกอาจเขียนลงชีทไปแล้วแต่ตอบกลับมาไม่ใช่ JSON
+const isReadAction = (body) => {
+  const payload = typeof body === 'string'
+    ? (() => { try { return JSON.parse(body); } catch { return {}; } })()
+    : (body || {});
+  return /^get/i.test(String(payload.action || '').trim());
+};
+
 const SCRIPT_URL =
   process.env.STOCK_GAS_URL ||
   'https://script.google.com/macros/s/AKfycbwIOFT32mCznuUzCpLZnyBrYrjkdYRskUdVEVXEkP2CeMNd2qzT7dAqd7Vfsz2ZKbF2Fw/exec';
@@ -70,10 +83,24 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
-    const { status, finalUrl, text } = await callGas(body);
+    let { status, finalUrl, text } = await callGas(body);
     let json;
     try { json = JSON.parse(text); }
-    catch { return res.status(502).json({ status: 'error', message: diagnoseGas(status, finalUrl, text, DIAG) }); }
+    catch {
+      if (!isReadAction(body)) {
+        return res.status(502).json({ status: 'error', message: diagnoseGas(status, finalUrl, text, DIAG) });
+      }
+      // อ่านอย่างเดียว — พักสักครู่แล้วลองอีกรอบเดียว ไม่ใช่วนซ้ำ
+      await new Promise(r => setTimeout(r, 1200));
+      ({ status, finalUrl, text } = await callGas(body));
+      try { json = JSON.parse(text); }
+      catch {
+        return res.status(502).json({
+          status: 'error',
+          message: `${diagnoseGas(status, finalUrl, text, DIAG)} (ลองใหม่แล้วสองครั้ง)`,
+        });
+      }
+    }
     return res.status(200).json(json);
   } catch (err) {
     return res.status(502).json({ status: 'error', message: err.message });
