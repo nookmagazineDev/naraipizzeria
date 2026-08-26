@@ -1,31 +1,79 @@
 // Proxy ไป Google Apps Script ของสต๊อก (getBranches / getStockItems / getStockTotal / saveStock ฯลฯ)
+// สคริปต์ตัวนี้ยังเป็นตัวเดียวกับที่ให้ข้อมูลพนักงาน (getEmployees / saveEmployee) ด้วย
 //
-// รายชื่อพนักงาน (getEmployees) กับการแก้ข้อมูลพนักงาน (saveEmployee) กลับมาใช้ชีท DATA
-// ผ่าน Apps Script เหมือนเดิมแล้ว ไม่ผ่าน dbo.hr_employee และไม่ขึ้นกับ SHEETS_SOURCE
-// ชีทเป็นต้นทางจริงของข้อมูลพนักงาน ส่วนตารางใน SQL เหลือไว้ให้ host-server/สคริปต์ย้ายข้อมูลใช้
+// รายชื่อพนักงานกับการแก้ข้อมูลพนักงานใช้ชีท DATA ผ่าน Apps Script เหมือนเดิม ไม่ผ่าน dbo.hr_employee
+// และไม่ขึ้นกับ SHEETS_SOURCE — ชีทเป็นต้นทางจริง ส่วนตารางใน SQL เหลือไว้ให้สคริปต์ย้ายข้อมูลใช้
 // อ่านกับเขียนต้องอยู่ที่เดียวกันเสมอ (อ่านที่หนึ่งเขียนอีกที่หนึ่งคือต้นเหตุของอาการ
-// "กดบันทึกขึ้นสำเร็จ แต่ข้อมูลไม่เปลี่ยน") — ทั้งคู่จึงยิงไป Apps Script ตัวเดียวกัน
-// action อื่น ๆ ของสต๊อกส่งต่อไป Apps Script เหมือนเดิมทุกตัว
+// "กดบันทึกขึ้นสำเร็จ แต่ข้อมูลไม่เปลี่ยน") — ทุก action จึงยิงไป Apps Script ตัวเดียวกัน
+//
+// เวลา GAS ตอบมาไม่ใช่ JSON เมื่อก่อนโยนแค่ "ตอบกลับจาก GAS ไม่ใช่ JSON" ซึ่งบอกไม่ได้เลยว่า
+// พังตรงไหน (deployment ถูกลบ / ตั้งสิทธิ์ผิด / สคริปต์ error) ตอนนี้แปลสาเหตุให้ด้วย
+// lib/gasDiagnose.js ตัวเดียวกับที่ /api/qcrd-gas ใช้
+//
+// เปิด GET /api/stock-gas จากเบราว์เซอร์ = health check ดูว่า deployment ยังตอบอยู่ไหม
+import { diagnoseGas } from '../../lib/gasDiagnose';
 
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwIOFT32mCznuUzCpLZnyBrYrjkdYRskUdVEVXEkP2CeMNd2qzT7dAqd7Vfsz2ZKbF2Fw/exec';
+const SCRIPT_URL =
+  process.env.STOCK_GAS_URL ||
+  'https://script.google.com/macros/s/AKfycbwIOFT32mCznuUzCpLZnyBrYrjkdYRskUdVEVXEkP2CeMNd2qzT7dAqd7Vfsz2ZKbF2Fw/exec';
+
+const DIAG = { scriptName: 'ของสต๊อก/พนักงาน', envName: 'STOCK_GAS_URL' };
+
+async function callGas(body) {
+  const upstream = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body,
+    redirect: 'follow',
+  });
+  const text = await upstream.text();
+  return { status: upstream.status, finalUrl: upstream.url, text };
+}
 
 export default async function handler(req, res) {
+  // GET = health check เปิดจากเบราว์เซอร์ได้เลย ไว้ดูว่า deployment ยังตอบเป็น JSON อยู่ไหม
+  // ยิง getEmployees เพราะเป็น action อ่านอย่างเดียว ไม่แตะข้อมูล และเป็นตัวที่มีปัญหาอยู่พอดี
+  if (req.method === 'GET') {
+    const usingEnv = Boolean(process.env.STOCK_GAS_URL);
+    try {
+      const { status, finalUrl, text } = await callGas(JSON.stringify({ action: 'getEmployees', branch: 'all' }));
+      let json = null;
+      try { json = JSON.parse(text); } catch { /* ไม่ใช่ JSON — รายงานเป็น diagnosis ด้านล่าง */ }
+      const rows = Array.isArray(json?.data) ? json.data.length : undefined;
+      return res.status(200).json({
+        status: json && json.status === 'success' ? 'success' : 'error',
+        scriptUrlFrom: usingEnv ? 'env STOCK_GAS_URL' : 'fallback ในโค้ด',
+        scriptUrl: SCRIPT_URL,
+        httpStatus: status,
+        finalUrl,
+        employeeRows: rows,
+        gasResponse: json && json.status !== 'success' ? json : undefined,
+        message: json
+          ? (json.status === 'success'
+            ? `deployment ตอบเป็น JSON ปกติ — อ่านรายชื่อพนักงานได้ ${rows ?? '?'} แถว`
+            : `deployment ตอบเป็น JSON แต่แจ้ง error: ${json.message || '(ไม่มีข้อความ)'}`)
+          : diagnoseGas(status, finalUrl, text, DIAG),
+      });
+    } catch (err) {
+      return res.status(200).json({
+        status: 'error',
+        scriptUrlFrom: usingEnv ? 'env STOCK_GAS_URL' : 'fallback ในโค้ด',
+        scriptUrl: SCRIPT_URL,
+        message: `เรียก GAS ไม่สำเร็จ: ${err.message}`,
+      });
+    }
+  }
+
   if (req.method !== 'POST') {
-    return res.status(405).json({ status: 'error', message: 'POST only' });
+    return res.status(405).json({ status: 'error', message: 'GET (health check) หรือ POST เท่านั้น' });
   }
 
   try {
     const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
-    const upstream = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body,
-      redirect: 'follow',
-    });
-    const text = await upstream.text();
+    const { status, finalUrl, text } = await callGas(body);
     let json;
     try { json = JSON.parse(text); }
-    catch { return res.status(502).json({ status: 'error', message: 'ตอบกลับจาก GAS ไม่ใช่ JSON' }); }
+    catch { return res.status(502).json({ status: 'error', message: diagnoseGas(status, finalUrl, text, DIAG) }); }
     return res.status(200).json(json);
   } catch (err) {
     return res.status(502).json({ status: 'error', message: err.message });
