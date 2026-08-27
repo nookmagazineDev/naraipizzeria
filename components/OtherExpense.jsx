@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { DollarSign, Save, Building2, Calendar, Info, Loader2, CheckCircle, AlertCircle, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { apiCall } from '../lib/expenseApi';
+import { useBranches } from '../lib/useBranches';
 
 /*
  * NARAI OFFICE — ค่าใช้จ่ายอื่นๆ
@@ -24,12 +25,6 @@ const unitMultiplier = (type, branch) =>
   String(type || '').trim().startsWith('ไฟ')
     ? (ELECTRIC_UNIT_MULTIPLIERS[String(branch || '').trim().toUpperCase()] || 1)
     : 1;
-
-// รายชื่อสาขาสำรอง (ใช้ตอนยังต่อ GAS ไม่ได้) — เฟสจริงดึงจากชีท "ข้อมูลค่าใช้อื่น" คอลัมน์ B
-const FALLBACK_BRANCHES = [
-  'SJP', 'CRM', 'XCM', 'SLR', 'SUM', 'XUM', 'SCS', 'SMP', 'XSB', 'XHH',
-  'HRS', 'CLK', 'P90', 'HPS', 'ZBW', 'ZPT', 'NPT', 'WRM', 'WMT', 'IPR', 'ZK3',
-];
 
 const fmt = v => {
   const n = parseFloat(v);
@@ -62,7 +57,9 @@ export default function OtherExpense() {
   const [carried, setCarried] = useState({});
 
   // refs จากชีท: branches + codesMap (type||branch -> [รหัส...] เก็บครบทุกมิเตอร์ ไม่ทับกัน)
-  const [refs, setRefs] = useState({ branches: FALLBACK_BRANCHES, codesMap: {}, loaded: false, error: '' });
+  const [refs, setRefs] = useState({ branches: [], codesMap: {}, loaded: false, error: '' });
+  // ทะเบียนสาขากลาง (HR → จัดการสาขา) — ใช้ตอนชีทค่าใช้จ่ายยังไม่มีสาขาไหนเลย/ต่อ GAS ไม่ได้
+  const { codes: registryBranches } = useBranches();
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null); // { ok, msg }
 
@@ -80,11 +77,18 @@ export default function OtherExpense() {
           if (!codesMap[k]) codesMap[k] = [];
           if (code && !codesMap[k].includes(code)) codesMap[k].push(code); // เก็บครบ ไม่ซ้ำ
         });
-        setRefs({ branches: branches.length ? branches : FALLBACK_BRANCHES, codesMap, loaded: true, error: '' });
+        setRefs({ branches, codesMap, loaded: true, error: '' });
       })
       .catch(err => { if (alive) setRefs(r => ({ ...r, loaded: true, error: err.message || 'โหลดข้อมูลอ้างอิงไม่สำเร็จ' })); });
     return () => { alive = false; };
   }, []);
+
+  // สาขาที่ให้เลือก: ชีท "ข้อมูลค่าใช้อื่น" คอลัมน์ B เป็นตัวตั้ง (เพราะต้องจับคู่กับรหัสมิเตอร์ใน codesMap)
+  // ชีทยังไม่มีสาขาไหนเลย/ต่อ GAS ไม่ได้ ค่อยถอยไปใช้ทะเบียนสาขากลาง
+  const branchOptions = useMemo(
+    () => (refs.branches.length ? refs.branches : registryBranches),
+    [refs.branches, registryBranches]
+  );
 
   const rowKeyOf = (type, code) => `${type}||${code}`;
   const setCell = (rowKey, field, value) => {
@@ -237,7 +241,7 @@ export default function OtherExpense() {
 
   const downloadTemplate = () => {
     const aoa = [['เดือน (YYYY-MM)', 'สาขา', 'ประเภท', 'รหัสมิเตอร์', 'เลขเริ่มต้น', 'เลขสิ้นสุด', 'ราคาต่อหน่วย', 'ผลรวม (กรอกเมื่อไม่มีเลขมิเตอร์)']];
-    refs.branches.forEach(b => {
+    branchOptions.forEach(b => {
       EXPENSE_TYPES.forEach(type => {
         const codes = refs.codesMap[refKey(type, b)] || [''];
         codes.forEach(code => aoa.push([month, b, type, code, '', '', '', '']));
@@ -252,7 +256,7 @@ export default function OtherExpense() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'กรอกข้อมูล');
     XLSX.writeFile(wb, `expense_template_${month}.xlsx`);
-    setToast({ ok: true, msg: `ดาวน์โหลดเทมเพลทแล้ว (${aoa.length - 1} แถว ${refs.branches.length} สาขา) — แถวที่ไม่กรอกตัวเลขจะถูกข้ามตอน import` });
+    setToast({ ok: true, msg: `ดาวน์โหลดเทมเพลทแล้ว (${aoa.length - 1} แถว ${branchOptions.length} สาขา) — แถวที่ไม่กรอกตัวเลขจะถูกข้ามตอน import` });
   };
 
   // ── Import: อ่านไฟล์เทมเพลทที่กรอกแล้ว → แปลงเป็นแถว → ยืนยัน → bulkImport ──
@@ -362,7 +366,7 @@ export default function OtherExpense() {
             <select value={branch} onChange={e => setBranch(e.target.value)}
               className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500">
               <option value="">— เลือกสาขา —</option>
-              {refs.branches.map(b => <option key={b} value={b}>{b}</option>)}
+              {branchOptions.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
           </div>
         </div>

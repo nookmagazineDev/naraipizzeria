@@ -5,6 +5,7 @@ import {
   Building2, Download, AlertCircle, RefreshCw, CalendarClock
 } from 'lucide-react';
 import { hhmm, summarizeDaily, attachSchedule } from '../lib/attendance';
+import { useBranches } from '../lib/useBranches';
 
 /*
  * NARAI OFFICE — ดูสแกนหน้า (เข้า-ออกงาน)
@@ -20,11 +21,9 @@ import { hhmm, summarizeDaily, attachSchedule } from '../lib/attendance';
  * ตารางงานเป็นข้อมูลเสริม — ดึงไม่ได้ก็ยังเห็นเวลาสแกนตามปกติ
  */
 
-// รหัสสาขาเดียวกับที่ใช้ทั้งระบบ — ZKBio เก็บรหัสนี้ไว้ที่ area_alias ของเครื่องสแกน
-const BRANCHES = [
-  'SJP', 'CRM', 'XCM', 'SLR', 'SUM', 'XUM', 'SCS', 'SMP', 'XSB', 'XHH',
-  'HRS', 'CLK', 'P90', 'HPS', 'ZBW', 'ZPT', 'NPT', 'WRM', 'WMT', 'IPR', 'ZK3',
-];
+// รหัสสาขามาจากทะเบียนกลาง (HR → จัดการสาขา) ผ่าน useBranches()
+// ZKBio เก็บรหัสเดียวกันนี้ไว้ที่ area_alias ของเครื่องสแกน — เพิ่มสาขาในทะเบียนแล้ว
+// ยังต้องไปตั้ง area_alias ที่เครื่องด้วย ไม่งั้นสาขานั้นจะไม่มีข้อมูลสแกนมาให้ดู
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -83,6 +82,7 @@ const PRESETS = [
 ];
 
 export default function Attendance() {
+  const { codes: branchCodes } = useBranches();
   const today = fmtDate(new Date());
 
   const [branch, setBranch] = useState('');          // '' = ทุกสาขา
@@ -329,7 +329,7 @@ export default function Attendance() {
               className="text-sm text-slate-700 bg-transparent focus:outline-none cursor-pointer"
             >
               <option value="">ทุกสาขา</option>
-              {BRANCHES.map((b) => <option key={b} value={b}>{b}</option>)}
+              {branchCodes.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </div>
           <input

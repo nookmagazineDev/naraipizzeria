@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud } from 'lucide-react';
 import { apiCall, syncNote, syncOk, syncSql } from '../lib/qcrdApi';
+import { useBranches } from '../lib/useBranches';
 
 /*
  * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน / หมวดสโตร์
@@ -29,13 +30,12 @@ const MATERIAL = 'วัตถุดิบ';
 const PACKAGING = 'แพ็กเกจจิ้ง';
 const USED_WHEN = ['ทั้งสอง', 'ทานที่ร้าน', 'ห่อกลับบ้าน'];
 
-// รายชื่อสาขาสำหรับเลือก "สาขาที่ใช้ไอเทม" (ชุดเดียวกับหน้าค่าใช้จ่าย)
-const BRANCHES = [
-  'SJP', 'CRM', 'XCM', 'SLR', 'SUM', 'XUM', 'SCS', 'SMP', 'XSB', 'XHH',
-  'HRS', 'CLK', 'P90', 'HPS', 'ZBW', 'ZPT', 'NPT', 'WRM', 'WMT', 'IPR', 'ZK3',
-];
+// รายชื่อสาขาสำหรับเลือก "สาขาที่ใช้ไอเทม" มาจากทะเบียนกลาง (HR → จัดการสาขา)
+// ชุดเดียวกับหน้าค่าใช้จ่ายและหน้าดูสแกนหน้า — ดู lib/useBranches.js
 
 export default function QcRdItems() {
+  // ปิดการใช้งานสาขาไหนในทะเบียน สาขานั้นจะหายจากตัวเลือกนี้ แต่ค่าที่เคยติ๊กไว้ในชีทยังอยู่เหมือนเดิม
+  const { codes: BRANCHES } = useBranches();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -112,6 +112,12 @@ export default function QcRdItems() {
       return codeMatch(i.code, q) || i.name.toLowerCase().includes(q);
     });
   }, [items, search, unitFilter, statusFilter, storeFilter, typeFilter]);
+
+  // ติ๊กครบทุกสาขาแล้วหรือยัง — ต้องมีสาขาในทะเบียนอย่างน้อยหนึ่งตัวถึงจะนับว่า "ครบ"
+  // (ช่วงที่ทะเบียนยังโหลดไม่เสร็จ รายการว่าง ถ้าไม่กันไว้ปุ่มจะขึ้นเป็นเลือกครบทั้งที่ยังไม่ได้เลือก)
+  // เทียบด้วย every() ไม่ใช่ความยาว เพราะไอเทมเก่าอาจติ๊กสาขาที่ถูกปิดการใช้งานไปแล้วค้างไว้
+  // (สาขานั้นไม่โผล่เป็นปุ่มให้เห็นแล้ว แต่ค่ายังอยู่ในชีทและถูกบันทึกกลับไปเหมือนเดิม)
+  const allBranchesOn = BRANCHES.length > 0 && BRANCHES.every(b => editItem?.branches?.includes(b));
 
   // ดันทะเบียนวัตถุดิบทั้งชีทขึ้น dbo.stock_item / stock_item_branch เอง
   // ปกติ /api/qcrd-save ดันให้อัตโนมัติหลังบันทึกอยู่แล้ว ปุ่มนี้ไว้ใช้ตอนรอบนั้นดันไม่ขึ้น
@@ -548,9 +554,13 @@ export default function QcRdItems() {
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {/* ปุ่มเลือก/ยกเลิกทุกสาขาในคลิกเดียว */}
-                  <button onClick={() => setEditItem(m => ({ ...m, branches: m.branches.length === BRANCHES.length ? [] : [...BRANCHES] }))}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${editItem.branches.length === BRANCHES.length
+                  {/* ปุ่มเลือก/ยกเลิกทุกสาขาในคลิกเดียว
+                      เทียบ BRANCHES.length > 0 ด้วย เพราะช่วงที่ทะเบียนสาขายังโหลดไม่เสร็จ
+                      รายการจะว่าง แล้ว 0 === 0 จะทำให้ปุ่มขึ้นเป็น "เลือกครบแล้ว" ทั้งที่ยังไม่ได้เลือกอะไร */}
+                  <button
+                    disabled={BRANCHES.length === 0}
+                    onClick={() => setEditItem(m => ({ ...m, branches: allBranchesOn ? [] : [...BRANCHES] }))}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all disabled:opacity-40 ${allBranchesOn
                       ? 'bg-emerald-600 border-emerald-600 text-white'
                       : 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'}`}>
                     ✓ ทุกสาขา
