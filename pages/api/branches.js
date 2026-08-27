@@ -161,31 +161,37 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     const wantCompare = str(req.query.compare) === '1';
 
+    // การเทียบกับระบบตารางงานไม่ต้องพึ่งฐานเลย (ยิงไป office-server ตรง ๆ)
+    // จึงต้องทำได้แม้ตอนที่ยังต่อฐานไม่ได้และแสดงรายชื่อสำรองอยู่ — ไม่งั้นกดปุ่มแล้วเงียบ
+    const withCompare = async (payload, list) =>
+      wantCompare ? { ...payload, compare: await compareWithSchedule(list) } : payload;
+
     if (!hasDirectDb()) {
-      return res.status(200).json({
-        status: 'success', source: 'fallback', tableReady: false, canWrite: false, data: fallbackRows(),
+      const data = fallbackRows();
+      return res.status(200).json(await withCompare({
+        status: 'success', source: 'fallback', tableReady: false, canWrite: false, data,
         warning: 'ยังไม่ได้ตั้งรหัสฐานข้อมูลบน Vercel (QCRD_DB_USER/QCRD_DB_PASSWORD) — ' +
           'แสดงรายชื่อสาขาสำรองที่ฝังไว้ในโค้ด แก้ไขจากหน้านี้ยังไม่ได้',
-      });
+      }, data));
     }
 
     try {
       const data = await readBranches();
-      const compare = wantCompare ? await compareWithSchedule(data) : undefined;
       res.setHeader('Cache-Control', CACHE_OK);
-      return res.status(200).json({
+      return res.status(200).json(await withCompare({
         status: 'success', source: 'sql', target: describeTarget(),
-        tableReady: true, canWrite: true, data, compare,
-      });
+        tableReady: true, canWrite: true, data,
+      }, data));
     } catch (err) {
       const missing = isMissingTable(err.message);
       console.error('branches: อ่านทะเบียนสาขาไม่ได้:', err.message);
-      return res.status(200).json({
-        status: 'success', source: 'fallback', tableReady: false, canWrite: true, data: fallbackRows(),
+      const data = fallbackRows();
+      return res.status(200).json(await withCompare({
+        status: 'success', source: 'fallback', tableReady: false, canWrite: true, data,
         warning: missing
           ? 'ยังไม่ได้สร้างตารางทะเบียนสาขา — แสดงรายชื่อสำรองไปก่อน กดปุ่ม "สร้างตาราง" เพื่อเริ่มใช้งาน'
           : `อ่านทะเบียนสาขาจากฐานไม่ได้ (${err.message}) — แสดงรายชื่อสำรองที่ฝังไว้ในโค้ดแทน`,
-      });
+      }, data));
     }
   }
 
