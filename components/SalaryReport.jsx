@@ -4,10 +4,10 @@ import {
   Wallet, Loader2, Search, Building2, Download, AlertCircle, RefreshCw,
   Printer, CalendarClock, CalendarDays, X,
 } from 'lucide-react';
-import { summarizeDaily, attachSchedule } from '../lib/attendance';
+import { summarizeDaily, attachSchedule, hhmm } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 import {
-  summarizeSalary, payableTotal, payableUnitLabel, periodDays,
+  summarizeSalary, payableTotal, payableUnitLabel, periodDays, plannedMinutes,
   hhmmOfMinutes, hhmmOfHours, LEAVE_COLUMNS, loadHolidays, saveHolidays,
 } from '../lib/payroll';
 
@@ -29,6 +29,20 @@ import {
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+/** '2026-08-05' -> '05/08 (พ.)' — วันที่สั้นๆ พร้อมชื่อวัน ไว้ใช้ในตารางรายวัน */
+const dayLabel = (ymd) => {
+  const d = new Date(`${ymd}T00:00:00`);
+  if (isNaN(d)) return ymd;
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} (${d.toLocaleDateString('th-TH', { weekday: 'narrow' })})`;
+};
+
+/** นาทีที่สาย — 0 = ตรงเวลา (เขียว), เกินนั้นเน้นแดง, null/ไม่มีข้อมูล = ขีด */
+const lateText = (v) => {
+  if (v == null) return <span className="text-slate-300">—</span>;
+  if (v <= 0) return <span className="text-emerald-600">0</span>;
+  return <span className="font-semibold text-rose-600">{v}</span>;
+};
 
 /** วันที่แบบไทยไว้โชว์บนหัวกระดาษ */
 const thaiDate = (ymd) => {
@@ -141,6 +155,7 @@ export default function SalaryReport() {
   const [punches, setPunches] = useState([]);
   const [loaded, setLoaded] = useState(null);            // ช่วง/สาขาของข้อมูลชุดที่ถืออยู่
   const [search, setSearch] = useState('');
+  const [detailKey, setDetailKey] = useState(null);      // คนที่กดชื่อดูรายวันอยู่ (null = ปิด)
 
   const [holidays, setHolidays] = useState([]);          // วันนักขัตฤกษ์ ['YYYY-MM-DD']
   const [newHoliday, setNewHoliday] = useState('');
@@ -268,6 +283,14 @@ export default function SalaryReport() {
         || p.name.toLowerCase().includes(q))
       .map((p) => ({ ...p, payable: payableTotal(p, days) }));
   }, [people, search, days]);
+
+  // เก็บเป็น "คีย์" ไม่ใช่ตัวข้อมูล เพื่อให้หน้ารายละเอียดอิงข้อมูลชุดล่าสุดเสมอ
+  // (โหลดใหม่/เปลี่ยนงวดแล้วตัวเลขในนั้นตามไปด้วย และถ้าคนนั้นหลุดจากผลค้นหา หน้าต่างก็ปิดเอง)
+  const rowKey = (r) => r.ssn || r.badge || r.name;
+  const detail = useMemo(
+    () => (detailKey ? rows.find((r) => rowKey(r) === detailKey) || null : null),
+    [rows, detailKey]
+  );
 
   // แถวที่ควรไปตรวจต่อ — ลงตารางว่าทำงานแต่ไม่มีสแกน / มีสแกนแต่วันนั้นไม่มีในตารางงาน
   // และรหัสที่ถูกตัดออกทั้งคน (ไม่มีในตารางงานเลยสักวัน)
@@ -614,7 +637,16 @@ export default function SalaryReport() {
                       <td className="px-1.5 py-1 text-slate-500">{r.branch}</td>
                       <td className="px-1.5 py-1 font-mono">{r.badge}</td>
                       <td className="px-1.5 py-1 font-mono text-slate-500">{r.ssn}</td>
-                      <td className="px-1.5 py-1 whitespace-nowrap font-medium text-slate-800">{r.name}</td>
+                      <td className="px-1.5 py-1 whitespace-nowrap font-medium text-slate-800">
+                        {/* กดที่ชื่อ = กางดูตารางงานและเวลาสแกนรายวันของคนนั้นในงวดนี้ */}
+                        <button
+                          onClick={() => setDetailKey(rowKey(r))}
+                          className="text-left hover:text-amber-600 hover:underline decoration-dotted underline-offset-2"
+                          title="ดูตารางงานและเวลาสแกนรายวัน"
+                        >
+                          {r.name || '(ไม่มีชื่อ)'}
+                        </button>
+                      </td>
                       <td className="px-1.5 py-1 whitespace-nowrap text-slate-500">{r.position}</td>
                       <td className="px-1.5 py-1 whitespace-nowrap text-slate-500">{r.empType}</td>
 
@@ -658,7 +690,8 @@ export default function SalaryReport() {
 
               <div className="px-4 py-3 text-xs text-slate-400 border-t border-slate-100 space-y-1">
                 <p>
-                  <span className="font-medium text-slate-500">วันทำงาน / เวลาทำงาน</span> มาจากตารางงานที่สาขาลงไว้
+                  <span className="font-medium text-amber-700">กดที่ชื่อพนักงาน</span> เพื่อดูตารางงานที่ลงไว้และเวลาสแกนนิ้ว/สแกนหน้ารายวันในงวดนี้ ·
+                  <span className="font-medium text-slate-500"> วันทำงาน / เวลาทำงาน</span> มาจากตารางงานที่สาขาลงไว้
                   (เวลาทำงาน = เวลาที่ลงตารางไว้หักเวลาพักและหักสายแล้ว) ·
                   <span className="font-medium text-slate-500"> สาย</span> คิดจากเวลาสแกนจริงเทียบกับตารางงาน (เข้าสาย + กลับจากเบรคสาย)
                 </p>
@@ -689,6 +722,155 @@ export default function SalaryReport() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* รายละเอียดรายวันของคนที่กดชื่อ — ตารางงานที่ลงไว้ + เวลาสแกนจริงทุกครั้ง ในงวดที่ดึงมา
+          ใช้ข้อมูลชุดเดียวกับที่คิดยอดในตารางสรุป (ไม่ได้ยิงขอข้อมูลใหม่) จึงตรวจยอดย้อนได้ตรงๆ
+          ไม่เอาไปพิมพ์ด้วย (ปุ่มพิมพ์ยังพิมพ์ตารางสรุปเหมือนเดิม) */}
+      {detail && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm no-print"
+          onClick={() => setDetailKey(null)}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-6xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-start justify-between flex-shrink-0">
+              <div>
+                <h3 className="text-base font-bold flex items-center gap-2">
+                  <CalendarClock size={18} className="text-amber-400" />
+                  <span>{detail.name || '(ไม่มีชื่อ)'}</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  สาขา {detail.branch || '—'} · Badge {detail.badge || '—'} · SSN {detail.ssn || '—'}
+                  {detail.position && ` · ${detail.position}`}
+                  {detail.empType && ` · ${detail.empType}`}
+                </p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  งวด {periodText} · ทำงาน {detail.workDays} วัน
+                  {detail.holidayWorkDays > 0 && ` · นข ${detail.holidayWorkDays} วัน`}
+                  {detail.otHours > 0 && ` · OT ${hhmmOfHours(detail.otHours)}`}
+                  {detail.lateMinutes + detail.holidayLateMinutes > 0
+                    && ` · สายรวม ${detail.lateMinutes + detail.holidayLateMinutes} นาที`}
+                </p>
+              </div>
+              <button
+                onClick={() => setDetailKey(null)}
+                title="ปิด"
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white flex-shrink-0"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="overflow-auto">
+              <table className="w-full text-[11px] border-collapse min-w-max">
+                <thead className="text-slate-600">
+                  <tr>
+                    <th rowSpan={2} className="h-7 px-2 text-left sticky top-0 bg-slate-50 border-b border-slate-200">วันที่</th>
+                    <th colSpan={5} className="h-7 px-2 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
+                    <th colSpan={5} className="h-7 px-2 text-center sticky top-0 bg-emerald-100 text-emerald-800 border-b border-l border-slate-200 font-semibold">สแกนจริง</th>
+                    <th colSpan={3} className="h-7 px-2 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-slate-200 font-semibold">ส่วนต่าง (นาที)</th>
+                    <th rowSpan={2} className="h-7 px-2 text-right sticky top-0 bg-slate-50 border-b border-l border-slate-200">เวลาทำงาน</th>
+                  </tr>
+                  <tr>
+                    {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'สถานะ / ลา'].map((h, i) => (
+                      <th key={`p${h}`} className={`px-2 py-1 text-center sticky top-7 bg-indigo-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
+                    ))}
+                    {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'ทุกครั้งที่สแกน'].map((h, i) => (
+                      <th key={`a${h}`} className={`px-2 py-1 text-center sticky top-7 bg-emerald-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
+                    ))}
+                    {['เข้าสาย', 'เบรคสาย', 'ออกก่อน'].map((h, i) => (
+                      <th key={`l${h}`} className={`px-2 py-1 text-center sticky top-7 bg-rose-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {detail.dayRows.map((d) => {
+                    const isHoliday = holidaysInRange.includes(d.date);
+                    const late = (d.lateIn || 0) + (d.lateBreakIn || 0);
+                    const planned = plannedMinutes(d.plan);
+                    // เวลาทำงานของวันนั้นตามเกณฑ์เดียวกับตารางสรุป (ตารางที่ลงไว้ − สาย)
+                    const worked = d.plan?.isOff
+                      ? 0
+                      : Math.max(0, (planned != null ? planned : Math.round((d.netHours || 0) * 60)) - late);
+                    return (
+                      <tr key={d.date} className={`hover:bg-amber-50/40${d.plan?.isOff ? ' bg-slate-50/60' : ''}`}>
+                        <td className="px-2 py-1 whitespace-nowrap font-medium text-slate-800">
+                          {dayLabel(d.date)}
+                          {isHoliday && <span className="ml-1 px-1 rounded bg-amber-500 text-white text-[9px] font-semibold">นข</span>}
+                        </td>
+
+                        {/* ฝั่งตารางงาน — วันหยุด/ลาไม่มีเวลาให้แสดง รวมสี่ช่องเป็นช่องเดียว */}
+                        {!d.plan ? (
+                          <td colSpan={4} className="px-2 py-1 text-center text-slate-400 border-l border-slate-200 bg-indigo-50/30">
+                            ไม่มีในตารางงาน
+                          </td>
+                        ) : d.plan.isOff ? (
+                          <td colSpan={4} className={`px-2 py-1 text-center border-l border-slate-200 font-semibold ${d.plan.offPaid ? 'bg-amber-50 text-amber-700' : 'bg-rose-50/60 text-rose-700'}`}>
+                            ⊖ {d.plan.offLabel}
+                          </td>
+                        ) : (
+                          <>
+                            <td className="px-2 py-1 text-center font-mono bg-indigo-50/40 border-l border-slate-200">{d.plan.in || '—'}</td>
+                            <td className="px-2 py-1 text-center font-mono bg-indigo-50/40">{d.plan.breakOut || '—'}</td>
+                            <td className="px-2 py-1 text-center font-mono bg-indigo-50/40">{d.plan.breakIn || '—'}</td>
+                            <td className="px-2 py-1 text-center font-mono bg-indigo-50/40">{d.plan.out || '—'}</td>
+                          </>
+                        )}
+                        <td className="px-2 py-1 text-center bg-indigo-50/40">
+                          <span className="inline-flex flex-wrap gap-1 justify-center">
+                            {(d.plan?.reasons || []).map((r) => (
+                              <span key={r} className={`px-1.5 rounded text-[10px] font-semibold ${d.plan.offPaid ? 'bg-amber-500 text-white' : 'bg-rose-500 text-white'}`}>{r}</span>
+                            ))}
+                            {(d.plan?.notes || []).map((n) => (
+                              <span key={n} className="px-1.5 rounded text-[10px] bg-slate-200 text-slate-700">{n}</span>
+                            ))}
+                            {d.offScanned && <span className="px-1.5 rounded text-[10px] bg-orange-500 text-white">แต่มีสแกน</span>}
+                            {d.noScan && !d.plan?.isOff && <span className="px-1.5 rounded text-[10px] bg-slate-700 text-white">ไม่มีสแกน</span>}
+                          </span>
+                        </td>
+
+                        {/* ฝั่งสแกนจริง */}
+                        {d.count > 0 ? (
+                          <>
+                            <td className="px-2 py-1 text-center font-mono font-semibold text-emerald-700 border-l border-slate-200">{hhmm(d.first)}</td>
+                            <td className="px-2 py-1 text-center font-mono text-amber-600">{d.breakOut ? hhmm(d.breakOut) : '—'}</td>
+                            <td className="px-2 py-1 text-center font-mono text-amber-600">{d.breakIn ? hhmm(d.breakIn) : '—'}</td>
+                            <td className="px-2 py-1 text-center font-mono font-semibold text-rose-700">{d.last ? hhmm(d.last) : '—'}</td>
+                            <td className="px-2 py-1 text-center font-mono text-slate-500 whitespace-nowrap">
+                              {(d.times || []).map(hhmm).join(', ')}
+                            </td>
+                          </>
+                        ) : (
+                          <td colSpan={5} className="px-2 py-1 text-center text-slate-400 border-l border-slate-200">
+                            ไม่มีการสแกนในวันนี้
+                          </td>
+                        )}
+
+                        {/* ส่วนต่าง */}
+                        <td className="px-2 py-1 text-center font-mono border-l border-slate-200">{lateText(d.lateIn)}</td>
+                        <td className="px-2 py-1 text-center font-mono">{lateText(d.lateBreakIn)}</td>
+                        <td className="px-2 py-1 text-center font-mono">{lateText(d.earlyOut)}</td>
+
+                        <td className="px-2 py-1 text-right font-mono font-semibold text-slate-800 border-l border-slate-200">
+                          {worked ? hhmmOfMinutes(worked) : ''}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="px-6 py-3 bg-slate-50 border-t border-slate-100 text-[11px] text-slate-500 flex-shrink-0">
+              แสดงเฉพาะวันที่มีข้อมูล (อยู่ในตารางงาน หรือมีการสแกน) ในงวดที่ดึงมา ·
+              เวลาทำงานของวัน = เวลาที่ลงตารางไว้ (หักเบรค) − นาทีที่สาย ตรงกับที่รวมไว้ในตารางสรุป ·
+              &quot;ออกก่อน&quot; ไม่ได้ถูกนำไปหักในรายงาน แสดงไว้ให้ตรวจเฉยๆ
+            </div>
+          </div>
         </div>
       )}
 
