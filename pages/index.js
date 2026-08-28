@@ -620,6 +620,11 @@ const getItemColFilterValue = (row, key) => {
   return String(row[key] ?? '');
 };
 
+/* แท็บที่ใช้แผงกรอง "กำหนดช่วงวันที่และสาขา" (ช่วงวันที่ + outlet ของฝั่งยอดขาย) ร่วมกัน
+   เขียนเป็นรายชื่อ "หน้าที่ใช้" แทนรายชื่อ "หน้าที่ไม่ใช้" เพราะตอนเพิ่มเมนูใหม่มักลืมไปต่อท้าย
+   แล้วแผงกรองของยอดขายจะไปโผล่ในหน้าที่ไม่เกี่ยวข้อง (เคยหลุดไปแล้วที่หน้ารายงานเงินเดือน) */
+const SALES_TABS = ['dashboard', 'sales', 'dailySale', 'details', 'itemSearch'];
+
 export default function App() {
   const [isMounted, setIsMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -2546,7 +2551,9 @@ export default function App() {
               </h1>
             </div>
 
-            {/* Current Context */}
+            {/* Current Context — ช่วงวันที่/สาขาของแผงกรองยอดขาย จึงขึ้นเฉพาะหน้าที่ใช้แผงนั้น
+                (หน้าอื่นมีช่วงวันที่ของตัวเอง ขึ้นคู่กันแล้วสับสนว่าอันไหนคือช่วงที่กำลังดูอยู่) */}
+            {SALES_TABS.includes(activeTab) && (
             <div className="hidden sm:flex items-center gap-2 text-xs font-semibold text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full">
               <Calendar size={14} />
               <span>{loaded ? `${startDate} ถึง ${endDate}` : 'กรุณาค้นหาข้อมูล'}</span>
@@ -2558,6 +2565,7 @@ export default function App() {
                 </>
               )}
             </div>
+            )}
           </header>
 
           {/* PAGE CONTENT CONTAINER */}
@@ -2602,8 +2610,9 @@ export default function App() {
             {/* จัดซื้อ: เบิกของสาขา จากชีท ใบเบิก + data */}
             {activeTab === 'branchRequisition' && <BranchRequisition />}
 
-            {/* FILTER PANEL */}
-            {!(activeTab === 'stockList' || activeTab === 'stockTotal' || activeTab === 'employeeList' || activeTab === 'attendance' || activeTab === 'branchList' || activeTab === 'otherExpense' || activeTab === 'qcrdMenu' || activeTab === 'qcrdItems' || activeTab === 'aiNarai' || activeTab === 'planList' || activeTab === 'branchRequisition') && (
+            {/* FILTER PANEL — เฉพาะหน้าที่ใช้ช่วงวันที่/สาขาชุดนี้จริงเท่านั้น (ดู SALES_TABS)
+                หน้าอื่น (HR, สต๊อก, QC/RD, จัดซื้อ) มีตัวกรองของตัวเองอยู่แล้ว */}
+            {SALES_TABS.includes(activeTab) && (
             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">กำหนดช่วงวันที่และสาขา</h2>
               <div className="flex flex-wrap items-center gap-2 mb-4">
