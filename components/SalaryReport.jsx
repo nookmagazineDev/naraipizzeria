@@ -770,13 +770,15 @@ export default function SalaryReport() {
                 <thead className="text-slate-600">
                   <tr>
                     <th rowSpan={2} className="h-7 px-2 text-left sticky top-0 bg-slate-50 border-b border-slate-200">วันที่</th>
-                    <th colSpan={5} className="h-7 px-2 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
+                    <th colSpan={4} className="h-7 px-2 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
                     <th colSpan={5} className="h-7 px-2 text-center sticky top-0 bg-emerald-100 text-emerald-800 border-b border-l border-slate-200 font-semibold">สแกนจริง</th>
+                    {/* สถานะ/ลา วางถัดจากเวลาที่สแกนจริง ให้ลำดับเหมือนหน้า "ดูสแกนหน้า" */}
+                    <th rowSpan={2} className="h-7 px-2 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200">สถานะ / ลา</th>
                     <th colSpan={3} className="h-7 px-2 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-slate-200 font-semibold">ส่วนต่าง (นาที)</th>
                     <th rowSpan={2} className="h-7 px-2 text-right sticky top-0 bg-slate-50 border-b border-l border-slate-200">เวลาทำงาน</th>
                   </tr>
                   <tr>
-                    {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'สถานะ / ลา'].map((h, i) => (
+                    {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก'].map((h, i) => (
                       <th key={`p${h}`} className={`px-2 py-1 text-center sticky top-7 bg-indigo-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
                     ))}
                     {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'ทุกครั้งที่สแกน'].map((h, i) => (
@@ -820,18 +822,6 @@ export default function SalaryReport() {
                             <td className="px-2 py-1 text-center font-mono bg-indigo-50/40">{d.plan.out || '—'}</td>
                           </>
                         )}
-                        <td className="px-2 py-1 text-center bg-indigo-50/40">
-                          <span className="inline-flex flex-wrap gap-1 justify-center">
-                            {(d.plan?.reasons || []).map((r) => (
-                              <span key={r} className={`px-1.5 rounded text-[10px] font-semibold ${d.plan.offPaid ? 'bg-amber-500 text-white' : 'bg-rose-500 text-white'}`}>{r}</span>
-                            ))}
-                            {(d.plan?.notes || []).map((n) => (
-                              <span key={n} className="px-1.5 rounded text-[10px] bg-slate-200 text-slate-700">{n}</span>
-                            ))}
-                            {d.offScanned && <span className="px-1.5 rounded text-[10px] bg-orange-500 text-white">แต่มีสแกน</span>}
-                            {d.noScan && !d.plan?.isOff && <span className="px-1.5 rounded text-[10px] bg-slate-700 text-white">ไม่มีสแกน</span>}
-                          </span>
-                        </td>
 
                         {/* ฝั่งสแกนจริง */}
                         {d.count > 0 ? (
@@ -849,6 +839,19 @@ export default function SalaryReport() {
                             ไม่มีการสแกนในวันนี้
                           </td>
                         )}
+
+                        <td className="px-2 py-1 text-center bg-slate-50/60 border-l border-slate-200">
+                          <span className="inline-flex flex-wrap gap-1 justify-center">
+                            {(d.plan?.reasons || []).map((r) => (
+                              <span key={r} className={`px-1.5 rounded text-[10px] font-semibold ${d.plan.offPaid ? 'bg-amber-500 text-white' : 'bg-rose-500 text-white'}`}>{r}</span>
+                            ))}
+                            {(d.plan?.notes || []).map((n) => (
+                              <span key={n} className="px-1.5 rounded text-[10px] bg-slate-200 text-slate-700">{n}</span>
+                            ))}
+                            {d.offScanned && <span className="px-1.5 rounded text-[10px] bg-orange-500 text-white">แต่มีสแกน</span>}
+                            {d.noScan && !d.plan?.isOff && <span className="px-1.5 rounded text-[10px] bg-slate-700 text-white">ไม่มีสแกน</span>}
+                          </span>
+                        </td>
 
                         {/* ส่วนต่าง */}
                         <td className="px-2 py-1 text-center font-mono border-l border-slate-200">{lateText(d.lateIn)}</td>

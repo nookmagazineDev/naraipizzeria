@@ -230,25 +230,27 @@ export default function Attendance() {
     const tag = `${branch || 'ALL'}_${startDate}${startDate === endDate ? '' : `_${endDate}`}`;
     // เปิดเทียบตารางงานไว้ = ใส่ฝั่ง "ที่ลงไว้" กับนาทีที่สายลงไฟล์ด้วย
     const planHead = showPlan
-      ? ['ลงไว้ เข้า', 'ลงไว้ ออกเบรค', 'ลงไว้ เข้าเบรค', 'ลงไว้ ออก', 'สถานะ', 'หมายเหตุตารางงาน']
+      ? ['ลงไว้ เข้า', 'ลงไว้ ออกเบรค', 'ลงไว้ เข้าเบรค', 'ลงไว้ ออก']
       : [];
+    // สถานะ/ลา อยู่ถัดจากเวลาที่สแกนจริง ให้ลำดับคอลัมน์ในไฟล์ตรงกับที่เห็นบนหน้าเว็บ
+    const statusHead = showPlan ? ['สถานะ', 'หมายเหตุตารางงาน'] : [];
     const lateHead = showPlan ? ['เข้าสาย (นาที)', 'เบรคสาย (นาที)', 'ออกก่อน (นาที)'] : [];
     const planCells = (d) => (showPlan
-      ? [
-          d.plan?.in || '', d.plan?.breakOut || '', d.plan?.breakIn || '', d.plan?.out || '',
-          statusText(d),
-          [...(d.plan?.reasons || []), ...(d.plan?.notes || [])].join(', '),
-        ]
+      ? [d.plan?.in || '', d.plan?.breakOut || '', d.plan?.breakIn || '', d.plan?.out || '']
+      : []);
+    const statusCells = (d) => (showPlan
+      ? [statusText(d), [...(d.plan?.reasons || []), ...(d.plan?.notes || [])].join(', ')]
       : []);
     const lateCells = (d) => (showPlan ? [d.lateIn ?? '', d.lateBreakIn ?? '', d.earlyOut ?? ''] : []);
 
     const aoa = view === 'daily'
       ? [
-          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...lateHead, 'รวม (ชม.)', 'พัก (ชม.)', 'สุทธิ (ชม.)', 'จำนวนสแกน'],
+          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...statusHead, ...lateHead, 'รวม (ชม.)', 'พัก (ชม.)', 'สุทธิ (ชม.)', 'จำนวนสแกน'],
           ...daily.map((d) => [
             d.date, d.empCode, d.name, d.branch,
             ...planCells(d),
             hhmm(d.first), d.breakOut ? hhmm(d.breakOut) : '', d.breakIn ? hhmm(d.breakIn) : '', d.last ? hhmm(d.last) : '',
+            ...statusCells(d),
             ...lateCells(d),
             d.hours != null ? +d.hours.toFixed(2) : '',
             d.breakHours != null ? +d.breakHours.toFixed(2) : '',
@@ -479,14 +481,17 @@ export default function Attendance() {
                       {['วันที่', 'รหัส', 'ชื่อ', 'สาขา'].map((h) => (
                         <th key={h} rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
                       ))}
-                      <th colSpan={5} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
+                      <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
                       <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-emerald-100 text-emerald-800 border-b border-l border-slate-200 font-semibold">สแกนจริง</th>
+                      {/* สถานะ/ลา ไม่ได้เป็นของฝั่งไหนโดยเฉพาะ (มีทั้งเหตุผลการลาและธง "ไม่มีสแกน")
+                          จึงเป็นคอลัมน์เดี่ยวคั่นระหว่างเวลาที่สแกนจริงกับตัวเลขส่วนต่าง */}
+                      <th rowSpan={2} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200">สถานะ / ลา</th>
                       <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-slate-200 font-semibold">สาย (นาที)</th>
                       <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200 font-semibold">เวลาทำงาน (ชม.)</th>
                       <th rowSpan={2} className="h-8 px-3 text-right sticky top-0 bg-slate-50 border-b border-l border-slate-200">สแกน</th>
                     </tr>
                     <tr>
-                      {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'สถานะ / ลา'].map((h, i) => (
+                      {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก'].map((h, i) => (
                         <th key={`p${h}`} className={`px-3 py-1.5 text-center sticky top-8 bg-indigo-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
                       ))}
                       {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก'].map((h, i) => (
@@ -542,9 +547,15 @@ export default function Attendance() {
                         </>
                       ))}
 
+                      {/* ฝั่งที่สแกนจริง */}
+                      <td className={`px-3 py-2 text-center${showPlan ? ' border-l border-slate-200' : ''}`}>{timeCell(hhmm(d.first), 'font-semibold text-emerald-700')}</td>
+                      <td className="px-3 py-2 text-center">{timeCell(d.breakOut ? hhmm(d.breakOut) : '', 'text-amber-600')}</td>
+                      <td className="px-3 py-2 text-center">{timeCell(d.breakIn ? hhmm(d.breakIn) : '', 'text-amber-600')}</td>
+                      <td className="px-3 py-2 text-center">{timeCell(d.last ? hhmm(d.last) : '', 'font-semibold text-rose-700')}</td>
+
                       {/* สถานะ / เหตุผลการลา / หมายเหตุของวันนั้น */}
                       {showPlan && (
-                        <td className={`px-3 py-2 text-center ${d.plan?.isOff ? (d.plan.offPaid ? 'bg-amber-50' : 'bg-rose-50/60') : 'bg-indigo-50/40'}`}>
+                        <td className={`px-3 py-2 text-center border-l border-slate-200 ${d.plan?.isOff ? (d.plan.offPaid ? 'bg-amber-50' : 'bg-rose-50/60') : 'bg-slate-50/60'}`}>
                           <div className="flex flex-wrap gap-1 justify-center">
                             {/* เหตุผลของวันหยุด/วันลา เช่น '13 ป่วย', '23 ขาดงาน' */}
                             {d.plan?.reasons.map((r) => (
@@ -563,12 +574,6 @@ export default function Attendance() {
                           </div>
                         </td>
                       )}
-
-                      {/* ฝั่งที่สแกนจริง */}
-                      <td className={`px-3 py-2 text-center${showPlan ? ' border-l border-slate-200' : ''}`}>{timeCell(hhmm(d.first), 'font-semibold text-emerald-700')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.breakOut ? hhmm(d.breakOut) : '', 'text-amber-600')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.breakIn ? hhmm(d.breakIn) : '', 'text-amber-600')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.last ? hhmm(d.last) : '', 'font-semibold text-rose-700')}</td>
 
                       {/* สรุปส่วนต่าง */}
                       {showPlan && (
