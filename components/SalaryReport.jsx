@@ -70,17 +70,39 @@ function presetRange(key, now = new Date()) {
         end: fmtDate(cap(new Date(t.getFullYear(), m + 1, 0))),
       };
     }
+    // รอบเงินเดือนของร้าน: วันที่ 21 ของเดือนหนึ่ง ถึงวันที่ 20 ของเดือนถัดไป
+    // (new Date รับเดือนติดลบได้ ถอยข้ามปีให้เอง จึงไม่ต้องคิดเรื่องเปลี่ยนปีเอง)
+    case 'cycleThis': {
+      const m = t.getDate() >= 21 ? t.getMonth() : t.getMonth() - 1;
+      return {
+        start: fmtDate(new Date(t.getFullYear(), m, 21)),
+        end: fmtDate(cap(new Date(t.getFullYear(), m + 1, 20))),
+      };
+    }
+    case 'cycleLast': {
+      const m = (t.getDate() >= 21 ? t.getMonth() : t.getMonth() - 1) - 1;
+      return {
+        start: fmtDate(new Date(t.getFullYear(), m, 21)),
+        end: fmtDate(cap(new Date(t.getFullYear(), m + 1, 20))),
+      };
+    }
     default:
       return { start: fmtDate(new Date(t.getFullYear(), t.getMonth(), 1)), end: fmtDate(t) };
   }
 }
 
+/* งวดที่กดได้ — รอบเงินเดือนจริงของร้านคือ 21 ถึง 20 จึงวางไว้สองปุ่มแรก
+   "งวดที่แล้ว 21–20" คืองวดที่ปิดแล้ว (งวดที่เอาไปจ่ายเงิน) จึงเป็นค่าเริ่มต้นของหน้า */
 const PRESETS = [
+  { key: 'cycleLast', label: 'งวดที่แล้ว 21–20' },
+  { key: 'cycleThis', label: 'งวดนี้ 21–20' },
   { key: 'thisMonth', label: 'เดือนนี้' },
   { key: 'lastMonth', label: 'เดือนที่แล้ว' },
   { key: 'firstHalf', label: 'งวด 1–15' },
   { key: 'secondHalf', label: 'งวด 16–สิ้นเดือน' },
 ];
+
+const DEFAULT_PRESET = 'cycleLast';
 
 /* หัวตารางตามฟอร์ม — 15 คอลัมน์แรก, คอลัมน์วันลาอีก 14 ช่อง แล้วปิดท้ายอีก 2 ช่อง
    กว้างรวม 31 คอลัมน์เท่าชีต Summary ของฝ่ายบุคคล */
@@ -105,12 +127,12 @@ const HEAD_LEFT = [
 export default function SalaryReport() {
   const { codes: branchCodes } = useBranches();
   const today = fmtDate(new Date());
-  const thisMonth = presetRange('thisMonth');
+  const initial = presetRange(DEFAULT_PRESET);
 
   const [branch, setBranch] = useState('');              // '' = ทุกสาขา
-  const [startDate, setStartDate] = useState(thisMonth.start);
-  const [endDate, setEndDate] = useState(thisMonth.end);
-  const [preset, setPreset] = useState('thisMonth');     // '' = กำหนดวันที่เอง
+  const [startDate, setStartDate] = useState(initial.start);
+  const [endDate, setEndDate] = useState(initial.end);
+  const [preset, setPreset] = useState(DEFAULT_PRESET);  // '' = กำหนดวันที่เอง
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');            // ตารางงานถูกตัด/สาขาบางตัวดึงไม่ได้
@@ -672,7 +694,7 @@ export default function SalaryReport() {
 
       {schedRows === null && !loading && !error && (
         <div className="bg-white border border-slate-100 rounded-2xl py-16 text-center text-sm text-slate-400 shadow-sm no-print">
-          เลือกสาขาและช่วงวันที่ (หรือกดปุ่มงวด: เดือนนี้ / เดือนที่แล้ว / งวด 1–15 / งวด 16–สิ้นเดือน)
+          เลือกสาขาและช่วงวันที่ (หรือกดปุ่มงวด — รอบเงินเดือนของร้านคือ 21 ถึง 20 ของเดือนถัดไป)
           แล้วกด &quot;ดึงข้อมูล&quot; เพื่อสรุปเงินเดือน
         </div>
       )}
