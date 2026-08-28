@@ -231,9 +231,15 @@ export default function SalaryReport() {
 
   const days = loaded ? periodDays(loaded.start, loaded.end) : 0;
 
+  // รหัสที่มีแต่การสแกน จับคู่กับตารางงานไม่ติดเลย — ไม่เอาลงรายงาน
+  // ส่วนใหญ่เป็นคนเดียวกับแถวที่มีชื่ออยู่แล้ว (รหัสเครื่องสแกนกับรหัสตารางงานคนละตัว
+  // และเครื่องสแกนไม่มีชื่อให้จับคู่ต่อ) ถ้าเอาลงด้วยจะกลายเป็นพนักงานซ้ำสองแถว
+  const unmatched = useMemo(() => people.filter((p) => !p.hasPlan), [people]);
+
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return people
+      .filter((p) => p.hasPlan)
       .filter((p) => !q
         || p.badge.toLowerCase().includes(q)
         || p.ssn.toLowerCase().includes(q)
@@ -241,11 +247,14 @@ export default function SalaryReport() {
       .map((p) => ({ ...p, payable: payableTotal(p, days) }));
   }, [people, search, days]);
 
-  // แถวที่ควรไปตรวจต่อ — ลงตารางว่าทำงานแต่ไม่มีสแกน / มีสแกนแต่ไม่มีในตารางงาน
+  // แถวที่ควรไปตรวจต่อ — ลงตารางว่าทำงานแต่ไม่มีสแกน / มีสแกนแต่วันนั้นไม่มีในตารางงาน
+  // และรหัสที่ถูกตัดออกทั้งคน (ไม่มีในตารางงานเลยสักวัน)
   const checkStats = useMemo(() => ({
     noScan: rows.reduce((n, r) => n + r.noScanDays, 0),
     noPlan: rows.reduce((n, r) => n + r.noPlanDays, 0),
-  }), [rows]);
+    dropped: unmatched.length,
+    droppedDays: unmatched.reduce((n, r) => n + r.days, 0),
+  }), [rows, unmatched]);
 
   /** 0 = ปล่อยว่าง (ทั้งช่องจำนวนและช่องเวลา) */
   const numText = (v) => (v ? v : '');
@@ -644,6 +653,15 @@ export default function SalaryReport() {
                     {checkStats.noScan > 0 && checkStats.noPlan > 0 && ' ·'}
                     {checkStats.noPlan > 0 && ` มี ${checkStats.noPlan} วันที่มีสแกนแต่ไม่มีในตารางงาน`}
                     {' '}— ดูรายวันได้ที่หน้า &quot;ดูสแกนหน้า&quot;
+                  </p>
+                )}
+                {checkStats.dropped > 0 && (
+                  <p className="text-slate-400">
+                    ไม่ได้นับในรายงาน: {checkStats.dropped} รหัสจากเครื่องสแกน ({checkStats.droppedDays} วัน)
+                    ที่ไม่มีในตารางงานเลยสักวัน — ส่วนใหญ่เป็นคนที่มีชื่ออยู่ในตารางแล้ว แต่รหัสเครื่องสแกน
+                    ไม่ตรงกับรหัสในตารางงานและเครื่องสแกนไม่มีชื่อให้จับคู่ · ถ้าอยากให้เวลาสแกนของรหัสพวกนี้
+                    ถูกนับด้วย ให้ไปแก้รหัส/ชื่อในระบบตารางงานให้ตรงกับเครื่องสแกน (ดูรายวันได้ที่หน้า
+                    &quot;ดูสแกนหน้า&quot;)
                   </p>
                 )}
               </div>
