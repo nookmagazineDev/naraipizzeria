@@ -145,15 +145,20 @@ tr.row-void td:nth-child(5) {
     overflow: visible !important;
     max-height: none !important;
   }
+  /* ตารางสรุปเงินเดือนกว้าง 31 คอลัมน์ — ย่อให้ลงกระดาษ A4 แนวนอนได้ทั้งแผ่น
+     และตีเส้นทุกช่องให้อ่านง่ายเหมือนฟอร์มในชีต */
   .print-area table {
     min-width: 0 !important;
     width: 100% !important;
-    font-size: 10px;
+    font-size: 8px;
+    table-layout: auto;
   }
   .print-area th,
   .print-area td {
     position: static !important;
-    padding: 3px 4px !important;
+    padding: 1px 2px !important;
+    border: 0.5px solid #cbd5e1 !important;
+    white-space: normal !important;
   }
   /* ช่องกรอกค่าแรงพิมพ์ออกมาเป็นตัวเลขเฉยๆ ไม่ต้องมีกรอบ */
   .print-area input,
