@@ -89,3 +89,88 @@ tr.row-void td:nth-child(5) {
   left: 0;
   z-index: 30;
 }
+
+/* ===== สั่งพิมพ์รายงาน (HR → รายงานเงินเดือน) =====
+   หน้าเว็บเป็นแอปเต็มจอ (เมนูซ้าย + หัวเว็บ + กล่องเนื้อหาที่เลื่อนเอง) ซึ่งพอสั่งพิมพ์แล้ว
+   จะได้กระดาษแผ่นเดียวเท่าที่เห็นบนจอ ตรงนี้จึงจัดใหม่ตอนพิมพ์:
+     .no-print     ส่วนที่ไม่เอาไปพิมพ์ (เมนู หัวเว็บ ตัวกรอง ปุ่ม) — เอาออกจากหน้ากระดาษเลย
+     .print-reset  กล่องโครงหน้าที่ล็อกความสูง/ซ่อนส่วนเกินไว้ — คลายออกให้ยาวได้ตามเนื้อหา
+     .print-area   กล่องที่จะออกกระดาษ
+     .print-only   ส่วนที่เห็นเฉพาะตอนพิมพ์ (หัวกระดาษ ช่องเซ็นชื่อ) */
+.print-only {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: A4 landscape;   /* ตารางเงินเดือนกว้าง 20 คอลัมน์ */
+    margin: 10mm;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #ffffff;
+    -webkit-print-color-adjust: exact;   /* ให้พื้นสีของหัวตารางติดไปด้วย */
+    print-color-adjust: exact;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block;
+  }
+
+  /* โครงหน้าแบบแอป (h-screen / overflow-hidden / flex) -> ปล่อยให้ไหลยาวข้ามหน้ากระดาษได้ */
+  .print-reset {
+    display: block !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .print-area {
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  /* ตารางในหน้าเว็บอยู่ในกล่องเลื่อน + หัวตารางลอย — บนกระดาษต้องกางออกทั้งหมด */
+  .print-area .print-scroll {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+  .print-area table {
+    min-width: 0 !important;
+    width: 100% !important;
+    font-size: 10px;
+  }
+  .print-area th,
+  .print-area td {
+    position: static !important;
+    padding: 3px 4px !important;
+  }
+  /* ช่องกรอกค่าแรงพิมพ์ออกมาเป็นตัวเลขเฉยๆ ไม่ต้องมีกรอบ */
+  .print-area input,
+  .print-area select {
+    border: 0 !important;
+    background: transparent !important;
+    padding: 0 !important;
+    width: auto !important;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  /* อย่าให้แถวพนักงานถูกตัดครึ่งคาบหน้ากระดาษ */
+  .print-area tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .print-area thead {
+    display: table-header-group;   /* หัวตารางซ้ำทุกหน้า */
+  }
+}

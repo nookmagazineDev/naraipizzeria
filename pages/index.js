@@ -30,13 +30,15 @@ import {
   ClipboardList,
   FileText,
   PackageOpen,
-  Fingerprint
+  Fingerprint,
+  Wallet
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
 import EmployeeList from '../components/EmployeeList';
 import Attendance from '../components/Attendance';
 import BranchList from '../components/BranchList';
+import SalaryReport from '../components/SalaryReport';
 import OtherExpense from '../components/OtherExpense';
 import QcRdMenu from '../components/QcRdMenu';
 import QcRdItems from '../components/QcRdItems';
@@ -2253,10 +2255,10 @@ export default function App() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
 
-      <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-800">
+      <div className="flex h-screen overflow-hidden bg-slate-50 text-slate-800 print-reset">
         
         {/* SIDEBAR */}
-        <aside className={`fixed inset-y-0 left-0 z-20 flex flex-col w-64 bg-slate-900 border-r border-slate-800 text-slate-300 transition-transform duration-300 transform md:relative md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <aside className={`no-print fixed inset-y-0 left-0 z-20 flex flex-col w-64 bg-slate-900 border-r border-slate-800 text-slate-300 transition-transform duration-300 transform md:relative md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
           {/* Logo / Branding */}
           <div className="flex items-center justify-between h-16 px-6 bg-slate-950 border-b border-slate-800">
             <div className="flex items-center gap-2">
@@ -2395,6 +2397,13 @@ export default function App() {
                     <span>ดูสแกนหน้า</span>
                   </button>
                   <button
+                    onClick={() => { setActiveTab('salaryReport'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'salaryReport' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <Wallet size={16} />
+                    <span>รายงานเงินเดือน</span>
+                  </button>
+                  <button
                     onClick={() => { setActiveTab('branchList'); if (window.innerWidth < 768) setSidebarOpen(false); }}
                     className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'branchList' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
                   >
@@ -2493,10 +2502,10 @@ export default function App() {
         </aside>
 
         {/* MAIN CONTAINER */}
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col overflow-hidden print-reset">
           
           {/* TOP BAR */}
-          <header className="flex items-center justify-between h-16 px-6 bg-white border-b border-slate-100 shadow-sm flex-shrink-0">
+          <header className="no-print flex items-center justify-between h-16 px-6 bg-white border-b border-slate-100 shadow-sm flex-shrink-0">
             <div className="flex items-center gap-4">
               <button className="md:hidden text-slate-600 hover:text-slate-900" onClick={() => setSidebarOpen(true)}>
                 <Menu size={24} />
@@ -2511,6 +2520,7 @@ export default function App() {
                 {activeTab === 'employeeList' && <Users size={20} className="text-amber-600" />}
                 {activeTab === 'attendance' && <Fingerprint size={20} className="text-amber-600" />}
                 {activeTab === 'branchList' && <Building2 size={20} className="text-amber-600" />}
+                {activeTab === 'salaryReport' && <Wallet size={20} className="text-amber-600" />}
                 {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdMenu' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdItems' && <ClipboardList size={20} className="text-amber-600" />}
@@ -2525,6 +2535,7 @@ export default function App() {
                   : activeTab === 'employeeList' ? 'รายชื่อพนักงาน'
                   : activeTab === 'attendance' ? 'ดูสแกนหน้า (เข้า-ออกงาน)'
                   : activeTab === 'branchList' ? 'จัดการสาขา'
+                  : activeTab === 'salaryReport' ? 'รายงานเงินเดือน'
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
@@ -2550,7 +2561,7 @@ export default function App() {
           </header>
 
           {/* PAGE CONTENT CONTAINER */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="flex-1 overflow-y-auto p-6 space-y-6 print-reset">
             
             {error && (
               <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm flex items-center gap-2">
@@ -2571,6 +2582,9 @@ export default function App() {
 
             {/* HR: จัดการสาขา — ทะเบียนสาขากลางที่ dropdown ทุกหน้าดึงไปใช้ (InventoryNarai.dbo.hr_branch) */}
             {activeTab === 'branchList' && <BranchList />}
+
+            {/* HR: รายงานเงินเดือน — สรุปวันทำงาน/วันลา/OT รายคน ตามสาขาและช่วงวันที่ แล้วสั่งพิมพ์ */}
+            {activeTab === 'salaryReport' && <SalaryReport />}
 
             {/* ACC: ค่าใช้จ่ายอื่นๆ (กรอก+บันทึกลง Google Sheet) */}
             {activeTab === 'otherExpense' && <OtherExpense />}
