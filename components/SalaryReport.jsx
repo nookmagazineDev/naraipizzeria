@@ -247,15 +247,20 @@ export default function SalaryReport() {
     noPlan: rows.reduce((n, r) => n + r.noPlanDays, 0),
   }), [rows]);
 
+  /** 0 = ปล่อยว่าง (ทั้งช่องจำนวนและช่องเวลา) */
+  const numText = (v) => (v ? v : '');
+  const timeText = (minutes) => (minutes ? hhmmOfMinutes(minutes) : '');
+  const otText = (hours) => (hours ? hhmmOfHours(hours) : '');
+
   /** ค่าของแต่ละคนเรียงตามคอลัมน์ในฟอร์ม (ใช้ทั้งตารางบนจอและไฟล์ Excel) */
   const cellsOf = (r) => [
     r.branch, r.badge, r.ssn, r.name, r.position, r.empType,
-    r.workDays, r.holidayWorkDays,
-    hhmmOfHours(r.otHours), hhmmOfMinutes(r.lateMinutes), hhmmOfMinutes(r.holidayLateMinutes),
-    hhmmOfMinutes(r.workMinutes), hhmmOfMinutes(r.holidayWorkMinutes),
-    r.lateMinutes, r.holidayLateMinutes,
-    ...LEAVE_COLUMNS.map((c) => r.leaveDays[c.code] || 0),
-    r.payable, r.lateMinutes + r.holidayLateMinutes,
+    numText(r.workDays), numText(r.holidayWorkDays),
+    otText(r.otHours), timeText(r.lateMinutes), timeText(r.holidayLateMinutes),
+    timeText(r.workMinutes), timeText(r.holidayWorkMinutes),
+    numText(r.lateMinutes), numText(r.holidayLateMinutes),
+    ...LEAVE_COLUMNS.map((c) => numText(r.leaveDays[c.code] || 0)),
+    numText(r.payable), numText(r.lateMinutes + r.holidayLateMinutes),
   ];
 
   /** ไฟล์ Excel วางทับชีต Summary ได้เลย — แถวแรกเป็นรหัสลา แถวสองเป็นหัวตาราง */
@@ -270,7 +275,10 @@ export default function SalaryReport() {
       ...LEAVE_COLUMNS.map((c) => c.label),
       'วันทำงาน', 'รวมสาย (นาที)',
     ];
-    const aoa = [codeRow, headRow, ...rows.map(cellsOf)];
+    // ช่องว่างส่งเป็น null ให้ xlsx ไม่สร้างเซลล์เลย — วางในชีตแล้วเป็นช่องว่างจริง
+    // (ถ้าส่งเป็นข้อความว่าง จะได้เซลล์ชนิดข้อความที่ ISBLANK ยังไม่ถือว่าว่าง)
+    const aoa = [codeRow, headRow, ...rows.map(cellsOf)]
+      .map((row) => row.map((v) => (v === '' ? null : v)));
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = headRow.map((h, i) => ({ wch: i === 3 ? 26 : Math.max(8, h.length + 2) }));
@@ -297,10 +305,11 @@ export default function SalaryReport() {
       ? thaiDate(loaded.start)
       : `${thaiDate(loaded.start)} ถึง ${thaiDate(loaded.end)}`;
 
-  // ช่องตัวเลข — ค่าที่เป็น 0 ทำให้จางลงเหมือนในชีต จะได้กวาดตาหาช่องที่มีค่าได้เร็ว
-  // (เช็คจากตัวเลขจริง ไม่ใช่ข้อความที่แสดง เพราะ '00:00' เป็นข้อความที่ไม่ว่าง)
+  // ช่องตัวเลข — ค่าที่เป็น 0 ปล่อยว่างไว้ ไม่ต้องแสดงเลข จะได้เห็นเฉพาะช่องที่มีค่าจริง
+  // (ทั้งบนจอและในไฟล์ Excel ใช้เกณฑ์เดียวกัน เช็คจากตัวเลขจริงเสมอ ไม่ใช่ข้อความที่แสดง
+  //  เพราะเวลาที่เป็นศูนย์จะถูกจัดรูปเป็น '00:00' ซึ่งเป็นข้อความที่ไม่ว่าง)
   const numCls = 'px-1.5 py-1 text-center font-mono tabular-nums';
-  const cell = (value, accent = '') => `${numCls} ${value ? accent : 'text-slate-300'}`;
+  const cell = (value, accent = '') => (value ? `${numCls} ${accent}` : numCls);
 
   return (
     <div className="space-y-6">
@@ -578,15 +587,15 @@ export default function SalaryReport() {
                       <td className="px-1.5 py-1 whitespace-nowrap text-slate-500">{r.position}</td>
                       <td className="px-1.5 py-1 whitespace-nowrap text-slate-500">{r.empType}</td>
 
-                      <td className={cell(r.workDays, 'font-semibold text-slate-800')}>{r.workDays}</td>
-                      <td className={cell(r.holidayWorkDays, 'text-slate-700')}>{r.holidayWorkDays}</td>
-                      <td className={cell(r.otHours, 'text-emerald-700')}>{hhmmOfHours(r.otHours)}</td>
-                      <td className={cell(r.lateMinutes, 'text-rose-600')}>{hhmmOfMinutes(r.lateMinutes)}</td>
-                      <td className={cell(r.holidayLateMinutes, 'text-rose-600')}>{hhmmOfMinutes(r.holidayLateMinutes)}</td>
-                      <td className={cell(r.workMinutes, 'font-semibold text-slate-800')}>{hhmmOfMinutes(r.workMinutes)}</td>
-                      <td className={cell(r.holidayWorkMinutes, 'text-slate-700')}>{hhmmOfMinutes(r.holidayWorkMinutes)}</td>
-                      <td className={cell(r.lateMinutes, 'text-rose-600')}>{r.lateMinutes}</td>
-                      <td className={cell(r.holidayLateMinutes, 'text-rose-600')}>{r.holidayLateMinutes}</td>
+                      <td className={cell(r.workDays, 'font-semibold text-slate-800')}>{numText(r.workDays)}</td>
+                      <td className={cell(r.holidayWorkDays, 'text-slate-700')}>{numText(r.holidayWorkDays)}</td>
+                      <td className={cell(r.otHours, 'text-emerald-700')}>{otText(r.otHours)}</td>
+                      <td className={cell(r.lateMinutes, 'text-rose-600')}>{timeText(r.lateMinutes)}</td>
+                      <td className={cell(r.holidayLateMinutes, 'text-rose-600')}>{timeText(r.holidayLateMinutes)}</td>
+                      <td className={cell(r.workMinutes, 'font-semibold text-slate-800')}>{timeText(r.workMinutes)}</td>
+                      <td className={cell(r.holidayWorkMinutes, 'text-slate-700')}>{timeText(r.holidayWorkMinutes)}</td>
+                      <td className={cell(r.lateMinutes, 'text-rose-600')}>{numText(r.lateMinutes)}</td>
+                      <td className={cell(r.holidayLateMinutes, 'text-rose-600')}>{numText(r.holidayLateMinutes)}</td>
 
                       {LEAVE_COLUMNS.map((c, i) => {
                         const v = r.leaveDays[c.code] || 0;
@@ -597,7 +606,7 @@ export default function SalaryReport() {
                               i === 0 ? ' border-l border-slate-200' : ''
                             }`}
                           >
-                            {v}
+                            {numText(v)}
                           </td>
                         );
                       })}
@@ -606,10 +615,10 @@ export default function SalaryReport() {
                         className={`${numCls} bg-amber-50/60 font-bold text-slate-800 border-l border-slate-200`}
                         title={`หน่วยเป็น${payableUnitLabel(r)}`}
                       >
-                        {r.payable}
+                        {numText(r.payable)}
                       </td>
                       <td className={cell(r.lateMinutes + r.holidayLateMinutes, 'text-rose-600')}>
-                        {r.lateMinutes + r.holidayLateMinutes}
+                        {numText(r.lateMinutes + r.holidayLateMinutes)}
                       </td>
                     </tr>
                   ))}
