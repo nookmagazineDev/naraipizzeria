@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info, RefreshCw } from 'lucide-react';
+import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info, RefreshCw, Plus, Trash2, Settings } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
-import { isPlanItem, PLAN_ITEM_COUNT } from '../lib/planItems';
+import { makePlanMatcher, normItemCode, validateItemCode, STATUS_INACTIVE } from '../lib/planItems';
 
 /*
  * จัดซื้อ — แพลนสินค้า: ใบสั่งของจริงของแต่ละสาขา ผ่าน /api/plan
@@ -112,8 +112,17 @@ export default function PlanList() {
   const [warning, setWarning] = useState('');   // API อ่านฐานไม่ได้แล้วถอยไปอ่านชีท — ต้องบอกให้รู้
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
-  // หมวดสินค้า: true = เฉพาะรายการในหมวดแพลน (lib/planItems.js) · false = ทุกหมวดที่สาขาสั่ง
+  // หมวดสินค้า: true = เฉพาะรายการในทะเบียนหมวดแพลน · false = ทุกหมวดที่สาขาสั่ง
   const [onlyPlan, setOnlyPlan] = useState(true);
+
+  // ทะเบียนหมวดแพลน (ตาราง dbo.plan_item ผ่าน /api/plan-items) — ต่อฐานไม่ได้จะได้รายชื่อสำรองมาแทน
+  const [planItems, setPlanItems] = useState([]);
+  const [planMeta, setPlanMeta] = useState({ canWrite: false, tableReady: false, warning: '', source: '' });
+  const [manageOpen, setManageOpen] = useState(false);
+  const [newCode, setNewCode] = useState('');
+  const [newName, setNewName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState({ ok: true, text: '' });
   // ช่วง "วันที่สั่ง" — ตัวนี้เป็นตัวกำหนดว่า API จะไปดึงใบสั่งช่วงไหนมา ไม่ใช่แค่กรองบนจอ
   const [dateFrom, setDateFrom] = useState(() => defaultRange().from);
   const [dateTo, setDateTo] = useState(() => defaultRange().to);
@@ -145,6 +154,59 @@ export default function PlanList() {
   // เปลี่ยนช่วงวันที่ = ต้องไปดึงมาใหม่ ไม่ใช่แค่กรองของเดิม
   useEffect(load, [dateFrom, dateTo]);
 
+  const loadPlanItems = () =>
+    fetch('/api/plan-items')
+      .then(r => r.json())
+      .then(res => {
+        if (res.status !== 'success') return;
+        setPlanItems(res.data || []);
+        setPlanMeta({
+          canWrite: !!res.canWrite, tableReady: !!res.tableReady,
+          warning: res.warning || '', source: res.source || '',
+        });
+      })
+      .catch(err => setPlanMeta(m => ({ ...m, warning: `อ่านทะเบียนหมวดแพลนไม่ได้: ${err.message}` })));
+  useEffect(() => { loadPlanItems(); }, []);
+
+  /** ส่งคำสั่งไปทะเบียน แล้วโหลดรายชื่อใหม่ถ้าสำเร็จ */
+  const sendPlanItem = (body, okText) => {
+    setSaving(true);
+    setSaveMsg({ ok: true, text: '' });
+    fetch('/api/plan-items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then(async res => {
+        if (res.status !== 'success') { setSaveMsg({ ok: false, text: res.message || 'บันทึกไม่สำเร็จ' }); return; }
+        await loadPlanItems();
+        setSaveMsg({ ok: true, text: okText });
+      })
+      .catch(err => setSaveMsg({ ok: false, text: err.message }))
+      .finally(() => setSaving(false));
+  };
+
+  const addPlanItem = () => {
+    const bad = validateItemCode(newCode);
+    if (bad) { setSaveMsg({ ok: false, text: bad }); return; }
+    const code = normItemCode(newCode);
+    if (planItems.some(i => normItemCode(i.code) === code)) {
+      setSaveMsg({ ok: false, text: `รหัส ${code} อยู่ในหมวดแพลนอยู่แล้ว` });
+      return;
+    }
+    sendPlanItem(
+      { action: 'saveItem', code, name: newName, sortOrder: planItems.length + 1 },
+      `เพิ่มรหัส ${code} เข้าหมวดแพลนแล้ว`
+    );
+    setNewCode(''); setNewName('');
+  };
+
+  // เช็คว่าอยู่ในหมวดแพลนไหม — สร้างใหม่ทุกครั้งที่ทะเบียนเปลี่ยน
+  const isPlan = useMemo(() => makePlanMatcher(planItems), [planItems]);
+  const activePlanCount = useMemo(
+    () => planItems.filter(i => i.status !== STATUS_INACTIVE).length, [planItems]);
+
   const branches = useMemo(() => [...new Set(rows.map(r => r.branch).filter(Boolean))].sort(), [rows]);
 
   // ช่วงวันที่ที่ "มีข้อมูลจริง" + จำนวนแถวที่อ่านวันที่ไม่ออก — ไว้บอกสาเหตุตอนกรองแล้วไม่เหลืออะไรเลย
@@ -161,14 +223,14 @@ export default function PlanList() {
 
   // คัดตามหมวด + ช่วงวันที่สั่ง — ใช้ต่อทั้งสรุป/รายละเอียด/Excel จะได้เป็นชุดเดียวกันหมด
   const baseRows = useMemo(() => rows.filter(r => {
-    if (onlyPlan && !isPlanItem(r.itemCode)) return false;
+    if (onlyPlan && !isPlan(r.itemCode)) return false;
     if (!dateFrom && !dateTo) return true;
     const iso = toISO(r.orderDate);
     if (!iso) return false;
     if (dateFrom && iso < dateFrom) return false;
     if (dateTo && iso > dateTo) return false;
     return true;
-  }), [rows, dateFrom, dateTo, onlyPlan]);
+  }), [rows, dateFrom, dateTo, onlyPlan, isPlan]);
 
   // สรุปยอดรวมต่อรายการ (itemCode) พร้อมวันที่บันทึกข้อมูลล่าสุดของแต่ละรายการ
   const summary = useMemo(() => {
@@ -437,9 +499,14 @@ export default function PlanList() {
           </div>
           <select value={onlyPlan ? 'plan' : 'all'} onChange={e => setOnlyPlan(e.target.value === 'plan')}
             className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500">
-            <option value="plan">หมวดแพลน ({PLAN_ITEM_COUNT} รายการ)</option>
+            <option value="plan">หมวดแพลน ({activePlanCount} รายการ)</option>
             <option value="all">ทุกหมวด</option>
           </select>
+          <button onClick={() => { setManageOpen(true); setSaveMsg({ ok: true, text: '' }); }}
+            title="เพิ่ม/ลบรหัสสินค้าในหมวดแพลน"
+            className="inline-flex items-center gap-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold px-3 py-2 rounded-xl transition-colors">
+            <Settings size={14} /> จัดการรายการ
+          </button>
           <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)}
             className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500">
             <option value="">ทุกสาขา ({branches.length})</option>
@@ -680,6 +747,107 @@ export default function PlanList() {
                   </table>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ───── Modal จัดการรายการหมวดแพลน ───── */}
+      {manageOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setManageOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[88vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-slate-800 flex items-center gap-2"><Settings size={16} /> จัดการรายการหมวดแพลน</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  ใส่รหัสสินค้าฝั่ง POS ที่ต้องการให้นับเป็นหมวดแพลน · ตอนนี้มี {planItems.length} รายการ
+                </p>
+              </div>
+              <button onClick={() => setManageOpen(false)} className="text-slate-400 hover:text-slate-700"><X size={20} /></button>
+            </div>
+
+            <div className="overflow-auto p-5 space-y-4">
+              {planMeta.warning && (
+                <div className="p-3 bg-amber-50 border border-amber-100 rounded-xl text-sm text-amber-800 flex items-start gap-2">
+                  <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <div>{planMeta.warning}</div>
+                    {planMeta.canWrite && !planMeta.tableReady && (
+                      <button onClick={() => sendPlanItem({ action: 'createTable' }, 'สร้างตารางและหยอดรายการตั้งต้นเรียบร้อย')}
+                        disabled={saving}
+                        className="mt-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-semibold text-xs px-3 py-1.5 rounded-lg">
+                        สร้างตาราง
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {saveMsg.text && (
+                <div className={`p-3 rounded-xl text-sm border ${saveMsg.ok
+                  ? 'bg-emerald-50 border-emerald-100 text-emerald-700'
+                  : 'bg-rose-50 border-rose-100 text-rose-700'}`}>
+                  {saveMsg.text}
+                </div>
+              )}
+
+              {/* เพิ่มรายการใหม่ */}
+              <div className="flex flex-wrap items-end gap-2 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">รหัสสินค้า</label>
+                  <input value={newCode} onChange={e => setNewCode(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') addPlanItem(); }}
+                    placeholder="เช่น 11000188" inputMode="numeric"
+                    className="w-40 px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                </div>
+                <div className="flex-1 min-w-[160px]">
+                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">ชื่อกำกับ (ไม่ใส่ก็ได้)</label>
+                  <input value={newName} onChange={e => setNewName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') addPlanItem(); }}
+                    placeholder="ไว้ให้คนอ่านรู้ว่ารหัสนี้คืออะไร"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                </div>
+                <button onClick={addPlanItem} disabled={saving || !planMeta.canWrite}
+                  className="inline-flex items-center gap-1.5 bg-cyan-600 hover:bg-cyan-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-sm px-4 py-2 rounded-lg transition-colors">
+                  {saving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} เพิ่ม
+                </button>
+              </div>
+
+              <div className="overflow-x-auto border border-slate-100 rounded-xl">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 text-slate-500">
+                    <tr className="text-xs font-bold">
+                      <th className="px-3 py-2 text-left">รหัสสินค้า</th>
+                      <th className="px-3 py-2 text-left">ชื่อกำกับ</th>
+                      <th className="px-3 py-2 text-center w-16">ลบ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {planItems.length === 0 ? (
+                      <tr><td colSpan={3} className="px-3 py-6 text-center text-slate-400 text-sm">ยังไม่มีรายการในหมวดแพลน</td></tr>
+                    ) : planItems.map(it => (
+                      <tr key={it.code} className="hover:bg-slate-50/60">
+                        <td className="px-3 py-2 font-mono text-slate-700">{it.code}</td>
+                        <td className="px-3 py-2 text-slate-500">{it.name || <span className="text-slate-300">—</span>}</td>
+                        <td className="px-3 py-2 text-center">
+                          <button
+                            onClick={() => sendPlanItem({ action: 'deleteItem', code: it.code }, `ลบรหัส ${it.code} ออกจากหมวดแพลนแล้ว`)}
+                            disabled={saving || !planMeta.canWrite}
+                            title={planMeta.canWrite ? 'เอาออกจากหมวดแพลน' : 'ต่อฐานไม่ได้ จึงแก้ไม่ได้'}
+                            className="text-slate-300 hover:text-rose-600 disabled:hover:text-slate-300 disabled:opacity-40">
+                            <Trash2 size={15} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-xs text-slate-400 flex items-start gap-1.5">
+                <Info size={13} className="flex-shrink-0 mt-0.5" />
+                ชื่อกำกับใช้ดูในหน้านี้เท่านั้น — ชื่อสินค้าบนตารางแพลนดึงจาก POS เสมอ จะได้ตรงกับที่สาขาเห็นตอนสั่ง
+              </p>
             </div>
           </div>
         </div>
