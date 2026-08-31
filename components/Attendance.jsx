@@ -2,9 +2,10 @@ import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx-js-style';
 import {
   Fingerprint, Loader2, Search, CalendarDays, ListOrdered,
-  Building2, Download, AlertCircle, RefreshCw, CalendarClock
+  Building2, Download, AlertCircle, RefreshCw, CalendarClock,
+  Pencil, Check, X, CheckCircle
 } from 'lucide-react';
-import { hhmm, summarizeDaily, attachSchedule } from '../lib/attendance';
+import { hhmm, summarizeDaily, attachSchedule, applyScanEdits, SCAN_SLOTS, slotLabel } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 
 /*
@@ -19,6 +20,11 @@ import { useBranches } from '../lib/useBranches';
  * ตารางสรุปรายวันวางคู่กันสองฝั่ง: เวลาที่สาขา "ลงตารางไว้" (dbo.hr_timesheet ผ่าน
  * /api/hr-schedule) กับเวลาที่ "สแกนจริง" แล้วสรุปส่วนต่างให้ว่าเข้าสาย/เบรคสาย/ออกก่อนกี่นาที
  * ตารางงานเป็นข้อมูลเสริม — ดึงไม่ได้ก็ยังเห็นเวลาสแกนตามปกติ
+ *
+ * ช่องฝั่ง "สแกนจริง" กดแก้เวลาได้ (วันที่ลืมสแกน หรือเครื่องรับนิ้วซ้ำจนได้เบรคที่ไม่มีจริง)
+ * การกดบันทึกแต่ละครั้ง = บันทึกแถวใหม่ลง dbo.attendance_edit ผ่าน /api/attendance-edit
+ * ไม่ได้เขียนทับข้อมูลของเครื่องสแกน (ZKBio9 อ่านอย่างเดียวเสมอ) เวลาที่แสดงคือค่าที่แก้ล่าสุด
+ * ครอบทับเวลาดิบ แล้วคิดชั่วโมงทำงาน/นาทีที่สายใหม่ให้ตรงกับเวลาที่เห็น (applyScanEdits)
  */
 
 // รหัสสาขามาจากทะเบียนกลาง (HR → จัดการสาขา) ผ่าน useBranches()
@@ -101,6 +107,13 @@ export default function Attendance() {
   const [view, setView] = useState('daily');         // 'daily' = สรุปรายวัน | 'raw' = ทุกครั้งที่สแกน
   const [showPlan, setShowPlan] = useState(true);    // เทียบกับตารางงานที่ลงไว้ (ปิดได้เพื่อดูตารางแบบสั้น)
 
+  // เวลาสแกนที่แก้ด้วยมือ (ครอบทับเวลาดิบตอนแสดงผล — ไม่ได้แตะข้อมูลของเครื่องสแกน)
+  const [scanEdits, setScanEdits] = useState([]);    // แถวล่าสุดของแต่ละ (วัน, คน, ช่อง)
+  const [editNote, setEditNote] = useState('');      // อ่านตัวแก้ไม่ได้ (ยังไม่ได้สร้างตาราง ฯลฯ)
+  const [editing, setEditing] = useState(null);      // { key, slot, value, row } ช่องที่กำลังกรอกอยู่
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editMsg, setEditMsg] = useState(null);      // ผลของการกดบันทึกล่าสุด { ok, msg }
+
   // รับวันที่/สาขามาเป็นพารามิเตอร์ได้ เพื่อให้ปุ่มช่วงสำเร็จรูปกดแล้วดึงได้เลย
   // (ไม่ต้องรอ state รอบถัดไป)
   const load = async (opts = {}) => {
@@ -128,12 +141,19 @@ export default function Attendance() {
       const range = s === e ? s : `${s} ถึง ${e}`;
       setLoadedInfo(`${range} · ${b || 'ทุกสาขา'} · ${json.count || 0} ครั้ง`);
 
-      // ตารางงานเป็นข้อมูลเสริม ดึงต่อจากเวลาสแกนเสมอ (คนละฐานข้อมูลกัน)
-      await loadSchedule({ start: s, end: e, branch: b });
+      // ตารางงานกับเวลาที่แก้ด้วยมือเป็นข้อมูลเสริม ดึงต่อจากเวลาสแกนเสมอ (คนละฐานข้อมูลกัน)
+      // ดึงพร้อมกันได้ ไม่ได้พึ่งผลของกันและกัน และตัวไหนล้มก็ไม่ทำให้อีกตัวหาย
+      setEditing(null);
+      await Promise.all([
+        loadSchedule({ start: s, end: e, branch: b }),
+        loadScanEdits({ start: s, end: e, branch: b }),
+      ]);
     } catch (err) {
       setRows(null);
       setSchedRows([]);
       setSchedNote('');
+      setScanEdits([]);
+      setEditNote('');
       setWarning('');
       setError(err.message || 'ดึงข้อมูลไม่สำเร็จ');
       setErrorCode(err.code || '');
@@ -174,6 +194,27 @@ export default function Attendance() {
     }
   };
 
+  /**
+   * เวลาสแกนที่เคยกดแก้ไว้ในช่วงเดียวกัน — เป็นข้อมูลเสริมเหมือนตารางงาน
+   * ดึงไม่ได้ (ยังไม่ได้สร้างตาราง / ต่อฐานไม่ถึง) ก็แค่แสดงเวลาดิบจากเครื่องสแกนตามเดิม
+   */
+  const loadScanEdits = async ({ start: s, end: e, branch: b }) => {
+    try {
+      const p = new URLSearchParams({ start: s, end: e });
+      if (b) p.set('branch', b);
+      const res = await fetch(`/api/attendance-edit?${p.toString()}`);
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json || json.status !== 'success') {
+        throw new Error((json && (json.hint || json.message)) || `อ่านเวลาที่แก้ไว้ไม่สำเร็จ (${res.status})`);
+      }
+      setScanEdits(json.data || []);
+      setEditNote('');
+    } catch (err) {
+      setScanEdits([]);
+      setEditNote(`${err.message || 'อ่านเวลาที่แก้ไว้ไม่สำเร็จ'} — แสดงเวลาดิบจากเครื่องสแกน และยังกดแก้ไม่ได้`);
+    }
+  };
+
   // กดปุ่มช่วงสำเร็จรูป = ตั้งวันที่ให้ แล้วดึงข้อมูลทันที
   const applyPreset = (key) => {
     const { start, end } = presetRange(key);
@@ -201,9 +242,15 @@ export default function Attendance() {
   //
   // เปิดเทียบตารางงานไว้ = ดึงคนที่ลงตารางไว้แต่ไม่มีสแกนขึ้นมาด้วย ไม่งั้นวันหยุด/วันลา
   // จะไม่โผล่ในตารางเลย เพราะวันพวกนั้นไม่มีใครไปสแกน
+  //
+  // เวลาที่แก้ด้วยมือมาครอบทับเป็นชั้นสุดท้าย หลังจับคู่กับตารางงานแล้ว เพราะการแก้เวลาต้อง
+  // ทำให้ "นาทีที่สาย" คิดใหม่ด้วย (applyScanEdits คิดให้จาก plan ที่ติดมากับแถว)
   const merged = useMemo(
-    () => attachSchedule(summarizeDaily(filtered), schedRows, { includeUnscanned: showPlan }),
-    [filtered, schedRows, showPlan]
+    () => applyScanEdits(
+      attachSchedule(summarizeDaily(filtered), schedRows, { includeUnscanned: showPlan }),
+      scanEdits,
+    ),
+    [filtered, schedRows, showPlan, scanEdits]
   );
 
   // แถวที่มาจากตารางงานล้วน (ไม่มีสแกน) ยังไม่ผ่านช่องค้นหา จึงกรองอีกรอบตรงนี้
@@ -224,7 +271,122 @@ export default function Attendance() {
     off: daily.filter((d) => d.plan?.isOff).length,
     noScan: daily.filter((d) => d.noScan).length,
     offScanned: daily.filter((d) => d.offScanned).length,
+    edited: daily.filter((d) => d.edited).length,
   }), [daily]);
+
+  /* ---------------------- แก้เวลาสแกนในช่อง ---------------------- */
+
+  const editKey = (d) => `${d.date}|${d.empCode}`;
+
+  /** กดที่ช่องเวลา = เปิดช่องกรอกของช่องนั้น (ค่าเริ่มต้นคือเวลาที่เห็นอยู่) */
+  const startEdit = (d, slot, field) => {
+    if (!d.empCode) return;   // ไม่มีรหัสพนักงานก็อ้างแถวไม่ได้ ไม่ให้แก้
+    setEditMsg(null);
+    setEditing({ key: editKey(d), slot, field, row: d, value: hhmm(d[field]) });
+  };
+
+  const cancelEdit = () => { setEditing(null); setEditMsg(null); };
+
+  /**
+   * บันทึกเวลาช่องที่กำลังกรอก — เป็นการ "บันทึกใหม่" ทุกครั้ง (ฝั่ง API เพิ่มแถวใหม่เสมอ)
+   * ค่าว่าง = ล้างเวลาช่องนั้นทิ้ง (เช่นเครื่องรับนิ้วซ้ำจนกลายเป็นเบรคที่ไม่มีจริง)
+   */
+  const saveEdit = async () => {
+    if (!editing || savingEdit) return;
+    const { row, slot, field, value } = editing;
+    const before = hhmm(row[field]);
+    if (value === before) { cancelEdit(); return; }
+
+    setSavingEdit(true);
+    try {
+      const res = await fetch('/api/attendance-edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: row.date,
+          empCode: row.empCode,
+          name: row.name || '',
+          branch: row.branch || '',
+          slot,
+          time: value,
+          oldTime: before,
+        }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json || json.status !== 'success') {
+        throw new Error((json && (json.hint ? `${json.message} — ${json.hint}` : json.message)) ||
+          `บันทึกไม่สำเร็จ (${res.status})`);
+      }
+
+      // แทนที่ตัวแก้เดิมของช่องนั้นด้วยแถวที่เพิ่งบันทึก (ฐานเก็บไว้ทั้งสองแถว ที่นี่ใช้แค่ตัวล่าสุด)
+      const saved = json.data;
+      setScanEdits((prev) => [
+        ...prev.filter((e) => !(e.date === saved.date && e.empCode === saved.empCode && e.slot === saved.slot)),
+        saved,
+      ]);
+      setEditing(null);
+      setEditMsg({
+        ok: true,
+        msg: `บันทึกเวลา${slotLabel(slot)}ของ ${row.name || row.empCode} วันที่ ${row.date} แล้ว` +
+          ` (${before || 'ไม่มีเวลา'} → ${value || 'ไม่มีเวลา'})`,
+      });
+    } catch (err) {
+      setEditMsg({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  /** ช่องเวลาฝั่ง "สแกนจริง" — กดแล้วกลายเป็นช่องกรอก (Enter = บันทึก, Esc = ยกเลิก) */
+  const scanCell = (d, slot, field, cls) => {
+    const isEditing = editing && editing.key === editKey(d) && editing.slot === slot;
+    if (isEditing) {
+      return (
+        <div className="flex items-center justify-center gap-1">
+          <input
+            type="time" autoFocus value={editing.value} disabled={savingEdit}
+            onChange={(e) => setEditing((m) => ({ ...m, value: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') saveEdit();
+              if (e.key === 'Escape') cancelEdit();
+            }}
+            className="w-[92px] px-1.5 py-1 border border-amber-400 rounded-lg text-xs font-mono focus:ring-2 focus:ring-amber-500 outline-none"
+          />
+          <button
+            onClick={saveEdit} disabled={savingEdit} title="บันทึกเป็นรายการใหม่"
+            className="p-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {savingEdit ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+          </button>
+          <button
+            onClick={cancelEdit} disabled={savingEdit} title="ยกเลิก"
+            className="p-1 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      );
+    }
+
+    const t = hhmm(d[field]);
+    const e = d.edits?.[slot];
+    const title = e
+      ? `แก้เป็น ${e.time || 'ไม่มีเวลา'} จากเดิม ${e.before || 'ไม่มีเวลา'}` +
+        `${e.savedAt ? ` · ${e.savedAt}` : ''}${e.editedBy ? ` · โดย ${e.editedBy}` : ''} (คลิกเพื่อแก้ใหม่)`
+      : 'คลิกเพื่อแก้เวลา — บันทึกเป็นรายการใหม่ ไม่ทับข้อมูลเครื่องสแกน';
+
+    return (
+      <button
+        type="button" onClick={() => startEdit(d, slot, field)} disabled={!d.empCode} title={title}
+        className={`group inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg hover:bg-amber-100/70 disabled:cursor-not-allowed disabled:hover:bg-transparent ${
+          e ? 'bg-amber-50 ring-1 ring-amber-300' : ''
+        }`}
+      >
+        {t ? <span className={`font-mono ${cls}`}>{t}</span> : <Dash />}
+        <Pencil size={11} className={e ? 'text-amber-600' : 'text-slate-300 group-hover:text-amber-500'} />
+      </button>
+    );
+  };
 
   const exportExcel = () => {
     const tag = `${branch || 'ALL'}_${startDate}${startDate === endDate ? '' : `_${endDate}`}`;
@@ -242,10 +404,15 @@ export default function Attendance() {
       ? [statusText(d), [...(d.plan?.reasons || []), ...(d.plan?.notes || [])].join(', ')]
       : []);
     const lateCells = (d) => (showPlan ? [d.lateIn ?? '', d.lateBreakIn ?? '', d.earlyOut ?? ''] : []);
+    // ช่องที่แก้เวลาด้วยมือ — เขียนเป็น 'เข้า 11:53→11:30' ให้เห็นในไฟล์ว่าตัวเลขไหนไม่ใช่ของเครื่องสแกน
+    const editedCell = (d) => SCAN_SLOTS
+      .filter(({ slot }) => d.edits?.[slot])
+      .map(({ slot, label }) => `${label} ${d.edits[slot].before || '—'}→${d.edits[slot].time || '—'}`)
+      .join(', ');
 
     const aoa = view === 'daily'
       ? [
-          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...statusHead, ...lateHead, 'รวม (ชม.)', 'พัก (ชม.)', 'สุทธิ (ชม.)', 'จำนวนสแกน'],
+          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...statusHead, ...lateHead, 'รวม (ชม.)', 'พัก (ชม.)', 'สุทธิ (ชม.)', 'จำนวนสแกน', 'แก้ไขเวลา'],
           ...daily.map((d) => [
             d.date, d.empCode, d.name, d.branch,
             ...planCells(d),
@@ -256,6 +423,7 @@ export default function Attendance() {
             d.breakHours != null ? +d.breakHours.toFixed(2) : '',
             d.netHours != null ? +d.netHours.toFixed(2) : '',
             d.count,
+            editedCell(d),
           ]),
         ]
       : [
@@ -401,6 +569,31 @@ export default function Attendance() {
         </div>
       )}
 
+      {/* อ่านตารางเวลาที่แก้ไว้ไม่ได้ — เวลาสแกนยังดูได้ตามปกติ แค่ยังกดแก้ไม่ได้ */}
+      {editNote && !loading && rows !== null && (
+        <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-sm flex items-start gap-2">
+          <Pencil size={18} className="mt-0.5 flex-shrink-0" />
+          <span>แก้เวลาสแกน: {editNote}</span>
+        </div>
+      )}
+
+      {/* ผลของการกดบันทึกเวลาล่าสุด */}
+      {editMsg && (
+        <div
+          className={`p-3 rounded-xl text-sm flex items-start gap-2 border ${
+            editMsg.ok
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border-rose-200 text-rose-700'
+          }`}
+        >
+          {editMsg.ok
+            ? <CheckCircle size={18} className="mt-0.5 flex-shrink-0" />
+            : <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />}
+          <span className="flex-1">{editMsg.msg}</span>
+          <button onClick={() => setEditMsg(null)} className="text-current opacity-60 hover:opacity-100"><X size={16} /></button>
+        </div>
+      )}
+
       {rows !== null && (
         <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
           {/* แถบเครื่องมือ */}
@@ -443,7 +636,8 @@ export default function Attendance() {
               )}
               <span className="text-xs text-slate-400">
                 {view === 'daily'
-                  ? `${daily.length} แถว • ${people} คน${showPlan ? ` • หยุด/ลา ${planStats.off} • ไม่มีสแกน ${planStats.noScan}` : ''}`
+                  ? `${daily.length} แถว • ${people} คน${showPlan ? ` • หยุด/ลา ${planStats.off} • ไม่มีสแกน ${planStats.noScan}` : ''}` +
+                    (planStats.edited ? ` • แก้เวลา ${planStats.edited}` : '')
                   : `${filtered.length} ครั้ง`}
               </span>
               <button
@@ -547,11 +741,11 @@ export default function Attendance() {
                         </>
                       ))}
 
-                      {/* ฝั่งที่สแกนจริง */}
-                      <td className={`px-3 py-2 text-center${showPlan ? ' border-l border-slate-200' : ''}`}>{timeCell(hhmm(d.first), 'font-semibold text-emerald-700')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.breakOut ? hhmm(d.breakOut) : '', 'text-amber-600')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.breakIn ? hhmm(d.breakIn) : '', 'text-amber-600')}</td>
-                      <td className="px-3 py-2 text-center">{timeCell(d.last ? hhmm(d.last) : '', 'font-semibold text-rose-700')}</td>
+                      {/* ฝั่งที่สแกนจริง — ทั้งสี่ช่องกดแก้เวลาได้ (บันทึกเป็นรายการใหม่) */}
+                      <td className={`px-3 py-2 text-center${showPlan ? ' border-l border-slate-200' : ''}`}>{scanCell(d, 'in', 'first', 'font-semibold text-emerald-700')}</td>
+                      <td className="px-3 py-2 text-center">{scanCell(d, 'breakOut', 'breakOut', 'text-amber-600')}</td>
+                      <td className="px-3 py-2 text-center">{scanCell(d, 'breakIn', 'breakIn', 'text-amber-600')}</td>
+                      <td className="px-3 py-2 text-center">{scanCell(d, 'out', 'last', 'font-semibold text-rose-700')}</td>
 
                       {/* สถานะ / เหตุผลการลา / หมายเหตุของวันนั้น */}
                       {showPlan && (
@@ -602,6 +796,13 @@ export default function Attendance() {
                   )}
                   <span className="font-medium text-emerald-600">สแกนจริง</span> อ่านจากลำดับการสแกน 4 รอบ: เข้างาน → ออกเบรค → เข้าเบรค → ออกงาน ·
                   ช่องที่เป็น — คือไม่มีข้อมูลฝั่งนั้น (ยังไม่ได้ลงตาราง หรือวันนั้นสแกนไม่ครบ)
+                </p>
+                <p>
+                  <span className="inline-flex items-center gap-1 font-medium text-amber-600"><Pencil size={11} /> แก้เวลาสแกน</span>
+                  {' '}= คลิกที่ช่องเวลาฝั่งสแกนจริงได้ทั้งสี่ช่อง (เว้นว่างไว้ = ลบเวลาช่องนั้น) ·
+                  กดบันทึกครั้งหนึ่ง = <span className="font-medium">บันทึกเป็นรายการใหม่</span> ในตารางแก้ไข
+                  ไม่ได้เขียนทับข้อมูลของเครื่องสแกน จึงย้อนดูได้เสมอว่าเวลาเดิมคือเท่าไหร่ ใครแก้ เมื่อไหร่
+                  (ชี้ที่ช่องพื้นเหลืองเพื่อดู) · ชั่วโมงทำงานและนาทีที่สายคิดใหม่จากเวลาที่แก้แล้ว
                 </p>
                 {showPlan && (
                   <p>

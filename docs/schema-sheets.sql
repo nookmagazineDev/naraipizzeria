@@ -12,6 +12,8 @@
        แท็บ 'ค่าใช้จ่ายอื่น'     -> dbo.expense_entry
      ชีทพนักงาน (แท็บ DATA ที่ Apps Script ของสต๊อกผูกอยู่)
                                 -> dbo.hr_employee
+     ไม่ได้มาจากชีท — เกิดจากการกดแก้บนหน้าเว็บ
+       แก้เวลาสแกนนิ้ว           -> dbo.attendance_edit
 
    วิธีรัน (บนเครื่องที่ต่อ SQL Server ได้):
      sqlcmd -S localhost\SQLEXPRESS -U sa -P '<รหัสผ่าน>' -i docs\schema-sheets.sql
@@ -180,6 +182,39 @@ CREATE TABLE dbo.hr_employee (
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_hr_employee_branch')
 CREATE INDEX IX_hr_employee_branch ON dbo.hr_employee (branch, status) INCLUDE (full_name, position);
+GO
+
+/* ================== แก้เวลาสแกนนิ้วด้วยมือ (หน้า "ดูสแกนหน้า") ==================
+   หนึ่งแถว = การแก้เวลาหนึ่งช่องหนึ่งครั้ง (เข้า / ออกเบรค / เข้าเบรค / ออก ของคนหนึ่งในวันหนึ่ง)
+
+   ตารางนี้ "บันทึกใหม่ทุกครั้ง" ไม่เขียนทับของเดิม — กดแก้กี่รอบก็ได้แถวเพิ่มทุกรอบ
+   เวลาที่หน้าเว็บแสดงคือแถวล่าสุดของช่องนั้น (คัดด้วย ROW_NUMBER ตอนอ่าน) ส่วนแถวก่อนหน้า
+   เก็บไว้เป็นประวัติว่าใครแก้อะไรเมื่อไหร่ เพราะเวลาสแกนเป็นฐานคิดค่าแรง ต้องย้อนดูได้เสมอ
+
+   ข้อมูลสแกนจริงจาก ZKBio9 (dbo.iclock_transaction) ไม่ถูกแตะเลย — ตารางนี้เป็นชั้นทับ
+   ที่หน้าเว็บเอาไปครอบตอนแสดงผลเท่านั้น เครื่องสแกนส่งข้อมูลมาใหม่ก็ไม่ทับของที่แก้ไว้
+
+   scan_time เก็บเป็นข้อความ 'HH:mm' (ไม่ใช่ TIME) ให้ตรงกับที่หน้าเว็บแสดงและกรอก
+   ค่า NULL = ลบเวลาช่องนั้นทิ้ง (เช่นสแกนซ้ำจนกลายเป็นเบรคที่ไม่มีจริง) */
+IF OBJECT_ID(N'dbo.attendance_edit', N'U') IS NULL
+CREATE TABLE dbo.attendance_edit (
+    edit_id    BIGINT         IDENTITY(1,1) NOT NULL,
+    work_date  DATE           NOT NULL,   -- วันที่ของแถวในตารางสรุปรายวัน
+    emp_code   NVARCHAR(50)   NOT NULL,   -- รหัสพนักงานฝั่งเครื่องสแกน (emp_code)
+    slot       VARCHAR(10)    NOT NULL,   -- ช่องที่แก้: in | breakOut | breakIn | out
+    scan_time  VARCHAR(5)     NULL,       -- เวลาใหม่ 'HH:mm' (NULL = ล้างค่าช่องนั้น)
+    old_time   VARCHAR(5)     NULL,       -- เวลาก่อนแก้ (ไว้เทียบย้อนหลัง)
+    emp_name   NVARCHAR(255)  NULL,       -- ชื่อ ณ ตอนที่แก้ (เผื่อรหัสถูกใช้ซ้ำภายหลัง)
+    branch     NVARCHAR(20)   NULL,       -- สาขาที่เห็นในแถวนั้น (ตัวพิมพ์ใหญ่ตาม area_alias)
+    note       NVARCHAR(255)  NULL,       -- เหตุผลที่แก้ (เช่น 'ลืมสแกน')
+    edited_by  NVARCHAR(100)  NULL,       -- ผู้แก้
+    created_at DATETIME2(0)   NOT NULL CONSTRAINT DF_attendance_edit_created DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_attendance_edit PRIMARY KEY (edit_id),
+    CONSTRAINT CK_attendance_edit_slot CHECK (slot IN ('in', 'breakOut', 'breakIn', 'out'))
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_attendance_edit_day')
+CREATE INDEX IX_attendance_edit_day ON dbo.attendance_edit (work_date, emp_code, slot, edit_id DESC);
 GO
 
 /* ============================================================================

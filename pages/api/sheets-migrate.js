@@ -6,7 +6,7 @@
 //   GET /api/sheets-migrate?key=<SHEETS_MIGRATE_KEY>&step=check       ← ดูสถานะ ไม่แตะข้อมูล (ค่าเริ่มต้น)
 //   GET /api/sheets-migrate?key=...&step=probe                        ← ไล่ทดสอบว่าพอร์ตไหนของ SQL เปิดให้ต่อได้
 //        เติม &host=1.2.3.4 และ/หรือ &port=1450,1451 เพื่อลองปลายทางที่ไม่ได้อยู่ในรายการเดา
-//   GET /api/sheets-migrate?key=...&step=schema&confirm=1              ← สร้างตาราง 5 ตาราง
+//   GET /api/sheets-migrate?key=...&step=schema&confirm=1              ← สร้างตาราง 5 ตาราง + ตารางแก้เวลาสแกน
 //   GET /api/sheets-migrate?key=...&step=plan&confirm=1                ← ย้ายแพลนสั่งของ
 //   GET /api/sheets-migrate?key=...&step=closing&confirm=1             ← ย้ายยอดปิดรอบสิ้นเดือน
 //   GET /api/sheets-migrate?key=...&step=expenseref&confirm=1          ← ย้ายรหัสค่าใช้จ่าย
@@ -297,7 +297,8 @@ export default async function handler(req, res) {
                OBJECT_ID(N'dbo.stock_closing') AS t_closing,
                OBJECT_ID(N'dbo.expense_ref') AS t_expense_ref,
                OBJECT_ID(N'dbo.expense_entry') AS t_expense,
-               OBJECT_ID(N'dbo.hr_employee') AS t_employee`).catch((e) => ({ error: e.message }));
+               OBJECT_ID(N'dbo.hr_employee') AS t_employee,
+               OBJECT_ID(N'dbo.attendance_edit') AS t_scan_edit`).catch((e) => ({ error: e.message }));
       if (perms.error) {
         const cannotConnect = /Failed to connect|ETIMEOUT|ECONNREFUSED|ENOTFOUND|ESOCKET/i.test(perms.error);
         return res.status(200).json({
@@ -315,6 +316,8 @@ export default async function handler(req, res) {
         expense_ref: Boolean(p.t_expense_ref),
         expense_entry: Boolean(p.t_expense),
         hr_employee: Boolean(p.t_employee),
+        // ไม่ได้ย้ายมาจากชีท (เกิดจากการกดแก้เวลาสแกนบนหน้าเว็บ) แต่สร้างด้วย step=schema ชุดเดียวกัน
+        attendance_edit: Boolean(p.t_scan_edit),
       };
       const missing = Object.entries(tables).filter(([, v]) => !v).map(([k2]) => k2);
       return res.status(200).json({

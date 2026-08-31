@@ -14,7 +14,11 @@
 //    GET  /sheets/expense-ref              รหัสค่าใช้จ่าย (ประเภท/สาขา/รหัส)
 //    GET  /sheets/expense                  ค่าใช้จ่ายที่บันทึกแล้วทั้งหมด
 //    GET  /sheets/employee                 รายชื่อพนักงาน
+//    GET  /sheets/scan-edit?start=&end=    เวลาสแกนนิ้วที่แก้ด้วยมือ (แถวล่าสุดของแต่ละช่อง)
+//    GET  /sheets/scan-edit-history?date=&emp=   ประวัติการแก้ของคนหนึ่งในวันหนึ่ง
 //    POST /sheets/save   { action, ... }   เขียน (ต้องมี header x-api-key)
+//                                          action: saveOtherExpense · bulkImport ·
+//                                          deleteExpenseByMonth · saveEmployee · saveScanEdit
 //
 //  ⚠️ เขียนได้ต้องตั้ง env SHEETS_WRITE_KEY (หรือใช้ QCRD_WRITE_KEY เดิมก็ได้) บนเครื่องโฮสต์
 //     แล้วตั้งค่าเดียวกันบน Vercel — ไม่ตั้ง = ปิดการเขียนไว้ (อ่านได้อย่างเดียว)
@@ -37,6 +41,18 @@ function getCore() {
       .catch(err => { corePromise = null; throw err; });
   }
   return corePromise;
+}
+
+// เวลาสแกนนิ้วที่แก้ด้วยมือ (dbo.attendance_edit) อยู่ฐานเดียวกัน — ตรรกะอยู่ใน lib/scanEditSql.mjs
+// แยกไฟล์กันเพราะคนละเรื่องกับชีท แต่ใช้ pool/กุญแจเขียนชุดเดียวกันที่นี่
+let scanEditPromise = null;
+function getScanEdits() {
+  if (!scanEditPromise) {
+    scanEditPromise = import('../lib/scanEditSql.mjs')
+      .then(m => m.createScanEdits({ q }))
+      .catch(err => { scanEditPromise = null; throw err; });
+  }
+  return scanEditPromise;
 }
 
 const str = v => (v === null || v === undefined ? '' : String(v).trim());
@@ -87,6 +103,16 @@ function mountSheets(app) {
   app.get('/sheets/expense', read('readExpenses'));
   app.get('/sheets/employee', read('readEmployees'));
 
+  // เวลาสแกนที่แก้ด้วยมือ — ช่วงวันที่เดียวกับที่หน้า "ดูสแกนหน้า" ดึงเวลาสแกนมา
+  app.get('/sheets/scan-edit', (req, res) => send(res, getScanEdits().then(c => c.readScanEdits({
+    start: str(req.query.start), end: str(req.query.end), branch: str(req.query.branch),
+  })), 'readScanEdits'));
+
+  // ประวัติการแก้ของคนหนึ่งในวันหนึ่ง (ทุกครั้งที่กดบันทึก)
+  app.get('/sheets/scan-edit-history', (req, res) => send(res, getScanEdits().then(c => c.readScanEditHistory({
+    date: str(req.query.date), empCode: str(req.query.emp),
+  })), 'readScanEditHistory'));
+
   app.post('/sheets/save', express.json({ limit: '2mb' }), (req, res) => {
     if (!WRITE_KEY) {
       return res.status(503).json({
@@ -99,8 +125,8 @@ function mountSheets(app) {
     }
     const body = req.body || {};
     const action = str(body.action);
-    return send(res, getCore().then(core => {
-      const fn = core.actions[action];
+    return send(res, Promise.all([getCore(), getScanEdits()]).then(([core, scanEdits]) => {
+      const fn = core.actions[action] || scanEdits.actions[action];
       if (!fn) throw Object.assign(new Error(`unknown action: ${action}`), { badRequest: true });
       return fn(body);
     }), action);
