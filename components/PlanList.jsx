@@ -1,11 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 
 /*
- * จัดซื้อ — แพลนสินค้า: อ่านชีท "plan" (ประวัติการสั่งของแต่ละสาขา) ผ่าน /api/plan
- * หน้าหลักสรุปยอดรวมต่อรายการ (จำนวน/มูลค่า/จำนวนสาขา/จำนวนครั้งสั่ง)
- * กดแถว → ดูแยกตามสาขา (สั่งเท่าไหร่ รับของวันไหนบ้าง) + รายละเอียดทุกแถวพร้อมวันที่คีย์ข้อมูล
+ * จัดซื้อ — แพลนสินค้า: ใบสั่งของจริงของแต่ละสาขา ผ่าน /api/plan
+ *
+ * ต้นทางคือ myfbdata.orderd ฝั่ง POS — ตัวเดียวกับที่แอปสั่งของของสาขาเขียนลง
+ * ข้อมูลจึงตรงกันทันที (ทางถอย: สำเนาในชีท/SQL Server พร้อมแถบเตือนว่าอาจไม่สด)
+ *
+ * ทุกแถวมีสองวันที่ที่ต้องแยกให้ชัด: วันที่สั่ง (Ord_OrdDate) กับ วันที่ส่ง (Ord_DelDate)
+ * ช่วงวันที่บนหน้าจอกรองด้วย "วันที่สั่ง" และถูกส่งไปให้ API จำกัดคิวรีด้วย
+ * (orderd ใหญ่มากและไม่มี index ตามวันที่ — ดึงทั้งหมดไม่ได้)
+ *
+ * หน้าหลักสรุปยอดรวมต่อรายการ กดแถว → แยกตามสาขา + รายละเอียดทุกใบพร้อมสถานะรับของ
  */
 
 const fmtNum = v => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -48,6 +55,19 @@ const sortKey = r => {
   return iso ? `${iso}${(r.recordTime || '').replace(/:/g, '')}` : '';
 };
 
+// สถานะรับของ — มีเฉพาะข้อมูลสดจาก POS (ช่อง Ord_Rcv) ต้นทางสำเนาไม่มีให้
+const statusText = r => (r.received === true ? 'รับแล้ว' : r.received === false ? 'รอรับ' : '');
+
+const RANGE_DAYS = 30;   // ต้องตรงกับ DEFAULT_DAYS ใน pages/api/plan.js
+
+const todayISO = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }).slice(0, 10);
+const shiftISO = (iso, days) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+const defaultRange = () => { const to = todayISO(); return { from: shiftISO(to, -(RANGE_DAYS - 1)), to }; };
+
 const HEAD_STYLE = {
   font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
   fill: { patternType: 'solid', fgColor: { rgb: '0E7490' } }, // cyan-700
@@ -60,17 +80,24 @@ export default function PlanList() {
   const [warning, setWarning] = useState('');   // API อ่านฐานไม่ได้แล้วถอยไปอ่านชีท — ต้องบอกให้รู้
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
-  const [dateFrom, setDateFrom] = useState(''); // กรองช่วงวันที่บันทึกข้อมูล (orderDate) — YYYY-MM-DD
-  const [dateTo, setDateTo] = useState('');
+  // ช่วง "วันที่สั่ง" — ตัวนี้เป็นตัวกำหนดว่า API จะไปดึงใบสั่งช่วงไหนมา ไม่ใช่แค่กรองบนจอ
+  const [dateFrom, setDateFrom] = useState(() => defaultRange().from);
+  const [dateTo, setDateTo] = useState(() => defaultRange().to);
+  const [source, setSource] = useState('');     // pos = สดจาก POS · sql/sheet = สำเนา
   const [selectedItem, setSelectedItem] = useState(null); // itemCode ที่กำลังดูรายละเอียด
   const [openDateKey, setOpenDateKey] = useState(null); // `${branch}|${date}` ที่กดเปิดดูจำนวนอยู่
 
   // เปลี่ยนรายการที่ดู → ปิดวันที่ที่ค้างขยายไว้ กันโชว์ข้อมูลผิดรายการ
   useEffect(() => { setOpenDateKey(null); }, [selectedItem]);
 
+  // เปลี่ยนวันที่รัว ๆ แล้วคำตอบของช่วงเก่ามาถึงทีหลัง จะทับข้อมูลของช่วงใหม่ — นับรอบกันไว้
+  const reqId = useRef(0);
+
   const load = () => {
+    if (!dateFrom || !dateTo) return;
+    const myId = ++reqId.current;
     setLoading(true);
-    fetch('/api/plan')
+    fetch(`/api/plan?from=${dateFrom}&to=${dateTo}`)
       .then(async r => {
         // เซิร์ฟเวอร์ล่มมักตอบเป็นหน้า HTML ไม่ใช่ JSON — กัน error ดิบ ๆ ที่ผู้ใช้อ่านไม่รู้เรื่อง
         const text = await r.text();
@@ -78,13 +105,16 @@ export default function PlanList() {
         catch { throw new Error(`เซิร์ฟเวอร์ตอบไม่ใช่ข้อมูล (HTTP ${r.status}) — ลองกดโหลดใหม่อีกครั้ง`); }
       })
       .then(res => {
-        if (res.status === 'success') { setRows(res.data || []); setError(''); setWarning(res.warning || ''); }
-        else { setError(res.message || 'โหลดข้อมูลไม่สำเร็จ'); setWarning(''); }
+        if (myId !== reqId.current) return;   // มีคำขอใหม่แซงไปแล้ว ทิ้งคำตอบนี้
+        if (res.status === 'success') {
+          setRows(res.data || []); setError(''); setWarning(res.warning || ''); setSource(res.source || '');
+        } else { setError(res.message || 'โหลดข้อมูลไม่สำเร็จ'); setWarning(''); }
       })
-      .catch(err => { setError(err.message); setWarning(''); })
-      .finally(() => setLoading(false));
+      .catch(err => { if (myId === reqId.current) { setError(err.message); setWarning(''); } })
+      .finally(() => { if (myId === reqId.current) setLoading(false); });
   };
-  useEffect(load, []);
+  // เปลี่ยนช่วงวันที่ = ต้องไปดึงมาใหม่ ไม่ใช่แค่กรองของเดิม
+  useEffect(load, [dateFrom, dateTo]);
 
   const branches = useMemo(() => [...new Set(rows.map(r => r.branch).filter(Boolean))].sort(), [rows]);
 
@@ -118,11 +148,13 @@ export default function PlanList() {
     baseRows.forEach(r => {
       if (branchFilter && r.branch !== branchFilter) return;
       const k = r.itemCode;
-      if (!g[k]) g[k] = { itemCode: k, itemName: r.itemName, unit: r.unit, qty: 0, total: 0, branches: new Set(), lines: 0, lastRecorded: '', _key: '' };
+      if (!g[k]) g[k] = { itemCode: k, itemName: r.itemName, unit: r.unit, qty: 0, total: 0, branches: new Set(), lines: 0, lastRecorded: '', lastDeliver: '', pending: 0, _key: '' };
       g[k].qty += r.qty;
       g[k].total += r.total;
       g[k].branches.add(r.branch);
       g[k].lines++;
+      if (r.received === false) g[k].pending++;
+      if (r.deliverDate && r.deliverDate > g[k].lastDeliver) g[k].lastDeliver = r.deliverDate;
       const key = sortKey(r);
       if (key > g[k]._key) { g[k]._key = key; g[k].lastRecorded = r.orderDate; }
     });
@@ -152,10 +184,11 @@ export default function PlanList() {
   const branchBreakdown = useMemo(() => {
     const g = {};
     detailRows.forEach(r => {
-      if (!g[r.branch]) g[r.branch] = { branch: r.branch, qty: 0, total: 0, lines: 0, receiveDates: new Set() };
+      if (!g[r.branch]) g[r.branch] = { branch: r.branch, qty: 0, total: 0, lines: 0, pending: 0, receiveDates: new Set() };
       g[r.branch].qty += r.qty;
       g[r.branch].total += r.total;
       g[r.branch].lines++;
+      if (r.received === false) g[r.branch].pending++;
       if (r.receiveDate) g[r.branch].receiveDates.add(r.receiveDate);
     });
     return Object.values(g).map(x => ({ ...x, receiveDates: [...x.receiveDates].sort() }))
@@ -168,10 +201,11 @@ export default function PlanList() {
     detailRows.forEach(r => {
       if (!r.receiveDate) return;
       const k = `${r.branch}|${r.receiveDate}`;
-      if (!m[k]) m[k] = { qty: 0, total: 0, lines: 0 };
+      if (!m[k]) m[k] = { qty: 0, total: 0, lines: 0, pending: 0 };
       m[k].qty += r.qty;
       m[k].total += r.total;
       m[k].lines++;
+      if (r.received === false) m[k].pending++;
     });
     return m;
   }, [detailRows]);
@@ -183,20 +217,23 @@ export default function PlanList() {
     if (!filtered.length) return;
     const wb = XLSX.utils.book_new();
 
-    const sumAoa = [['รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนรวม', 'มูลค่ารวม', 'จำนวนสาขาที่สั่ง', 'จำนวนครั้งสั่ง', 'บันทึกล่าสุด']];
-    filtered.forEach(x => sumAoa.push([x.itemCode, x.itemName, x.unit, x.qty, x.total, x.branchCount, x.lines, x.lastRecorded]));
+    const sumAoa = [['รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนรวม', 'มูลค่ารวม', 'จำนวนสาขาที่สั่ง', 'จำนวนครั้งสั่ง', 'สั่งล่าสุด', 'ส่งล่าสุด', 'ยังรอรับ (ใบ)']];
+    filtered.forEach(x => sumAoa.push([x.itemCode, x.itemName, x.unit, x.qty, x.total, x.branchCount, x.lines, x.lastRecorded, x.lastDeliver, x.pending || 0]));
     const ws1 = XLSX.utils.aoa_to_sheet(sumAoa);
-    ws1['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }];
-    for (let c = 0; c < 8; c++) { const cell = ws1[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
+    ws1['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+    for (let c = 0; c < 10; c++) { const cell = ws1[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
     XLSX.utils.book_append_sheet(wb, ws1, 'สรุปรายการ');
 
-    const detAoa = [['วันที่คีย์ข้อมูล', 'เวลา', 'สาขา', 'เลขที่ใบสั่ง', 'รหัสสินค้า', 'ชื่อสินค้า', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่ารวม', 'วันที่รับของ', 'ผู้บันทึก']];
-    const detailSrc = branchFilter ? baseRows.filter(r => r.branch === branchFilter) : baseRows;
+    const detAoa = [['วันที่สั่ง', 'เวลา', 'สาขา', 'เลขที่ใบสั่ง', 'รหัสสินค้า', 'ชื่อสินค้า', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่ารวม', 'วันที่ส่ง', 'สถานะ', 'ผู้บันทึก']];
+    // ให้ตรงกับที่เห็นบนจอ: ตามช่วงวันที่ + สาขา + คำค้นหา (เดิมชีตนี้ไม่ตามคำค้น เลยได้คนละชุดกับชีตสรุป)
+    const codes = new Set(filtered.map(x => x.itemCode));
+    const detailSrc = baseRows.filter(r =>
+      codes.has(r.itemCode) && (!branchFilter || r.branch === branchFilter));
     [...detailSrc].sort((a, b) => sortKey(b).localeCompare(sortKey(a))).forEach(r =>
-      detAoa.push([r.orderDate, r.recordTime, r.branch, r.orderNo, r.itemCode, r.itemName, r.qty, r.unit, r.unitPrice, r.total, r.receiveDate, r.recordedBy]));
+      detAoa.push([r.orderDate, r.recordTime, r.branch, r.orderNo, r.itemCode, r.itemName, r.qty, r.unit, r.unitPrice, r.total, r.deliverDate || r.receiveDate, statusText(r), r.recordedBy]));
     const ws2 = XLSX.utils.aoa_to_sheet(detAoa);
-    ws2['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 34 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
-    for (let c = 0; c < 12; c++) { const cell = ws2[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
+    ws2['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 34 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
+    for (let c = 0; c < 13; c++) { const cell = ws2[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
     XLSX.utils.book_append_sheet(wb, ws2, 'รายละเอียดทั้งหมด');
 
     XLSX.writeFile(wb, `plan_procurement_${new Date().toISOString().split('T')[0]}.xlsx`);
@@ -204,7 +241,13 @@ export default function PlanList() {
 
   // ตารางว่างเพราะอะไร — บอกให้ตรงเหตุ ไม่ใช่ "ไม่พบรายการ" เฉย ๆ จนไล่ปัญหาไม่ถูก
   const emptyMessage = () => {
-    if (!rows.length) return <span>ยังไม่มีข้อมูลแพลนสินค้าจากต้นทาง</span>;
+    if (!rows.length) return (
+      <span>
+        ไม่มีใบสั่งของสาขาไหนเลยในช่วงวันที่สั่ง {dateFrom} ถึง {dateTo}
+        <button onClick={() => { const d = defaultRange(); setDateFrom(shiftISO(d.to, -89)); setDateTo(d.to); }}
+          className="ml-2 text-cyan-600 hover:text-cyan-700 font-semibold underline">ลองขยายเป็น 90 วัน</button>
+      </span>
+    );
 
     if (!dataRange.readable) return (
       <span className="text-rose-500">
@@ -216,9 +259,9 @@ export default function PlanList() {
     if (!baseRows.length) return (
       <span>
         ไม่มีการสั่งของในช่วง {dateFrom || '…'} ถึง {dateTo || '…'}
-        {dataRange.min && <> · ข้อมูลที่มีอยู่คือ {dataRange.minRaw} ถึง {dataRange.maxRaw}</>}
-        <button onClick={() => { setDateFrom(''); setDateTo(''); }}
-          className="ml-2 text-cyan-600 hover:text-cyan-700 font-semibold underline">ล้างช่วงวันที่</button>
+        {dataRange.min && <> · ใบสั่งที่ดึงมาอยู่ระหว่าง {dataRange.minRaw} ถึง {dataRange.maxRaw}</>}
+        <button onClick={() => { const d = defaultRange(); setDateFrom(d.from); setDateTo(d.to); }}
+          className="ml-2 text-cyan-600 hover:text-cyan-700 font-semibold underline">กลับไป {RANGE_DAYS} วันล่าสุด</button>
       </span>
     );
 
@@ -238,7 +281,14 @@ export default function PlanList() {
               <p className="text-sm text-slate-500 mt-0.5">
                 {filtered.length.toLocaleString()} รายการ · จำนวนรวม {fmtNum(grand.qty)} · มูลค่ารวม ฿{fmtMoney(grand.total)}
                 {(dateFrom || dateTo) && (
-                  <span className="ml-1.5 text-cyan-600 font-semibold">· บันทึกวันที่ {dateFrom || '…'} ถึง {dateTo || '…'}</span>
+                  <span className="ml-1.5 text-cyan-600 font-semibold">· วันที่สั่ง {dateFrom || '…'} ถึง {dateTo || '…'}</span>
+                )}
+                {source && !loading && (
+                  <span className={`ml-1.5 px-1.5 py-0.5 rounded text-[11px] font-semibold ${source === 'pos'
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : 'bg-amber-50 text-amber-700'}`}>
+                    {source === 'pos' ? 'ข้อมูลสดจาก POS' : 'ข้อมูลจากสำเนา'}
+                  </span>
                 )}
               </p>
             </div>
@@ -268,16 +318,14 @@ export default function PlanList() {
           </select>
           <div className="flex items-center gap-2 bg-cyan-50/60 border border-cyan-100 rounded-xl px-3 py-1.5">
             <Calendar size={14} className="text-cyan-600 flex-shrink-0" />
-            <span className="text-xs font-semibold text-cyan-700 whitespace-nowrap">วันที่บันทึก:</span>
+            <span className="text-xs font-semibold text-cyan-700 whitespace-nowrap">วันที่สั่ง:</span>
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
               className="border border-slate-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-cyan-500" />
             <span className="text-slate-400 text-xs">-</span>
             <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
               className="border border-slate-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-cyan-500" />
-            {(dateFrom || dateTo) && (
-              <button onClick={() => { setDateFrom(''); setDateTo(''); }}
-                className="text-rose-400 hover:text-rose-600 text-xs font-semibold whitespace-nowrap">ล้าง</button>
-            )}
+            <button onClick={() => { const d = defaultRange(); setDateFrom(d.from); setDateTo(d.to); }}
+              className="text-slate-400 hover:text-cyan-600 text-xs font-semibold whitespace-nowrap">{RANGE_DAYS} วันล่าสุด</button>
           </div>
         </div>
 
@@ -305,16 +353,18 @@ export default function PlanList() {
                 <th className="px-4 py-3 text-right">มูลค่ารวม</th>
                 <th className="px-3 py-3 text-center">สาขาที่สั่ง</th>
                 <th className="px-3 py-3 text-center">จำนวนครั้ง</th>
-                <th className="px-4 py-3 text-left">บันทึกล่าสุด</th>
+                <th className="px-4 py-3 text-left">สั่งล่าสุด</th>
+                <th className="px-4 py-3 text-left">ส่งล่าสุด</th>
+                <th className="px-3 py-3 text-center">รอรับ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">
-                  <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
+                <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">
+                  <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังดึงใบสั่งของ…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400 text-sm">{emptyMessage()}</td></tr>
+                <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400 text-sm">{emptyMessage()}</td></tr>
               ) : filtered.map(x => (
                 <tr key={x.itemCode} onClick={() => setSelectedItem(x.itemCode)}
                   className="cursor-pointer hover:bg-cyan-50/50 transition-colors">
@@ -328,6 +378,12 @@ export default function PlanList() {
                   </td>
                   <td className="px-3 py-2.5 text-center text-slate-500">{x.lines}</td>
                   <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap font-mono text-xs">{x.lastRecorded || '—'}</td>
+                  <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap font-mono text-xs">{x.lastDeliver || '—'}</td>
+                  <td className="px-3 py-2.5 text-center">
+                    {x.pending > 0
+                      ? <span className="inline-block px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold">{x.pending}</span>
+                      : <span className="text-slate-300 text-xs">—</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -336,7 +392,7 @@ export default function PlanList() {
         {!loading && (
           <div className="px-4 py-3 border-t border-slate-100 text-xs text-slate-400 flex items-center gap-2">
             <Info size={13} />
-            กดแถวเพื่อดูรายละเอียดแยกตามสาขา + วันที่รับของ + วันที่คีย์ข้อมูล
+            กดแถวเพื่อดูว่าสาขาไหนสั่งวันไหน ส่งวันไหน และรับของแล้วหรือยัง
           </div>
         )}
       </div>
@@ -367,7 +423,8 @@ export default function PlanList() {
                         <th className="px-3 py-2 text-right">จำนวนรวม</th>
                         <th className="px-3 py-2 text-right">มูลค่ารวม</th>
                         <th className="px-3 py-2 text-center">จำนวนครั้งสั่ง</th>
-                        <th className="px-3 py-2 text-left">วันที่รับของ</th>
+                        <th className="px-3 py-2 text-center">รอรับ</th>
+                        <th className="px-3 py-2 text-left">วันที่ส่งของ</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -377,21 +434,31 @@ export default function PlanList() {
                           <td className="px-3 py-2 text-right font-mono">{fmtNum(b.qty)}</td>
                           <td className="px-3 py-2 text-right font-mono text-cyan-700">{fmtMoney(b.total)}</td>
                           <td className="px-3 py-2 text-center text-slate-500">{b.lines}</td>
+                          <td className="px-3 py-2 text-center">
+                            {b.pending > 0
+                              ? <span className="inline-block px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold">{b.pending}</span>
+                              : <span className="text-slate-300 text-xs">—</span>}
+                          </td>
                           <td className="px-3 py-2">
                             <div className="flex flex-wrap gap-1">
                               {b.receiveDates.length === 0 ? <span className="text-slate-300 text-xs">—</span> : b.receiveDates.map(d => {
                                 const key = `${b.branch}|${d}`;
                                 const info = branchDateQty[key];
                                 const isOpen = openDateKey === key;
+                                const waiting = info?.pending > 0;   // ยังมีของวันนั้นที่ POS ไม่ได้บันทึกรับ
                                 return (
                                   <button key={d} type="button" onClick={() => setOpenDateKey(isOpen ? null : key)}
-                                    title="กดเพื่อดูจำนวนที่สั่งของวันนี้"
+                                    title={waiting ? 'ส่งวันนี้ — ยังมีที่ยังไม่ได้รับ (กดดูจำนวน)' : 'ส่งวันนี้ — รับครบแล้ว (กดดูจำนวน)'}
                                     className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] border transition-colors ${isOpen
-                                      ? 'bg-emerald-600 text-white border-emerald-600'
-                                      : 'bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100'}`}>
+                                      ? 'bg-slate-700 text-white border-slate-700'
+                                      : waiting
+                                        ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                        : 'bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100'}`}>
                                     <Calendar size={9} />{d}
                                     {isOpen && info && (
-                                      <span className="font-bold whitespace-nowrap">· {fmtNum(info.qty)} {selectedInfo?.unit || ''}</span>
+                                      <span className="font-bold whitespace-nowrap">
+                                        · {fmtNum(info.qty)} {selectedInfo?.unit || ''}{waiting ? ` · รอรับ ${info.pending}` : ''}
+                                      </span>
                                     )}
                                   </button>
                                 );
@@ -407,19 +474,19 @@ export default function PlanList() {
 
               {/* รายละเอียดทุกแถว พร้อมวันที่คีย์ข้อมูล */}
               <div>
-                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">รายละเอียดทุกครั้งที่สั่ง ({detailRows.length} แถว)</h4>
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">ทุกใบที่สั่ง — สั่งวันไหน ส่งวันไหน ({detailRows.length} แถว)</h4>
                 <div className="overflow-x-auto border border-slate-100 rounded-xl max-h-80 overflow-y-auto">
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 text-slate-500 sticky top-0">
                       <tr className="font-bold">
-                        <th className="px-3 py-2 text-left">วันที่คีย์ข้อมูล</th>
+                        <th className="px-3 py-2 text-left">วันที่สั่ง</th>
                         <th className="px-3 py-2 text-left">สาขา</th>
                         <th className="px-3 py-2 text-left">เลขที่ใบสั่ง</th>
                         <th className="px-3 py-2 text-right">จำนวน</th>
                         <th className="px-3 py-2 text-right">ราคา/หน่วย</th>
                         <th className="px-3 py-2 text-right">มูลค่า</th>
-                        <th className="px-3 py-2 text-left">วันที่รับ</th>
-                        <th className="px-3 py-2 text-left">ผู้บันทึก</th>
+                        <th className="px-3 py-2 text-left">วันที่ส่ง</th>
+                        <th className="px-3 py-2 text-center">สถานะ</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
@@ -431,8 +498,14 @@ export default function PlanList() {
                           <td className="px-3 py-1.5 text-right font-mono">{fmtNum(r.qty)} {r.unit}</td>
                           <td className="px-3 py-1.5 text-right font-mono">{fmtMoney(r.unitPrice)}</td>
                           <td className="px-3 py-1.5 text-right font-mono font-semibold">{fmtMoney(r.total)}</td>
-                          <td className="px-3 py-1.5 whitespace-nowrap">{r.receiveDate || '—'}</td>
-                          <td className="px-3 py-1.5 text-slate-500">{r.recordedBy || '—'}</td>
+                          <td className="px-3 py-1.5 whitespace-nowrap font-mono">{r.deliverDate || r.receiveDate || '—'}</td>
+                          <td className="px-3 py-1.5 text-center whitespace-nowrap">
+                            {r.received === true
+                              ? <span className="px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded text-[11px] font-semibold">รับแล้ว</span>
+                              : r.received === false
+                                ? <span className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-[11px] font-semibold">รอรับ</span>
+                                : <span className="text-slate-300">—</span>}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
