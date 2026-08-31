@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save } from 'lucide-react';
 import { apiCall, syncNote, syncOk } from '../lib/qcrdApi';
+import { rcpNameKey, rcpItemKey } from '../lib/rcpMatch';
 
 /*
  * QC/RD — เมนู: รายชื่อเมนู + สูตร (BOM) ของแต่ละเมนู
@@ -8,6 +9,10 @@ import { apiCall, syncNote, syncOk } from '../lib/qcrdApi';
  * ในฟอร์มเลือกหมวดหมู่ได้ และ "ดึงสูตรจากเมนูอื่น" เพื่อรวมวัตถุดิบของเมนูนั้นเข้ามา
  * ข้อมูลอ่าน/บันทึกผ่าน /api/qcrd + /api/qcrd-save ซึ่งวิ่งไป SQL Server หรือ Apps Script
  * ตาม env QCRD_SOURCE (ดู docs/qcrd-sql-migration.md) — action ชื่อเดียวกันทั้งสองทาง
+ *
+ * เมนูที่ยังไม่มีสูตรในแท็บ BOM จะไปหยิบสูตรฝั่ง POS (RcpDtls) มาแสดงแทนผ่าน /api/rcp
+ * จับคู่ด้วยชื่อเมนู (rcpNameKey) เพราะ RcpDtls ไม่มีคอลัมน์รหัสเมนูให้ join — ดู lib/rcpMatch.js
+ * สูตรชุดนั้น "อ่านอย่างเดียว" แก้ไม่ได้จากหน้านี้ เพราะเป็นข้อมูลของฝั่ง POS ไม่ใช่ของชีทต้นทุนเมนู
  */
 
 const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -34,6 +39,11 @@ export default function QcRdMenu() {
   const [bom, setBom] = useState({});
   const [items, setItems] = useState([]); // สำหรับ picker วัตถุดิบ
   const [groups, setGroups] = useState([]); // หมวดหมู่เมนูจากชีท menucodegroup
+  // ดัชนีสูตรฝั่ง POS: name_key -> { rtsId, name, nItems } (ยังไม่มีบรรทัดวัตถุดิบ โหลดตอนกดดู)
+  const [rcpIndex, setRcpIndex] = useState({});
+  const [rcpWarn, setRcpWarn] = useState('');
+  const [rcpLines, setRcpLines] = useState({});   // rtsId -> items[] (แคชไว้ ไม่โหลดซ้ำ)
+  const [rcpLoading, setRcpLoading] = useState(false);
   const [groupModal, setGroupModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -60,13 +70,17 @@ export default function QcRdMenu() {
       fetch(`/api/qcrd?sheet=bom${bust}`).then(r => r.json()),
       fetch(`/api/qcrd?sheet=item${bust}`).then(r => r.json()),
       fetch(`/api/qcrd?sheet=menugroup${bust}`).then(r => r.json()),
-    ]).then(([m, b, it, g]) => {
+      // ดัชนีสูตรฝั่ง POS — ล้มก็ไม่เป็นไร หน้าเมนูต้องใช้งานต่อได้จากชีทตามเดิม
+      fetch(`/api/rcp${bust ? `?t=${Date.now()}` : ''}`).then(r => r.json()).catch(() => ({})),
+    ]).then(([m, b, it, g, rc]) => {
       if (m.status === 'success') setMenus(m.data || []); else setError(m.message || 'โหลดรายการเมนูไม่สำเร็จ');
       // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ขึ้นเตือนไว้ ไม่งั้นจะนึกว่าที่แก้ไปหายไป
       if (m.warning) setToast({ ok: false, msg: m.warning });
       if (b.status === 'success') setBom(b.data || {});
       if (it.status === 'success') setItems(it.data || []);
       if (g.status === 'success') setGroups(g.data || []);
+      setRcpIndex(rc && rc.data ? rc.data : {});
+      setRcpWarn(rc && rc.warning ? rc.warning : '');
     }).catch(err => setError(err.message)).finally(() => { if (!quiet) setLoading(false); });
   };
   useEffect(() => { loadAll(); }, []);
@@ -78,6 +92,14 @@ export default function QcRdMenu() {
     return m;
   }, [items]);
 
+  // ดัชนีเดียวกันแต่คีย์เป็นรหัสที่ตัด 0 นำหน้าออก — RcpDtls เขียนรหัสเป็น '01000077'
+  // ส่วนชีท item เขียน '1000077' เทียบตรง ๆ จะไม่เจอ แล้วธงวัตถุดิบปิดใช้งานจะไม่ขึ้น
+  const itemByKey = useMemo(() => {
+    const m = {};
+    items.forEach(i => { const k = rcpItemKey(i.code); if (k) m[k] = i; });
+    return m;
+  }, [items]);
+
   // หน่วยซื้อที่มีอยู่จริงในชีท item (ใช้เป็นตัวเลือกในช่องหน่วยของแถววัตถุดิบ)
   const itemUnits = useMemo(
     () => [...new Set(items.map(i => i.unit).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
@@ -85,6 +107,11 @@ export default function QcRdMenu() {
 
   const disabledIngredients = (code) =>
     (bom[code]?.items || []).filter(r => itemMap[r.itemCode]?.status === 'ปิดการใช้งาน');
+
+  // สูตรฝั่ง POS (RcpDtls) ของเมนูนี้ — คืนค่าเฉพาะเมนูที่ "ยังไม่มีสูตรในแท็บ BOM"
+  // ชีทต้นทุนเมนูเป็นเจ้าของสูตรเสมอ RcpDtls มาเติมเฉพาะช่องที่ยังว่าง ไม่ทับของเดิม
+  const rcpFor = (m) => (bom[m.code]?.items?.length ? null : (rcpIndex[rcpNameKey(m.name)] || null));
+  const hasRecipe = (m) => Boolean(bom[m.code]?.items?.length) || Boolean(rcpFor(m));
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -95,12 +122,18 @@ export default function QcRdMenu() {
       return m.code.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
         || (m.groupName || '').toLowerCase().includes(q);
     });
-    // เมนูที่มีสูตร (BOM) ขึ้นก่อน แล้วคงลำดับเดิมตามชีท menu (ไม่เรียงตามเลขรหัส)
+    // เมนูที่มีสูตรขึ้นก่อน (นับสูตรจาก RcpDtls ด้วย) แล้วคงลำดับเดิมตามชีท menu
     const idx = new Map(menus.map((m, i) => [m.code, i]));
     return [...list].sort((a, b) =>
-      ((bom[b.code] ? 1 : 0) - (bom[a.code] ? 1 : 0)) ||
+      ((hasRecipe(b) ? 1 : 0) - (hasRecipe(a) ? 1 : 0)) ||
       ((idx.get(a.code) ?? 0) - (idx.get(b.code) ?? 0)));
-  }, [menus, bom, search, statusFilter, groupFilter]);
+  }, [menus, bom, rcpIndex, search, statusFilter, groupFilter]);
+
+  // เมนูที่ไม่มีสูตรในชีทแต่ไปเจอสูตรฝั่ง POS — ไว้บอกบนหัวหน้าว่าเติมให้ไปกี่เมนู
+  const nFromRcp = useMemo(() => {
+    if (!Object.keys(rcpIndex).length) return 0;
+    return menus.reduce((n, m) => n + (rcpFor(m) ? 1 : 0), 0);
+  }, [menus, bom, rcpIndex]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // รายชื่อหมวดหมู่ที่มีจริงในชีท (สำหรับ dropdown กรอง)
   const groupOptions = useMemo(
@@ -346,6 +379,27 @@ export default function QcRdMenu() {
 
   const viewMenu = viewCode ? menus.find(m => m.code === viewCode) : null;
   const viewBom = viewCode ? (bom[viewCode]?.items || []) : [];
+  // เมนูที่ไม่มีสูตรในชีท แต่จับคู่กับสูตรฝั่ง POS ได้ — ดัชนีมีแค่หัวสูตร
+  // บรรทัดวัตถุดิบโหลดตอนกดเปิดดูเท่านั้น จะได้ไม่ต้องส่งสูตรหมื่นกว่าบรรทัดมาตั้งแต่เปิดหน้า
+  const viewRcp = viewMenu && !viewBom.length ? rcpFor(viewMenu) : null;
+  const viewRcpItems = viewRcp ? rcpLines[viewRcp.rtsId] : null;
+
+  useEffect(() => {
+    if (!viewRcp || rcpLines[viewRcp.rtsId]) return;
+    const rtsId = viewRcp.rtsId;
+    let cancelled = false;
+    setRcpLoading(true);
+    fetch(`/api/rcp?rtsId=${rtsId}`)
+      .then(r => r.json())
+      .then(j => {
+        if (cancelled) return;
+        if (j.status === 'success' && j.data) setRcpLines(prev => ({ ...prev, [rtsId]: j.data.items || [] }));
+        else setRcpLines(prev => ({ ...prev, [rtsId]: [] }));
+      })
+      .catch(() => { if (!cancelled) setRcpLines(prev => ({ ...prev, [rtsId]: [] })); })
+      .finally(() => { if (!cancelled) setRcpLoading(false); });
+    return () => { cancelled = true; };
+  }, [viewRcp?.rtsId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // เต็มความกว้างจอ — ตารางนี้มีสิบกว่าคอลัมน์ (สาขาที่ใช้ · หมวดสโตร์ · ไอเทมทดแทน)
   // การบีบไว้ที่ max-w-6xl ทำให้ต้องเลื่อนแนวนอนตลอดทั้งที่จอกว้างพอ
@@ -359,7 +413,16 @@ export default function QcRdMenu() {
               <h2 className="text-xl font-bold text-slate-800">เมนู (QC/RD)</h2>
               <p className="text-sm text-slate-500 mt-0.5">
                 {menus.length.toLocaleString()} เมนูจากชีท menu · มีสูตร (BOM) {Object.keys(bom).length.toLocaleString()} เมนู
+                {nFromRcp > 0 && (
+                  <span className="text-amber-700"> · เติมจากสูตร POS อีก {nFromRcp.toLocaleString()} เมนู</span>
+                )}
               </p>
+              {rcpWarn && (
+                <p title={rcpWarn} className="text-xs text-amber-700 mt-1 flex items-start gap-1 max-w-2xl">
+                  <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
+                  <span className="line-clamp-2">สูตรฝั่ง POS (RcpDtls) ยังไม่ขึ้น: {rcpWarn}</span>
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -427,11 +490,12 @@ export default function QcRdMenu() {
                 <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">ไม่พบเมนู</td></tr>
               ) : pageRows.map(m => {
                 const nIng = bom[m.code]?.items?.length || 0;
+                const rcp = nIng ? null : rcpFor(m);     // สูตรฝั่ง POS มาเติมเมื่อไม่มีสูตรในชีท
                 const off = (m.status || 'ใช้งาน') === 'ปิดการใช้งาน';
                 const nDisabled = disabledIngredients(m.code).length;
                 return (
-                  <tr key={m.code} className={`hover:bg-indigo-50/40 ${nIng ? 'cursor-pointer' : ''} ${off ? 'bg-rose-50/40' : ''}`}
-                    onClick={() => nIng && setViewCode(m.code)}>
+                  <tr key={m.code} className={`hover:bg-indigo-50/40 ${nIng || rcp ? 'cursor-pointer' : ''} ${off ? 'bg-rose-50/40' : ''}`}
+                    onClick={() => (nIng || rcp) && setViewCode(m.code)}>
                     <td className={`px-4 py-2 font-mono text-xs whitespace-nowrap ${off ? 'text-slate-300' : 'text-slate-500'}`}>{m.code}</td>
                     <td className={`px-4 py-2 font-medium ${off ? 'text-slate-400' : 'text-slate-800'}`}>{m.name}</td>
                     <td className="px-4 py-2 whitespace-nowrap">
@@ -451,6 +515,11 @@ export default function QcRdMenu() {
                               <AlertTriangle size={9} />{nDisabled}
                             </span>
                           )}
+                        </span>
+                      ) : rcp ? (
+                        <span title={`สูตรฝั่ง POS (RcpDtls): ${rcp.name}`}
+                          className="inline-block px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-xs font-semibold">
+                          {rcp.nItems} รายการ · POS
                         </span>
                       ) : <span className="text-slate-300 text-xs">ไม่มีสูตร</span>}
                     </td>
@@ -497,7 +566,13 @@ export default function QcRdMenu() {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div>
-                <h3 className="font-bold text-slate-800">สูตร: {viewMenu.name} <span className="font-mono text-xs text-slate-400 ml-1">{viewMenu.code}</span></h3>
+                <h3 className="font-bold text-slate-800">สูตร: {viewMenu.name} <span className="font-mono text-xs text-slate-400 ml-1">{viewMenu.code}</span>
+                  {viewRcp && (
+                    <span className="ml-2 inline-block px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-[11px] font-semibold align-middle">
+                      สูตรฝั่ง POS (RcpDtls)
+                    </span>
+                  )}
+                </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {viewMenu.groupName ? `${viewMenu.groupName} · ` : ''}ราคาขาย {fmt(viewMenu.price, 0)} บาท · ต้นทุนรวม {fmt(viewMenu.cost)} บาท
                   {viewMenu.yieldQty > 0 && (
@@ -509,13 +584,77 @@ export default function QcRdMenu() {
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={() => { openEdit(viewMenu); setViewCode(null); }}
+                  title={viewRcp ? 'เปิดฟอร์มสูตรของชีทต้นทุนเมนู (เริ่มจากว่าง) — สูตร POS ข้างล่างไม่ได้ถูกคัดลอกมาให้' : ''}
                   className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100">
-                  <Pencil size={12} /> แก้ไขสูตร
+                  <Pencil size={12} /> {viewRcp ? 'สร้างสูตรในชีท' : 'แก้ไขสูตร'}
                 </button>
                 <button onClick={() => setViewCode(null)} className="text-slate-400 hover:text-slate-700"><X size={20} /></button>
               </div>
             </div>
             <div className="overflow-auto p-5">
+              {viewRcp ? (
+                <>
+                  <div className="mb-3 flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+                    <Info size={14} className="flex-shrink-0 mt-0.5" />
+                    <div>
+                      เมนูนี้ยังไม่มีสูตรในชีทต้นทุนเมนู — ที่เห็นคือสูตรฝั่ง POS จากแท็บ RcpDtls
+                      (จับคู่ด้วยชื่อ &quot;{viewRcp.name}&quot; · rts_id {viewRcp.rtsId})
+                      <div className="mt-1 text-amber-700">
+                        อ่านอย่างเดียว แก้จากหน้านี้ไม่ได้ และไม่มีข้อมูลต้นทุน เพราะ RcpDtls ไม่ได้เก็บราคาไว้
+                      </div>
+                    </div>
+                  </div>
+                  {rcpLoading && !viewRcpItems ? (
+                    <div className="py-10 text-center text-slate-400">
+                      <Loader2 className="animate-spin inline mr-2" size={16} /> กำลังโหลดสูตร…
+                    </div>
+                  ) : !viewRcpItems || !viewRcpItems.length ? (
+                    <div className="py-10 text-center text-slate-400 text-sm">โหลดบรรทัดวัตถุดิบไม่ได้</div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr className="text-xs font-bold">
+                          <th className="px-3 py-2 text-left">#</th>
+                          <th className="px-3 py-2 text-left">รหัส</th>
+                          <th className="px-3 py-2 text-left">วัตถุดิบ</th>
+                          <th className="px-3 py-2 text-right">ปริมาณใช้</th>
+                          <th className="px-3 py-2 text-right">ต่อสูตร</th>
+                          <th className="px-3 py-2 text-right">สัดส่วน/หน่วย</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {viewRcpItems.map((r, i) => {
+                          const info = itemByKey[r.itemKey];
+                          const offItem = info?.status === 'ปิดการใช้งาน';
+                          return (
+                            <tr key={i} className={offItem ? 'bg-rose-50/50' : ''}>
+                              <td className="px-3 py-1.5 text-slate-400">{r.seq ?? i + 1}</td>
+                              <td className="px-3 py-1.5 font-mono text-xs text-slate-500">{r.itemCode}</td>
+                              <td className="px-3 py-1.5">
+                                {r.itemName}
+                                {!info && (
+                                  <span title="รหัสนี้ไม่มีในชีทวัตถุดิบของ QC/RD"
+                                    className="ml-1.5 inline-block px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded-full text-[10px] font-medium align-middle">
+                                    ไม่มีในทะเบียน
+                                  </span>
+                                )}
+                                {offItem && (
+                                  <span className="ml-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-rose-100 text-rose-600 rounded-full text-[10px] font-bold align-middle">
+                                    <AlertTriangle size={9} /> ปิดใช้งาน
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-3 py-1.5 text-right font-mono">{fmtQty(r.qty)}</td>
+                              <td className="px-3 py-1.5 text-right font-mono text-slate-400">{fmtQty(r.rcpQty)}</td>
+                              <td className="px-3 py-1.5 text-right font-mono text-slate-400">{fmtQty(r.portion)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </>
+              ) : (
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr className="text-xs font-bold">
@@ -585,6 +724,7 @@ export default function QcRdMenu() {
                   </tr>
                 </tfoot>
               </table>
+              )}
             </div>
           </div>
         </div>
