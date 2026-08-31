@@ -82,8 +82,21 @@ if ($Trusted) {
   Ok "ปลายทาง: $($env:QCRD_DB_SERVER)/$($env:QCRD_DB_NAME)  (user: $($env:QCRD_DB_USER))"
 }
 
-# -E = ใช้สิทธิ์ Windows ที่ล็อกอินอยู่ · ไม่งั้นส่ง user/รหัสไปตามปกติ
-$auth = if ($Trusted) { @('-E') } else { @('-U', $env:QCRD_DB_USER, '-P', $env:QCRD_DB_PASSWORD) }
+# argument ของ sqlcmd — ประกอบเป็น array ทีละชิ้นด้วย += เท่านั้น
+#
+# ⚠️ ห้ามเขียนเป็น  $auth = if ($Trusted) { @('-E') } else { ... }
+#    PowerShell แกะ array ที่มีสมาชิกตัวเดียวออกเป็นสตริงตอนกำหนดค่า พอเอาไป splat ด้วย @auth
+#    argument ที่ส่งถึง sqlcmd จะเพี้ยน ขึ้น "' ': Unknown Option." ซึ่งอ่านแล้วไม่รู้เลยว่ามาจากตรงไหน
+#    ใช้ += ต่อทีละชิ้นแบบนี้ ตัวแปรจะเป็น array เสมอ ไม่ว่าจะมีกี่สมาชิก
+#    และตอนเรียกให้ใส่ในตัวแปรก่อนแล้ว splat ด้วย @ชื่อตัวแปร ซึ่งเป็นรูปแบบ splatting ที่เป็นทางการ
+#    (@(...) คือ array subexpression คนละอย่างกัน อย่าเอามาใช้แทน)
+#
+# -b = ให้ sqlcmd คืน exit code ไม่เป็นศูนย์เมื่อคำสั่ง SQL ข้างในพัง
+#      ไม่ใส่ตัวนี้ error ระดับ SQL จะผ่านไปเงียบ ๆ แล้วสคริปต์นึกว่าสำเร็จ
+$sqlArgs = @()
+$sqlArgs += @('-S', $env:QCRD_DB_SERVER, '-d', $env:QCRD_DB_NAME, '-b')
+if ($Trusted) { $sqlArgs += '-E' }
+else          { $sqlArgs += @('-U', $env:QCRD_DB_USER, '-P', $env:QCRD_DB_PASSWORD) }
 
 # หา sqlcmd ครั้งเดียวตรงนี้ ใช้ทั้งขั้นสร้างตารางและขั้นนำเข้า
 # (เคยหาไว้ในบล็อก -not $SkipSchema ทำให้สั่ง -SkipSchema -Trusted แล้วขั้นนำเข้าได้ค่าว่าง)
@@ -105,7 +118,8 @@ Ok 'พร้อมใช้งาน'
 if (-not $SkipSchema) {
   Step 3 'สร้างตาราง rcp_recipe / rcp_line จาก docs\schema-rcp.sql'
   if ($sqlcmd) {
-    & $sqlcmd -S $env:QCRD_DB_SERVER -d $env:QCRD_DB_NAME @auth -i 'docs\schema-rcp.sql'
+    $argsSchema = $sqlArgs + @('-i', 'docs\schema-rcp.sql')
+    & $sqlcmd @argsSchema
     if ($LASTEXITCODE -ne 0) { throw 'รันสคีมาด้วย sqlcmd ไม่สำเร็จ' }
   } else {
     Warn 'ไม่พบ sqlcmd — ใช้ตัวรันของ node แทน (ผลเหมือนกัน)'
@@ -138,7 +152,8 @@ if ($Trusted) {
   $tmp = Join-Path $env:TEMP 'rcp-import.sql'
   node scripts\migrate-rcp.mjs $File --tab $Tab --emit-sql $tmp
   if ($LASTEXITCODE -ne 0) { throw 'ปั้นไฟล์คำสั่งไม่สำเร็จ' }
-  & $sqlcmd -S $env:QCRD_DB_SERVER -d $env:QCRD_DB_NAME @auth -i $tmp
+  $argsImport = $sqlArgs + @('-i', $tmp)
+  & $sqlcmd @argsImport
   if ($LASTEXITCODE -ne 0) { throw 'นำเข้าไม่สำเร็จ — ดูข้อความผิดพลาดด้านบน' }
   Remove-Item $tmp -ErrorAction SilentlyContinue
 } else {
