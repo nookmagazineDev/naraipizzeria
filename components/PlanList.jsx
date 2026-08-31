@@ -84,6 +84,27 @@ const HEAD_STYLE = {
   fill: { patternType: 'solid', fgColor: { rgb: '0E7490' } }, // cyan-700
 };
 
+// สีในชีทปฏิทิน ให้ตรงกับที่เห็นบนหน้าจอ
+const CELL_PENDING = { font: { name: 'Tahoma', sz: 10, color: { rgb: '92400E' } }, fill: { patternType: 'solid', fgColor: { rgb: 'FEF3C7' } } };
+const CELL_DONE = { font: { name: 'Tahoma', sz: 10, color: { rgb: '065F46' } }, fill: { patternType: 'solid', fgColor: { rgb: 'D1FAE5' } } };
+const CELL_TITLE = { font: { name: 'Tahoma', sz: 12, bold: true } };
+const CELL_TOTAL = { font: { name: 'Tahoma', sz: 10, bold: true }, fill: { patternType: 'solid', fgColor: { rgb: 'F1F5F9' } } };
+const CELL_WEEKEND = { font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: '475569' } } };
+
+/**
+ * ชื่อชีทของ Excel: ยาวได้ 31 ตัว ห้ามมี : \ / ? * [ ] และห้ามซ้ำกัน
+ * ชื่อสินค้าไทยยาวเกินและมีวงเล็บ/ทับ จึงต้องตัดให้สั้นและกันชื่อซ้ำก่อนเสมอ
+ */
+const safeSheetName = (base, used) => {
+  let name = String(base).replace(/[:\\/?*[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 31) || 'sheet';
+  for (let i = 2; used.has(name); i++) {
+    const tail = `~${i}`;
+    name = name.slice(0, 31 - tail.length) + tail;
+  }
+  used.add(name);
+  return name;
+};
+
 export default function PlanList() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -259,6 +280,76 @@ export default function PlanList() {
     ws2['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 34 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
     for (let c = 0; c < 13; c++) { const cell = ws2[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
     XLSX.utils.book_append_sheet(wb, ws2, 'รายละเอียดทั้งหมด');
+
+    // ปฏิทินแยกชีทต่อไอเทม — ทำเฉพาะตอนกรองหมวดแพลนไว้
+    // (ถ้าเปิด "ทุกหมวด" จะได้ชีทเป็นร้อย ไฟล์เปิดไม่ไหว)
+    if (onlyPlan) {
+      const used = new Set(['สรุปรายการ', 'รายละเอียดทั้งหมด']);
+      filtered.forEach(item => {
+        const src = detailSrc.filter(r => r.itemCode === item.itemCode);
+        if (!src.length) return;
+
+        const dates = [...new Set(src.map(r => r.deliverDate || r.receiveDate).filter(Boolean))].sort();
+        const byBranch = {};
+        src.forEach(r => {
+          const b = byBranch[r.branch] || (byBranch[r.branch] = { branch: r.branch, qty: 0, cells: {} });
+          b.qty += r.qty;
+          const d = r.deliverDate || r.receiveDate;
+          if (!d) return;
+          const cell = b.cells[d] || (b.cells[d] = { qty: 0, pending: 0 });
+          cell.qty += r.qty;
+          if (r.received === false) cell.pending++;
+        });
+        const branchRows = Object.values(byBranch).sort((a, b) => b.qty - a.qty);
+
+        // หัวเรื่อง 3 บรรทัด แล้วค่อยเป็นตารางปฏิทิน (แถว = สาขา, คอลัมน์ = วันที่ส่ง)
+        const aoa = [
+          [item.itemName ? `${item.itemName} (รหัส ${item.itemCode})` : `รหัส ${item.itemCode}`],
+          [`วันที่สั่ง ${dateFrom} ถึง ${dateTo}${branchFilter ? ` · เฉพาะสาขา ${branchFilter}` : ''}`],
+          [`หน่วย: ${item.unit || '—'} · ตัวเลขในตารางคือจำนวนที่ต้องส่ง · พื้นเหลือง = ยังไม่ได้รับ · พื้นเขียว = รับแล้ว`],
+          [],
+          ['สาขา', ...dates.map(d => { const t = dayParts(d); return `${t.dow} ${t.day}/${t.month}`; }), 'รวม'],
+        ];
+        const headRow = aoa.length - 1;
+        const styled = [];   // ช่องที่ต้องลงสีทีหลัง
+
+        branchRows.forEach(b => {
+          const row = [b.branch];
+          dates.forEach(d => {
+            const c = b.cells[d];
+            row.push(c ? c.qty : '');
+            if (c) styled.push({ r: aoa.length, c: row.length - 1, s: c.pending > 0 ? CELL_PENDING : CELL_DONE });
+          });
+          row.push(b.qty);
+          styled.push({ r: aoa.length, c: row.length - 1, s: CELL_TOTAL });
+          aoa.push(row);
+        });
+
+        // แถวรวมท้ายตาราง — รวมต่อวัน
+        const totalRow = ['รวมทุกสาขา'];
+        dates.forEach(d => totalRow.push(branchRows.reduce((sum, b) => sum + (b.cells[d]?.qty || 0), 0)));
+        totalRow.push(branchRows.reduce((sum, b) => sum + b.qty, 0));
+        totalRow.forEach((_, i) => styled.push({ r: aoa.length, c: i, s: CELL_TOTAL }));
+        aoa.push(totalRow);
+
+        const ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = [{ wch: 12 }, ...dates.map(() => ({ wch: 10 })), { wch: 10 }];
+        ws[XLSX.utils.encode_cell({ r: 0, c: 0 })].s = CELL_TITLE;
+        for (let c = 0; c <= dates.length + 1; c++) {
+          const cell = ws[XLSX.utils.encode_cell({ r: headRow, c })];
+          if (!cell) continue;
+          // เสาร์อาทิตย์ให้หัวคอลัมน์เข้มกว่าวันธรรมดา จะได้กวาดตาเจอ
+          const d = dates[c - 1];
+          cell.s = (c > 0 && c <= dates.length && dayParts(d).weekend) ? CELL_WEEKEND : HEAD_STYLE;
+        }
+        styled.forEach(({ r, c, s: style }) => {
+          const cell = ws[XLSX.utils.encode_cell({ r, c })];
+          if (cell) cell.s = style;
+        });
+
+        XLSX.utils.book_append_sheet(wb, ws, safeSheetName(`${item.itemCode} ${item.itemName || ''}`, used));
+      });
+    }
 
     XLSX.writeFile(wb, `plan_procurement_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
