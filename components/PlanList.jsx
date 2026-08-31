@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info } from 'lucide-react';
+import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 
 /*
@@ -13,18 +13,39 @@ const fmtNum = v => (v === null || v === undefined || isNaN(v)) ? '—'
 const fmtMoney = v => (v === null || v === undefined || isNaN(v)) ? '—'
   : Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// คีย์เรียงเวลาจาก orderDate (DD/MM/YYYY) + recordTime (HH:MM:SS)
-const sortKey = r => {
-  const [d, m, y] = (r.orderDate || '').split('/');
-  if (!d || !m || !y) return '';
-  return `${y}${m.padStart(2, '0')}${d.padStart(2, '0')}${(r.recordTime || '').replace(/:/g, '')}`;
+const pad2 = v => String(v).padStart(2, '0');
+
+// ปี พ.ศ. -> ค.ศ. (ชีทบางสาขาคีย์เป็น 2569) ปีที่เป็น ค.ศ. อยู่แล้วปล่อยผ่าน
+const toAD = y => { const n = Number(y); return n > 2400 ? n - 543 : n; };
+
+/**
+ * แปลง "วันที่สั่ง" ให้เป็น YYYY-MM-DD เพื่อเทียบกับ <input type="date">
+ *
+ * ต้นทางส่งมาไม่เหมือนกันทุกทาง จึงต้องรับให้ครบ ไม่งั้นแถวที่อ่านไม่ออกจะถูกตัดทิ้งเงียบ ๆ
+ * แล้วหน้าจอขึ้น 0 รายการทั้งที่ข้อมูลมีอยู่:
+ *   25/08/2026 · 25/8/2026 · 25/08/2569 (พ.ศ.) · "25/08/2026 14:30:00" (มีเวลาต่อท้าย) · 2026-08-25
+ */
+const toISO = value => {
+  const s = String(value ?? '').trim();
+  if (!s) return '';
+
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);          // 2026-08-25 (ตัดเวลาต่อท้ายทิ้ง)
+  if (iso) return `${toAD(iso[1])}-${pad2(iso[2])}-${pad2(iso[3])}`;
+
+  const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);      // 25/08/2026 (ตัดเวลาต่อท้ายทิ้ง)
+  if (slash) {
+    let [, d, m] = slash;
+    // ชีทที่ตั้งเป็นภาษาอังกฤษเขียน MM/DD/YYYY — ช่องเดือนเกิน 12 แปลว่าสลับกันมา
+    if (Number(m) > 12 && Number(d) <= 12) [d, m] = [m, d];
+    return `${toAD(slash[3])}-${pad2(m)}-${pad2(d)}`;
+  }
+  return '';
 };
 
-// แปลง orderDate (DD/MM/YYYY) -> YYYY-MM-DD เพื่อเทียบกับ <input type="date">
-const toISO = ddmmyyyy => {
-  const [d, m, y] = (ddmmyyyy || '').split('/');
-  if (!d || !m || !y) return '';
-  return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+// คีย์เรียงเวลา = วันที่ (ปรับให้เป็นรูปแบบเดียว) + recordTime (HH:MM:SS)
+const sortKey = r => {
+  const iso = toISO(r.orderDate);
+  return iso ? `${iso}${(r.recordTime || '').replace(/:/g, '')}` : '';
 };
 
 const HEAD_STYLE = {
@@ -36,6 +57,7 @@ export default function PlanList() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [warning, setWarning] = useState('');   // API อ่านฐานไม่ได้แล้วถอยไปอ่านชีท — ต้องบอกให้รู้
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
   const [dateFrom, setDateFrom] = useState(''); // กรองช่วงวันที่บันทึกข้อมูล (orderDate) — YYYY-MM-DD
@@ -49,17 +71,34 @@ export default function PlanList() {
   const load = () => {
     setLoading(true);
     fetch('/api/plan')
-      .then(r => r.json())
-      .then(res => {
-        if (res.status === 'success') { setRows(res.data || []); setError(''); }
-        else setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
+      .then(async r => {
+        // เซิร์ฟเวอร์ล่มมักตอบเป็นหน้า HTML ไม่ใช่ JSON — กัน error ดิบ ๆ ที่ผู้ใช้อ่านไม่รู้เรื่อง
+        const text = await r.text();
+        try { return JSON.parse(text); }
+        catch { throw new Error(`เซิร์ฟเวอร์ตอบไม่ใช่ข้อมูล (HTTP ${r.status}) — ลองกดโหลดใหม่อีกครั้ง`); }
       })
-      .catch(err => setError(err.message))
+      .then(res => {
+        if (res.status === 'success') { setRows(res.data || []); setError(''); setWarning(res.warning || ''); }
+        else { setError(res.message || 'โหลดข้อมูลไม่สำเร็จ'); setWarning(''); }
+      })
+      .catch(err => { setError(err.message); setWarning(''); })
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
 
   const branches = useMemo(() => [...new Set(rows.map(r => r.branch).filter(Boolean))].sort(), [rows]);
+
+  // ช่วงวันที่ที่ "มีข้อมูลจริง" + จำนวนแถวที่อ่านวันที่ไม่ออก — ไว้บอกสาเหตุตอนกรองแล้วไม่เหลืออะไรเลย
+  const dataRange = useMemo(() => {
+    let min = '', max = '', minRaw = '', maxRaw = '', unreadable = 0;
+    rows.forEach(r => {
+      const iso = toISO(r.orderDate);
+      if (!iso) { unreadable++; return; }
+      if (!min || iso < min) { min = iso; minRaw = r.orderDate; }
+      if (!max || iso > max) { max = iso; maxRaw = r.orderDate; }
+    });
+    return { min, max, minRaw, maxRaw, unreadable, readable: rows.length - unreadable };
+  }, [rows]);
 
   // ตัดเฉพาะแถวที่ "วันที่บันทึกข้อมูล" (orderDate) อยู่ในช่วงที่เลือก — ใช้ต่อทั้งสรุป/รายละเอียด/export
   const baseRows = useMemo(() => {
@@ -163,6 +202,31 @@ export default function PlanList() {
     XLSX.writeFile(wb, `plan_procurement_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  // ตารางว่างเพราะอะไร — บอกให้ตรงเหตุ ไม่ใช่ "ไม่พบรายการ" เฉย ๆ จนไล่ปัญหาไม่ถูก
+  const emptyMessage = () => {
+    if (!rows.length) return <span>ยังไม่มีข้อมูลแพลนสินค้าจากต้นทาง</span>;
+
+    if (!dataRange.readable) return (
+      <span className="text-rose-500">
+        อ่านรูปแบบ “วันที่สั่ง” จากต้นทางไม่ออกทั้ง {dataRange.unreadable.toLocaleString()} แถว
+        (ตัวอย่างค่าที่ได้มา: “{rows[0]?.orderDate || 'ว่าง'}”) — กรองตามวันที่จึงไม่เหลืออะไรเลย
+      </span>
+    );
+
+    if (!baseRows.length) return (
+      <span>
+        ไม่มีการสั่งของในช่วง {dateFrom || '…'} ถึง {dateTo || '…'}
+        {dataRange.min && <> · ข้อมูลที่มีอยู่คือ {dataRange.minRaw} ถึง {dataRange.maxRaw}</>}
+        <button onClick={() => { setDateFrom(''); setDateTo(''); }}
+          className="ml-2 text-cyan-600 hover:text-cyan-700 font-semibold underline">ล้างช่วงวันที่</button>
+      </span>
+    );
+
+    if (!summary.length) return <span>สาขา {branchFilter} ไม่มีการสั่งของในช่วงที่เลือก</span>;
+
+    return <span>ไม่พบสินค้าที่ตรงกับ “{search.trim()}”</span>;
+  };
+
   return (
     <div className="max-w-6xl mx-auto space-y-5">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
@@ -179,10 +243,16 @@ export default function PlanList() {
               </p>
             </div>
           </div>
-          <button onClick={exportExcel} disabled={loading || !filtered.length}
-            className="inline-flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
-            <Download size={14} /> Export Excel
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={load} disabled={loading} title="โหลดข้อมูลใหม่"
+              className="inline-flex items-center gap-2 border border-slate-200 hover:bg-slate-50 disabled:opacity-40 text-slate-600 font-semibold text-xs px-3 py-2 rounded-xl transition-all">
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> โหลดใหม่
+            </button>
+            <button onClick={exportExcel} disabled={loading || !filtered.length}
+              className="inline-flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+              <Download size={14} /> Export Excel
+            </button>
+          </div>
         </div>
 
         <div className="p-4 flex flex-wrap gap-3 border-b border-slate-100">
@@ -213,7 +283,14 @@ export default function PlanList() {
 
         {error && (
           <div className="m-4 p-3 bg-rose-50 border border-rose-100 rounded-xl text-sm text-rose-700 flex items-center gap-2">
-            <AlertCircle size={16} /><span>{error}</span>
+            <AlertCircle size={16} /><span className="flex-1">{error}</span>
+            <button onClick={load} className="font-semibold underline whitespace-nowrap">ลองใหม่</button>
+          </div>
+        )}
+
+        {warning && !error && (
+          <div className="m-4 p-3 bg-amber-50 border border-amber-100 rounded-xl text-sm text-amber-800 flex items-start gap-2">
+            <AlertCircle size={16} className="flex-shrink-0 mt-0.5" /><span>{warning}</span>
           </div>
         )}
 
@@ -237,7 +314,7 @@ export default function PlanList() {
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
+                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400 text-sm">{emptyMessage()}</td></tr>
               ) : filtered.map(x => (
                 <tr key={x.itemCode} onClick={() => setSelectedItem(x.itemCode)}
                   className="cursor-pointer hover:bg-cyan-50/50 transition-colors">
