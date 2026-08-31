@@ -9,9 +9,17 @@
 // ⭐ อ่านอย่างเดียว ไม่มีทางเขียน — ชุดนี้มาจากชีท POS ที่หน้าเว็บไม่ได้เป็นเจ้าของ
 //    การแก้สูตรยังต้องทำผ่าน /api/qcrd-save ซึ่งเขียนลงชีทต้นทุนเมนูเหมือนเดิม
 //
+// ไปถึงฐานได้ 2 ทาง ลองตามลำดับ:
+//   1) ต่อ SQL ตรงจาก Vercel (lib/qcrdPool.js) — เร็วกว่า ใช้เมื่อตั้งรหัสฐานไว้แล้ว
+//   2) host API /qcrd/rcp ที่เครื่องออฟฟิศ — เครื่องนั้นต่อ localhost ได้อยู่แล้ว
+// ทางที่ 2 มีไว้เพราะที่ร้านจริง Vercel ต่อ TCP 1433 เข้าไปไม่ได้ (แพ็กเก็ตหายกลางทาง
+// ขึ้น "Failed to connect ... in 15000ms" ไม่ใช่ถูกปฏิเสธ) ส่วน tunnel ขาออกของเครื่องออฟฟิศ
+// ใช้งานได้ปกติ จึงเป็นทางที่ใช้จริงอยู่ตอนนี้ — และไม่ต้องเปิดพอร์ตฐานข้อมูลออกเน็ตด้วย
+//
 // ⭐ ฝั่งอ่านห้ามพังหน้า — ต่อฐานไม่ได้/ยังไม่ได้สร้างตาราง = คืนดัชนีว่างพร้อม warning
 //    ไม่ใช่ตอบ error เพราะหน้าเมนูต้องใช้งานต่อได้จากข้อมูลชีทตามเดิม (เหมือน /api/plan-items)
 import { isConfigured as hasDirectDb, describeTarget, runQuery } from '../../lib/qcrdPool';
+import { QCRD_API_BASE } from '../../lib/qcrdSource';
 
 export const config = { maxDuration: 60 };
 
@@ -31,17 +39,8 @@ function explain(err) {
   return `อ่านสูตร RcpDtls จากฐานไม่ได้ (${describeTarget()}): ${err.message}`;
 }
 
-/** บรรทัดวัตถุดิบของสูตรเดียว */
-async function readLines(rtsId) {
-  const rows = await runQuery(
-    `SELECT l.line_no, l.seq, l.item_code, l.item_key, l.item_name,
-            l.net_qty, l.rcp_qty, l.portion, r.name
-       FROM dbo.rcp_line l
-       JOIN dbo.rcp_recipe r ON r.rts_id = l.rts_id
-      WHERE l.rts_id = @rtsId
-      ORDER BY l.line_no`,
-    { rtsId }
-  );
+/** แปลงแถวดิบเป็นรูปแบบที่หน้าเว็บใช้ — ทั้งทาง SQL ตรงและทาง host API คืนชื่อคอลัมน์ชุดเดียวกัน */
+function mapLines(rtsId, rows) {
   return {
     rtsId,
     name: rows.length ? str(rows[0].name) : '',
@@ -56,6 +55,45 @@ async function readLines(rtsId) {
       portion: num(r.portion),
     })),
   };
+}
+
+/** เรียก host API ที่เครื่องออฟฟิศ — คืน rows ดิบแบบเดียวกับ runQuery */
+async function viaHost(pathAndQuery, timeoutMs = 20000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${QCRD_API_BASE}${pathAndQuery}`, { signal: ctrl.signal });
+    const text = await r.text();
+    let body;
+    try { body = JSON.parse(text); }
+    catch {
+      // GAS/tunnel ล่มมักตอบหน้า HTML — บอกให้ตรงแทนที่จะโยน "Unexpected token <"
+      throw new Error(`host API ตอบกลับไม่ใช่ JSON (HTTP ${r.status}) — เครื่องออฟฟิศอาจไม่ได้รัน host-server อยู่`);
+    }
+    if (!r.ok || body.status !== 'success') {
+      throw new Error(body.message || `host API ตอบ HTTP ${r.status}`);
+    }
+    return body.data || [];
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error(`host API (${QCRD_API_BASE}) ไม่ตอบใน ${timeoutMs / 1000} วิ`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** บรรทัดวัตถุดิบของสูตรเดียว */
+async function readLines(rtsId) {
+  const rows = await runQuery(
+    `SELECT l.line_no, l.seq, l.item_code, l.item_key, l.item_name,
+            l.net_qty, l.rcp_qty, l.portion, r.name
+       FROM dbo.rcp_line l
+       JOIN dbo.rcp_recipe r ON r.rts_id = l.rts_id
+      WHERE l.rts_id = @rtsId
+      ORDER BY l.line_no`,
+    { rtsId }
+  );
+  return mapLines(rtsId, rows);
 }
 
 /**
@@ -89,32 +127,46 @@ export default async function handler(req, res) {
 
   const rtsId = Number(req.query.rtsId);
   const wantOne = Number.isInteger(rtsId) && rtsId > 0;
+  const empty = wantOne ? null : {};
+  const why = [];   // เหตุผลของทางที่ลองแล้วไม่ผ่าน เอาไปต่อกันเป็น warning
 
-  if (!hasDirectDb()) {
-    return res.status(200).json({
-      status: 'success', source: 'none', data: wantOne ? null : {},
-      warning: 'ยังไม่ได้ตั้งรหัสฐานข้อมูลบน Vercel (QCRD_DB_USER/PASSWORD หรือ HR_DB_USER/PASSWORD) — สูตรจาก RcpDtls จึงยังไม่ขึ้น',
-    });
-  }
-
-  try {
-    if (wantOne) {
-      const one = await readLines(rtsId);
-      if (!one.items.length) {
+  // ── ทางที่ 1: ต่อ SQL ตรง ──
+  if (hasDirectDb()) {
+    try {
+      const out = wantOne ? await readLines(rtsId) : await readIndex();
+      if (wantOne && !out.items.length) {
         return res.status(404).json({ status: 'error', message: `ไม่พบสูตร rtsId=${rtsId}` });
       }
       res.setHeader('Cache-Control', CACHE_OK);
-      return res.status(200).json({ status: 'success', source: 'sql', data: one });
+      return res.status(200).json({ status: 'success', source: 'sql', ...(wantOne ? { data: out } : out) });
+    } catch (err) {
+      console.error('RcpDtls: ต่อ SQL ตรงไม่ได้ — ลอง host API ต่อ:', err.message);
+      why.push(explain(err));
     }
-
-    const { data, total, dup } = await readIndex();
-    res.setHeader('Cache-Control', CACHE_OK);
-    return res.status(200).json({ status: 'success', source: 'sql', total, dup, data });
-  } catch (err) {
-    console.error('RcpDtls API error:', err.message);
-    // ไม่ทำให้หน้าเมนูพัง — คืนว่างพร้อมเหตุผล
-    return res.status(200).json({
-      status: 'success', source: 'none', data: wantOne ? null : {}, warning: explain(err),
-    });
+  } else {
+    why.push('ยังไม่ได้ตั้งรหัสฐานข้อมูลบน Vercel (QCRD_DB_USER/PASSWORD หรือ HR_DB_USER/PASSWORD)');
   }
+
+  // ── ทางที่ 2: host API ที่เครื่องออฟฟิศ ──
+  try {
+    if (wantOne) {
+      const rows = await viaHost(`/qcrd/rcp-lines?rtsId=${rtsId}`);
+      if (!rows.length) {
+        return res.status(404).json({ status: 'error', message: `ไม่พบสูตร rtsId=${rtsId}` });
+      }
+      res.setHeader('Cache-Control', CACHE_OK);
+      return res.status(200).json({ status: 'success', source: 'host', data: mapLines(rtsId, rows) });
+    }
+    const out = buildIndex(await viaHost('/qcrd/rcp'));
+    res.setHeader('Cache-Control', CACHE_OK);
+    return res.status(200).json({ status: 'success', source: 'host', ...out });
+  } catch (err) {
+    console.error('RcpDtls: host API ก็ไม่ได้:', err.message);
+    why.push(`host API: ${err.message}`);
+  }
+
+  // ── ไม่เหลือทางแล้ว — คืนว่างพร้อมเหตุผล ไม่ใช่ error หน้าเมนูต้องใช้งานต่อได้ ──
+  return res.status(200).json({
+    status: 'success', source: 'none', data: empty, warning: why.join(' · '),
+  });
 }

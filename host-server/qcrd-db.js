@@ -11,6 +11,8 @@
 //    GET  /qcrd/ping                      เช็กว่าต่อฐาน InventoryNarai ได้ไหม
 //    GET  /qcrd/migrate?key=..&step=..     ย้ายข้อมูลจากชีทเข้า SQL (ทำที่เครื่องนี้ เปิดจากเบราว์เซอร์ได้)
 //    GET  /qcrd/menu | /qcrd/bom | /qcrd/item | /qcrd/menugroup     อ่านข้อมูล
+//    GET  /qcrd/rcp                       ดัชนีสูตรฝั่ง POS (RcpDtls)
+//    GET  /qcrd/rcp-lines?rtsId=..        บรรทัดวัตถุดิบของสูตรนั้น
 //    POST /qcrd/save   { action, ... }    เขียน (ต้องมี header x-api-key)
 //
 //  ⚠️ เขียนได้ต้องตั้ง env QCRD_WRITE_KEY บนเครื่องโฮสต์ก่อน แล้วตั้งค่าเดียวกันเป็น
@@ -254,6 +256,35 @@ function mountQcrd(app) {
   app.get('/qcrd/bom', read('readBom'));
   app.get('/qcrd/item', read('readItems'));
   app.get('/qcrd/menugroup', read('readMenuGroups'));
+
+  // ── สูตรฝั่ง POS (RcpDtls) — ตาราง rcp_recipe / rcp_line ในฐานเดียวกัน ──
+  //    หน้า QC/RD > เมนู เอาไปเติมให้เมนูที่ยังไม่มีสูตรในแท็บ BOM ของชีทต้นทุนเมนู
+  //    นำเข้าข้อมูลด้วย scripts/migrate-rcp.mjs (ดู docs/schema-rcp.sql)
+  //
+  //    มีทางนี้ไว้เพราะ Vercel ต่อ SQL ตรงเข้ามาที่พอร์ต 1433 ไม่ได้ (แพ็กเก็ตหายกลางทาง
+  //    ขึ้น timeout) ส่วน tunnel ขาออกของเครื่องนี้ใช้งานได้อยู่แล้ว จึงให้อ่านผ่านทางนี้แทน
+  //    อ่านอย่างเดียว ไม่ต้องมีกุญแจ — ข้อมูลชุดนี้หน้าเว็บแก้ไม่ได้อยู่แล้ว
+  app.get('/qcrd/rcp', (req, res) => send(res, q(
+    `SELECT rts_id, name, name_key, line_count
+       FROM dbo.rcp_recipe
+      ORDER BY name_key, line_count DESC, rts_id`
+  ), 'rcp'));
+
+  app.get('/qcrd/rcp-lines', (req, res) => {
+    const rtsId = Number(req.query.rtsId);
+    if (!Number.isInteger(rtsId) || rtsId <= 0) {
+      return res.status(400).json({ status: 'error', message: 'ต้องส่ง ?rtsId= เป็นจำนวนเต็ม' });
+    }
+    send(res, q(
+      `SELECT l.line_no, l.seq, l.item_code, l.item_key, l.item_name,
+              l.net_qty, l.rcp_qty, l.portion, r.name
+         FROM dbo.rcp_line l
+         JOIN dbo.rcp_recipe r ON r.rts_id = l.rts_id
+        WHERE l.rts_id = @rtsId
+        ORDER BY l.line_no`,
+      { rtsId }
+    ), 'rcp-lines');
+  });
 
   // ── ย้ายข้อมูลจากชีท -> SQL (ทำที่เครื่องนี้ เพราะต่อ SQL ได้ตรงและเปิดเน็ตอ่านชีทได้) ──
   //    เปิดจากเบราว์เซอร์ได้เลย: /qcrd/migrate?key=<QCRD_WRITE_KEY>&step=check
