@@ -59,6 +59,16 @@ const sortKey = r => {
 // สถานะรับของ — มีเฉพาะข้อมูลสดจาก POS (ช่อง Ord_Rcv) ต้นทางสำเนาไม่มีให้
 const statusText = r => (r.received === true ? 'รับแล้ว' : r.received === false ? 'รอรับ' : '');
 
+// ชื่อวันแบบสั้น ไว้ทำหัวคอลัมน์ปฏิทิน (0 = อาทิตย์ ตาม getUTCDay)
+const TH_DOW = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+
+/** 'YYYY-MM-DD' -> { dow:'จ', day:'08', month:'09', weekend:false } */
+const dayParts = iso => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  const n = d.getUTCDay();
+  return { dow: TH_DOW[n], day: pad2(d.getUTCDate()), month: pad2(d.getUTCMonth() + 1), weekend: n === 0 || n === 6 };
+};
+
 const RANGE_DAYS = 30;   // ต้องตรงกับ DEFAULT_DAYS ใน pages/api/plan.js
 
 const todayISO = () => new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Bangkok' }).slice(0, 10);
@@ -88,11 +98,6 @@ export default function PlanList() {
   const [dateTo, setDateTo] = useState(() => defaultRange().to);
   const [source, setSource] = useState('');     // pos = สดจาก POS · sql/sheet = สำเนา
   const [selectedItem, setSelectedItem] = useState(null); // itemCode ที่กำลังดูรายละเอียด
-  const [openDateKey, setOpenDateKey] = useState(null); // `${branch}|${date}` ที่กดเปิดดูจำนวนอยู่
-
-  // เปลี่ยนรายการที่ดู → ปิดวันที่ที่ค้างขยายไว้ กันโชว์ข้อมูลผิดรายการ
-  useEffect(() => { setOpenDateKey(null); }, [selectedItem]);
-
   // เปลี่ยนวันที่รัว ๆ แล้วคำตอบของช่วงเก่ามาถึงทีหลัง จะทับข้อมูลของช่วงใหม่ — นับรอบกันไว้
   const reqId = useRef(0);
 
@@ -186,15 +191,13 @@ export default function PlanList() {
   const branchBreakdown = useMemo(() => {
     const g = {};
     detailRows.forEach(r => {
-      if (!g[r.branch]) g[r.branch] = { branch: r.branch, qty: 0, total: 0, lines: 0, pending: 0, receiveDates: new Set() };
+      if (!g[r.branch]) g[r.branch] = { branch: r.branch, qty: 0, total: 0, lines: 0, pending: 0 };
       g[r.branch].qty += r.qty;
       g[r.branch].total += r.total;
       g[r.branch].lines++;
       if (r.received === false) g[r.branch].pending++;
-      if (r.receiveDate) g[r.branch].receiveDates.add(r.receiveDate);
     });
-    return Object.values(g).map(x => ({ ...x, receiveDates: [...x.receiveDates].sort() }))
-      .sort((a, b) => b.qty - a.qty);
+    return Object.values(g).sort((a, b) => b.qty - a.qty);
   }, [detailRows]);
 
   // จำนวน/มูลค่าต่อ (สาขา, วันที่รับ) — ใช้แสดงตอนกดวันที่ในตาราง "แยกตามสาขา"
@@ -210,6 +213,25 @@ export default function PlanList() {
       if (r.received === false) m[k].pending++;
     });
     return m;
+  }, [detailRows]);
+
+  // วันที่ส่งทั้งหมดของรายการนี้ เรียงจากวันแรกไปวันหลัง — ใช้เป็นคอลัมน์ของตารางปฏิทิน
+  const deliverDates = useMemo(
+    () => [...new Set(detailRows.map(r => r.deliverDate || r.receiveDate).filter(Boolean))].sort(),
+    [detailRows]
+  );
+
+  // ยอดรวมของแต่ละวัน (ท้ายตารางปฏิทิน)
+  const dateTotals = useMemo(() => {
+    const t = {};
+    detailRows.forEach(r => {
+      const d = r.deliverDate || r.receiveDate;
+      if (!d) return;
+      if (!t[d]) t[d] = { qty: 0, pending: 0 };
+      t[d].qty += r.qty;
+      if (r.received === false) t[d].pending++;
+    });
+    return t;
   }, [detailRows]);
 
   const selectedInfo = filtered.find(x => x.itemCode === selectedItem) || summary.find(x => x.itemCode === selectedItem);
@@ -440,7 +462,6 @@ export default function PlanList() {
                         <th className="px-3 py-2 text-right">มูลค่ารวม</th>
                         <th className="px-3 py-2 text-center">จำนวนครั้งสั่ง</th>
                         <th className="px-3 py-2 text-center">รอรับ</th>
-                        <th className="px-3 py-2 text-left">วันที่ส่งของ</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -455,38 +476,78 @@ export default function PlanList() {
                               ? <span className="inline-block px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold">{b.pending}</span>
                               : <span className="text-slate-300 text-xs">—</span>}
                           </td>
-                          <td className="px-3 py-2">
-                            <div className="flex flex-wrap gap-1">
-                              {b.receiveDates.length === 0 ? <span className="text-slate-300 text-xs">—</span> : b.receiveDates.map(d => {
-                                const key = `${b.branch}|${d}`;
-                                const info = branchDateQty[key];
-                                const isOpen = openDateKey === key;
-                                const waiting = info?.pending > 0;   // ยังมีของวันนั้นที่ POS ไม่ได้บันทึกรับ
-                                return (
-                                  <button key={d} type="button" onClick={() => setOpenDateKey(isOpen ? null : key)}
-                                    title={waiting ? 'ส่งวันนี้ — ยังมีที่ยังไม่ได้รับ (กดดูจำนวน)' : 'ส่งวันนี้ — รับครบแล้ว (กดดูจำนวน)'}
-                                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] border transition-colors ${isOpen
-                                      ? 'bg-slate-700 text-white border-slate-700'
-                                      : waiting
-                                        ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
-                                        : 'bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100'}`}>
-                                    <Calendar size={9} />{d}
-                                    {isOpen && info && (
-                                      <span className="font-bold whitespace-nowrap">
-                                        · {fmtNum(info.qty)} {selectedInfo?.unit || ''}{waiting ? ` · รอรับ ${info.pending}` : ''}
-                                      </span>
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               </div>
+
+              {/* ปฏิทินการส่ง: สาขา (แถว) x วันที่ส่ง (คอลัมน์) — อ่านทีเดียวว่าวันไหนต้องส่งสาขาไหนเท่าไหร่ */}
+              {deliverDates.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                    <Calendar size={13} /> ปฏิทินการส่ง
+                    <span className="ml-1 font-normal normal-case text-slate-400">
+                      ตัวเลข = จำนวนที่ต้องส่ง · เหลือง = ยังไม่ได้รับ · เขียว = รับแล้ว
+                    </span>
+                  </h4>
+                  <div className="overflow-x-auto border border-slate-100 rounded-xl">
+                    <table className="text-sm border-collapse">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr className="text-xs font-bold">
+                          <th className="px-3 py-2 text-left sticky left-0 bg-slate-50 z-10 border-r border-slate-100">สาขา</th>
+                          {deliverDates.map(d => {
+                            const t = dayParts(d);
+                            return (
+                              <th key={d} className={`px-2 py-1.5 text-center whitespace-nowrap font-normal ${t.weekend ? 'bg-slate-100' : ''}`}>
+                                <div className="text-[10px] text-slate-400">{t.dow}</div>
+                                <div className="font-bold text-slate-600">{t.day}/{t.month}</div>
+                              </th>
+                            );
+                          })}
+                          <th className="px-3 py-2 text-right border-l border-slate-100">รวม</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {branchBreakdown.map(b => (
+                          <tr key={b.branch} className="hover:bg-slate-50/60">
+                            <td className="px-3 py-1.5 font-semibold text-slate-800 sticky left-0 bg-white z-10 border-r border-slate-100">{b.branch}</td>
+                            {deliverDates.map(d => {
+                              const info = branchDateQty[`${b.branch}|${d}`];
+                              const weekend = dayParts(d).weekend;
+                              if (!info) return <td key={d} className={`px-2 py-1.5 text-center text-slate-200 ${weekend ? 'bg-slate-50/70' : ''}`}>·</td>;
+                              const waiting = info.pending > 0;
+                              return (
+                                <td key={d} className={`px-2 py-1.5 text-center ${weekend ? 'bg-slate-50/70' : ''}`}
+                                  title={`${b.branch} · ส่ง ${d} · ${fmtNum(info.qty)} ${selectedInfo?.unit || ''}` + (waiting ? ` · ยังไม่ได้รับ ${info.pending} ใบ` : ' · รับแล้ว')}>
+                                  <span className={`inline-block min-w-[2.2rem] px-1.5 py-0.5 rounded font-mono font-bold text-xs ${waiting
+                                    ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    : 'bg-emerald-50 text-emerald-700 border border-emerald-100'}`}>
+                                    {fmtNum(info.qty)}
+                                  </span>
+                                </td>
+                              );
+                            })}
+                            <td className="px-3 py-1.5 text-right font-mono font-bold text-slate-700 border-l border-slate-100">{fmtNum(b.qty)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot className="bg-slate-50 text-slate-600">
+                        <tr className="text-xs font-bold">
+                          <td className="px-3 py-2 sticky left-0 bg-slate-50 z-10 border-r border-slate-100">รวมทุกสาขา</td>
+                          {deliverDates.map(d => (
+                            <td key={d} className={`px-2 py-2 text-center font-mono ${dayParts(d).weekend ? 'bg-slate-100' : ''}`}>
+                              {fmtNum(dateTotals[d]?.qty)}
+                            </td>
+                          ))}
+                          <td className="px-3 py-2 text-right font-mono border-l border-slate-100">{fmtNum(selectedInfo?.qty)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {/* รายละเอียดทุกแถว พร้อมวันที่คีย์ข้อมูล */}
               <div>
