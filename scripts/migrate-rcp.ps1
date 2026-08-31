@@ -17,6 +17,9 @@
 #     -Yes           ไม่ต้องถามยืนยัน (ใช้ตอนรันซ้ำ/รันอัตโนมัติ)
 #     -SkipSchema    ข้ามขั้นสร้างตาราง (เคยรันแล้ว)
 #     -Tab <ชื่อแท็บ> แท็บในไฟล์ (ค่าเริ่มต้น RcpDtls)
+#     -Server <เครื่อง> เครื่อง SQL (ค่าเริ่มต้น localhost\SQLEXPRESS)
+#                     รันบนเครื่องที่มี SQL อยู่ให้ใช้ค่าเริ่มต้น · รันจากเครื่องอื่นใช้ inventory.dyndns.tv
+#     -User <user>   login ของ SQL (ค่าเริ่มต้น sa)
 #     -DbName <ชื่อฐาน> ฐานปลายทาง (ค่าเริ่มต้น InventoryNarai)
 #
 #  ⚠️ ไฟล์นี้ต้องบันทึกเป็น UTF-8 "พร้อม BOM" เท่านั้น
@@ -29,7 +32,9 @@ param(
   [switch]$Yes,
   [switch]$SkipSchema,
   [string]$Tab = 'RcpDtls',
-  [string]$DbName = ''
+  [string]$DbName = '',
+  [string]$Server = '',
+  [string]$User = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +55,12 @@ $File = (Resolve-Path $File).Path
 Step 1 'ค่าเชื่อมต่อฐานข้อมูล'
 $secret = Join-Path $repo 'host-server\db.env.ps1'
 if (Test-Path $secret) { . $secret; Ok "โหลดค่าจาก host-server\db.env.ps1" }
+
+# -Server/-User ที่ส่งมาทางบรรทัดคำสั่งชนะทุกอย่าง รวมถึง env ที่ค้างอยู่จากคำสั่งก่อนหน้าในหน้าต่างเดิม
+# (เคสจริงที่เจอ: ตั้ง QCRD_DB_SERVER ไว้เป็น inventory.dyndns.tv แล้วมารันบนเครื่องที่มี SQL อยู่
+#  ต่อออกเน็ตแล้ววนกลับเข้าเครื่องตัวเองไม่ได้ ขึ้น Login timeout ทั้งที่ฐานอยู่ตรงหน้า)
+if ($Server) { $env:QCRD_DB_SERVER = $Server }
+if ($User)   { $env:QCRD_DB_USER   = $User }
 
 # ตาราง rcp_* อยู่ฐานเดียวกับ QC/RD บน SQLEXPRESS (คนละอินสแตนซ์กับ NaraiPos)
 if (-not $env:QCRD_DB_SERVER)   { $env:QCRD_DB_SERVER = if ($env:DB_SERVER -and $env:DB_SERVER -match '\\') { $env:DB_SERVER } else { 'localhost\SQLEXPRESS' } }
