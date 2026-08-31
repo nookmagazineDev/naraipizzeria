@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
+import { isPlanItem, PLAN_ITEM_COUNT } from '../lib/planItems';
 
 /*
  * จัดซื้อ — แพลนสินค้า: ใบสั่งของจริงของแต่ละสาขา ผ่าน /api/plan
@@ -80,6 +81,8 @@ export default function PlanList() {
   const [warning, setWarning] = useState('');   // API อ่านฐานไม่ได้แล้วถอยไปอ่านชีท — ต้องบอกให้รู้
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
+  // หมวดสินค้า: true = เฉพาะรายการในหมวดแพลน (lib/planItems.js) · false = ทุกหมวดที่สาขาสั่ง
+  const [onlyPlan, setOnlyPlan] = useState(true);
   // ช่วง "วันที่สั่ง" — ตัวนี้เป็นตัวกำหนดว่า API จะไปดึงใบสั่งช่วงไหนมา ไม่ใช่แค่กรองบนจอ
   const [dateFrom, setDateFrom] = useState(() => defaultRange().from);
   const [dateTo, setDateTo] = useState(() => defaultRange().to);
@@ -130,17 +133,16 @@ export default function PlanList() {
     return { min, max, minRaw, maxRaw, unreadable, readable: rows.length - unreadable };
   }, [rows]);
 
-  // ตัดเฉพาะแถวที่ "วันที่บันทึกข้อมูล" (orderDate) อยู่ในช่วงที่เลือก — ใช้ต่อทั้งสรุป/รายละเอียด/export
-  const baseRows = useMemo(() => {
-    if (!dateFrom && !dateTo) return rows;
-    return rows.filter(r => {
-      const iso = toISO(r.orderDate);
-      if (!iso) return false;
-      if (dateFrom && iso < dateFrom) return false;
-      if (dateTo && iso > dateTo) return false;
-      return true;
-    });
-  }, [rows, dateFrom, dateTo]);
+  // คัดตามหมวด + ช่วงวันที่สั่ง — ใช้ต่อทั้งสรุป/รายละเอียด/Excel จะได้เป็นชุดเดียวกันหมด
+  const baseRows = useMemo(() => rows.filter(r => {
+    if (onlyPlan && !isPlanItem(r.itemCode)) return false;
+    if (!dateFrom && !dateTo) return true;
+    const iso = toISO(r.orderDate);
+    if (!iso) return false;
+    if (dateFrom && iso < dateFrom) return false;
+    if (dateTo && iso > dateTo) return false;
+    return true;
+  }), [rows, dateFrom, dateTo, onlyPlan]);
 
   // สรุปยอดรวมต่อรายการ (itemCode) พร้อมวันที่บันทึกข้อมูลล่าสุดของแต่ละรายการ
   const summary = useMemo(() => {
@@ -256,6 +258,14 @@ export default function PlanList() {
       </span>
     );
 
+    if (!baseRows.length && onlyPlan) return (
+      <span>
+        ไม่มีการสั่งของในหมวดแพลนช่วง {dateFrom} ถึง {dateTo} (ใบสั่งช่วงนี้มี {rows.length.toLocaleString()} แถว แต่เป็นหมวดอื่นทั้งหมด)
+        <button onClick={() => setOnlyPlan(false)}
+          className="ml-2 text-cyan-600 hover:text-cyan-700 font-semibold underline">ดูทุกหมวด</button>
+      </span>
+    );
+
     if (!baseRows.length) return (
       <span>
         ไม่มีการสั่งของในช่วง {dateFrom || '…'} ถึง {dateTo || '…'}
@@ -280,6 +290,7 @@ export default function PlanList() {
               <h2 className="text-xl font-bold text-slate-800">แพลนสินค้า</h2>
               <p className="text-sm text-slate-500 mt-0.5">
                 {filtered.length.toLocaleString()} รายการ · จำนวนรวม {fmtNum(grand.qty)} · มูลค่ารวม ฿{fmtMoney(grand.total)}
+                {onlyPlan && <span className="ml-1.5 text-cyan-600 font-semibold">· เฉพาะหมวดแพลน</span>}
                 {(dateFrom || dateTo) && (
                   <span className="ml-1.5 text-cyan-600 font-semibold">· วันที่สั่ง {dateFrom || '…'} ถึง {dateTo || '…'}</span>
                 )}
@@ -311,6 +322,11 @@ export default function PlanList() {
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหารหัส / ชื่อสินค้า…"
               className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500" />
           </div>
+          <select value={onlyPlan ? 'plan' : 'all'} onChange={e => setOnlyPlan(e.target.value === 'plan')}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500">
+            <option value="plan">หมวดแพลน ({PLAN_ITEM_COUNT} รายการ)</option>
+            <option value="all">ทุกหมวด</option>
+          </select>
           <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)}
             className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500">
             <option value="">ทุกสาขา ({branches.length})</option>
