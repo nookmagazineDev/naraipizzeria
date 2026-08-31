@@ -3,6 +3,8 @@
 //   node scripts/migrate-rcp.mjs Kios_Dtls.xlsx              นำเข้าจริง
 //   node scripts/migrate-rcp.mjs Kios_Dtls.xlsx --dry-run    อ่าน+ตรวจอย่างเดียว ไม่แตะฐาน
 //   node scripts/migrate-rcp.mjs Kios_Dtls.xlsx --tab RcpDtls
+//   node scripts/migrate-rcp.mjs Kios_Dtls.xlsx --emit-sql out.sql   ปั้นเป็นไฟล์ .sql ไม่ต่อฐานเอง
+//        (ไว้ใช้กับ sqlcmd -E เมื่อเข้า SQL ด้วยสิทธิ์ Windows ได้ แต่ไม่มีรหัส SQL login)
 //
 // รันจากเครื่องที่ต่อ SQL Server ได้ (ค่าเริ่มต้นคือเครื่องออฟฟิศ localhost\SQLEXPRESS)
 // ต่อฐานด้วย scripts/qcrdDb.mjs ตัวเดียวกับ migrate-qcrd.mjs — env ชุดเดิม ไม่ต้องตั้งเพิ่ม
@@ -23,6 +25,7 @@ const flag = (f) => argv.includes(f);
 const optVal = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 
 const DRY = flag('--dry-run');
+const EMIT = optVal('--emit-sql', '');   // เขียนเป็นไฟล์ .sql แทนการต่อฐานเอง (ดูหมายเหตุตรงที่ใช้)
 const TAB = optVal('--tab', 'RcpDtls');
 const FILE = argv.find((a) => !a.startsWith('--') && /\.xlsx?$/i.test(a));
 
@@ -130,6 +133,59 @@ if (DRY) {
     }
   }
   console.log('');
+  process.exit(0);
+}
+
+// ── เขียนเป็นไฟล์ .sql (ไม่ต้องมี user/รหัสของ SQL) ──────────────────────────
+//
+// มีไว้สำหรับเครื่องที่ล็อกอิน Windows เข้า SQL Server ได้อยู่แล้ว แต่ไม่มีใครจำรหัส
+// SQL login ได้ — driver ที่ node ใช้ (tedious) ต่อแบบ Windows Authentication ไม่ได้
+// แต่ sqlcmd -E ต่อได้ จึงให้ node ปั้นคำสั่งออกมาเป็นไฟล์แล้วให้ sqlcmd เอาไปรันแทน
+//   node scripts/migrate-rcp.mjs <ไฟล์.xlsx> --emit-sql rcp-import.sql
+//   sqlcmd -S "localhost\SQLEXPRESS" -E -d InventoryNarai -i rcp-import.sql
+const qStr = (v) => (v === null || v === undefined || v === ''
+  ? 'NULL'
+  // ' ต้องกลายเป็น '' และตัดอักขระควบคุมที่ทำให้ sqlcmd อ่านไฟล์เพี้ยน
+  : `N'${String(v).replace(/'/g, "''").replace(/[\u0000-\u001f]/g, ' ')}'`);
+const qNum = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? 'NULL' : String(Number(v)));
+
+if (EMIT) {
+  const out = [];
+  out.push('SET NOCOUNT ON;');
+  out.push('SET XACT_ABORT ON;   -- แถวไหนพังให้ยกเลิกทั้งก้อน ไม่ปล่อยให้ค้างครึ่ง ๆ กลาง ๆ');
+  out.push('BEGIN TRANSACTION;');
+  out.push('DELETE FROM dbo.rcp_line;');
+  out.push('DELETE FROM dbo.rcp_recipe;');
+
+  // SQL Server รับได้สูงสุด 1000 แถวต่อคำสั่ง INSERT ... VALUES — กันไว้ที่ 500
+  const CHUNK = 500;
+  const recArr = [...recipes.values()];
+  for (let i = 0; i < recArr.length; i += CHUNK) {
+    const vals = recArr.slice(i, i + CHUNK).map((r) =>
+      `(${qNum(r.rtsId)},${qStr(r.name.slice(0, 200))},${qStr(r.nameKey.slice(0, 200))},` +
+      `${qStr(r.nameLoose.slice(0, 200))},${qNum(r.salesItemId)},${qNum(r.lineCount)},SYSDATETIME())`);
+    out.push('INSERT INTO dbo.rcp_recipe (rts_id,name,name_key,name_loose,sales_item_id,line_count,updated_at) VALUES');
+    out.push(`${vals.join(',\n')};`);
+  }
+  for (let i = 0; i < lines.length; i += CHUNK) {
+    const vals = lines.slice(i, i + CHUNK).map((l) =>
+      `(${qNum(l.rtsId)},${qNum(l.lineNo)},${qNum(l.seq)},${qStr(l.itemCode && l.itemCode.slice(0, 32))},` +
+      `${qStr(l.itemKey && l.itemKey.slice(0, 32))},${qStr(l.itemName && l.itemName.slice(0, 200))},` +
+      `${qNum(l.netQty)},${qNum(l.rcpQty)},${qNum(l.portion)})`);
+    out.push('INSERT INTO dbo.rcp_line (rts_id,line_no,seq,item_code,item_key,item_name,net_qty,rcp_qty,portion) VALUES');
+    out.push(`${vals.join(',\n')};`);
+  }
+
+  out.push('COMMIT TRANSACTION;');
+  out.push("PRINT N'นำเข้าเรียบร้อย';");
+  out.push('SELECT (SELECT COUNT(*) FROM dbo.rcp_recipe) AS recipes, (SELECT COUNT(*) FROM dbo.rcp_line) AS lines_;');
+  out.push('GO');
+
+  fs.writeFileSync(EMIT, `\uFEFF${out.join('\n')}`, 'utf8');   // BOM ให้ sqlcmd รู้ว่าเป็น UTF-8
+  const mb = (fs.statSync(EMIT).size / 1048576).toFixed(1);
+  console.log(`\n✅ เขียนไฟล์คำสั่งแล้ว: ${path.resolve(EMIT)}  (${mb} MB)`);
+  console.log('\nเอาไปรันด้วย sqlcmd โดยไม่ต้องใช้รหัส SQL:');
+  console.log(`   sqlcmd -S "localhost\\SQLEXPRESS" -E -d InventoryNarai -i ${EMIT}\n`);
   process.exit(0);
 }
 

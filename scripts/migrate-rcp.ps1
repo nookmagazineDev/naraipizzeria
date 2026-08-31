@@ -20,6 +20,8 @@
 #     -Server <เครื่อง> เครื่อง SQL (ค่าเริ่มต้น localhost\SQLEXPRESS)
 #                     รันบนเครื่องที่มี SQL อยู่ให้ใช้ค่าเริ่มต้น · รันจากเครื่องอื่นใช้ inventory.dyndns.tv
 #     -User <user>   login ของ SQL (ค่าเริ่มต้น sa)
+#     -Trusted       เข้า SQL ด้วยสิทธิ์ Windows ที่ล็อกอินอยู่ ไม่ต้องใช้ user/รหัสของ SQL เลย
+#                    (ใช้ได้เมื่อรันบนเครื่องที่มี SQL Server และบัญชี Windows นั้นมีสิทธิ์ในฐาน)
 #     -DbName <ชื่อฐาน> ฐานปลายทาง (ค่าเริ่มต้น InventoryNarai)
 #
 #  ⚠️ ไฟล์นี้ต้องบันทึกเป็น UTF-8 "พร้อม BOM" เท่านั้น
@@ -34,7 +36,8 @@ param(
   [string]$Tab = 'RcpDtls',
   [string]$DbName = '',
   [string]$Server = '',
-  [string]$User = ''
+  [string]$User = '',
+  [switch]$Trusted
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,14 +69,28 @@ if ($User)   { $env:QCRD_DB_USER   = $User }
 if (-not $env:QCRD_DB_SERVER)   { $env:QCRD_DB_SERVER = if ($env:DB_SERVER -and $env:DB_SERVER -match '\\') { $env:DB_SERVER } else { 'localhost\SQLEXPRESS' } }
 if (-not $env:QCRD_DB_NAME)     { $env:QCRD_DB_NAME = if ($DbName) { $DbName } else { 'InventoryNarai' } }
 if ($DbName)                    { $env:QCRD_DB_NAME = $DbName }
-if (-not $env:QCRD_DB_USER)     { $env:QCRD_DB_USER = if ($env:DB_USER) { $env:DB_USER } else { 'sa' } }
-if (-not $env:QCRD_DB_PASSWORD) { $env:QCRD_DB_PASSWORD = $env:DB_PASSWORD }
-if (-not $env:QCRD_DB_PASSWORD) {
-  $sec = Read-Host "รหัสผ่านของ $($env:QCRD_DB_USER) บน $($env:QCRD_DB_SERVER)" -AsSecureString
-  $env:QCRD_DB_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-    [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+if ($Trusted) {
+  Ok "ปลายทาง: $($env:QCRD_DB_SERVER)/$($env:QCRD_DB_NAME)  (สิทธิ์ Windows ของ $env:USERNAME — ไม่ใช้รหัส SQL)"
+} else {
+  if (-not $env:QCRD_DB_USER)     { $env:QCRD_DB_USER = if ($env:DB_USER) { $env:DB_USER } else { 'sa' } }
+  if (-not $env:QCRD_DB_PASSWORD) { $env:QCRD_DB_PASSWORD = $env:DB_PASSWORD }
+  if (-not $env:QCRD_DB_PASSWORD) {
+    $sec = Read-Host "รหัสผ่านของ $($env:QCRD_DB_USER) บน $($env:QCRD_DB_SERVER)" -AsSecureString
+    $env:QCRD_DB_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+      [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+  }
+  Ok "ปลายทาง: $($env:QCRD_DB_SERVER)/$($env:QCRD_DB_NAME)  (user: $($env:QCRD_DB_USER))"
 }
-Ok "ปลายทาง: $($env:QCRD_DB_SERVER)/$($env:QCRD_DB_NAME)  (user: $($env:QCRD_DB_USER))"
+
+# -E = ใช้สิทธิ์ Windows ที่ล็อกอินอยู่ · ไม่งั้นส่ง user/รหัสไปตามปกติ
+$auth = if ($Trusted) { @('-E') } else { @('-U', $env:QCRD_DB_USER, '-P', $env:QCRD_DB_PASSWORD) }
+
+# หา sqlcmd ครั้งเดียวตรงนี้ ใช้ทั้งขั้นสร้างตารางและขั้นนำเข้า
+# (เคยหาไว้ในบล็อก -not $SkipSchema ทำให้สั่ง -SkipSchema -Trusted แล้วขั้นนำเข้าได้ค่าว่าง)
+$sqlcmd = (Get-Command sqlcmd -ErrorAction SilentlyContinue).Source
+if ($Trusted -and -not $sqlcmd) {
+  throw 'โหมด -Trusted ต้องมี sqlcmd (ตัวรันของ node ต่อแบบสิทธิ์ Windows ไม่ได้) — ลง SQL Server Command Line Utilities ก่อน'
+}
 
 # ── 2) package ที่สคริปต์ใช้ ─────────────────────────────────────────
 Step 2 'ตรวจ package mssql / xlsx'
@@ -87,9 +104,8 @@ Ok 'พร้อมใช้งาน'
 # ── 3) สร้างตาราง ───────────────────────────────────────────────────
 if (-not $SkipSchema) {
   Step 3 'สร้างตาราง rcp_recipe / rcp_line จาก docs\schema-rcp.sql'
-  $sqlcmd = (Get-Command sqlcmd -ErrorAction SilentlyContinue).Source
   if ($sqlcmd) {
-    & $sqlcmd -S $env:QCRD_DB_SERVER -d $env:QCRD_DB_NAME -U $env:QCRD_DB_USER -P $env:QCRD_DB_PASSWORD -i 'docs\schema-rcp.sql'
+    & $sqlcmd -S $env:QCRD_DB_SERVER -d $env:QCRD_DB_NAME @auth -i 'docs\schema-rcp.sql'
     if ($LASTEXITCODE -ne 0) { throw 'รันสคีมาด้วย sqlcmd ไม่สำเร็จ' }
   } else {
     Warn 'ไม่พบ sqlcmd — ใช้ตัวรันของ node แทน (ผลเหมือนกัน)'
@@ -116,8 +132,19 @@ if (-not $Yes) {
 
 # ── 5) นำเข้าจริง ───────────────────────────────────────────────────
 Step 5 'นำเข้าลง SQL'
-node scripts\migrate-rcp.mjs $File --tab $Tab
-if ($LASTEXITCODE -ne 0) { throw 'นำเข้าไม่สำเร็จ — ดูข้อความผิดพลาดด้านบน' }
+if ($Trusted) {
+  # driver ที่ node ใช้ (tedious) ต่อแบบสิทธิ์ Windows ไม่ได้ — ให้ node ปั้นคำสั่งเป็นไฟล์
+  # แล้วส่งให้ sqlcmd -E เอาไปรันแทน ผลลัพธ์ในฐานเหมือนกันทุกอย่าง
+  $tmp = Join-Path $env:TEMP 'rcp-import.sql'
+  node scripts\migrate-rcp.mjs $File --tab $Tab --emit-sql $tmp
+  if ($LASTEXITCODE -ne 0) { throw 'ปั้นไฟล์คำสั่งไม่สำเร็จ' }
+  & $sqlcmd -S $env:QCRD_DB_SERVER -d $env:QCRD_DB_NAME @auth -i $tmp
+  if ($LASTEXITCODE -ne 0) { throw 'นำเข้าไม่สำเร็จ — ดูข้อความผิดพลาดด้านบน' }
+  Remove-Item $tmp -ErrorAction SilentlyContinue
+} else {
+  node scripts\migrate-rcp.mjs $File --tab $Tab
+  if ($LASTEXITCODE -ne 0) { throw 'นำเข้าไม่สำเร็จ — ดูข้อความผิดพลาดด้านบน' }
+}
 
 Write-Host ''
 Write-Host 'เสร็จแล้ว — เปิดหน้า QC/RD > เมนู แล้วดูบรรทัดบนหัวหน้าว่า "เติมจากสูตร POS อีก N เมนู"' -ForegroundColor Green
