@@ -1,0 +1,113 @@
+﻿# ════════════════════════════════════════════════════════════
+#  migrate-rcp.ps1 — นำเข้าสูตรฝั่ง POS (แท็บ RcpDtls) เข้า SQL Server
+#  รันที่เครื่องออฟฟิศ (เครื่องที่ต่อ SQL Server ได้) จากโฟลเดอร์รีโป naraipizzeria
+#
+#  วิธีใช้ — เปิด PowerShell ที่โฟลเดอร์รีโป แล้วรันบรรทัดเดียว:
+#     powershell -ExecutionPolicy Bypass -File .\scripts\migrate-rcp.ps1 -File Kios_Dtls.xlsx
+#
+#  ทำให้ครบทุกขั้นในรอบเดียว:
+#     1) โหลดรหัสฐานข้อมูลจาก host-server\db.env.ps1 (ถ้ามี) แล้วเติมค่าที่ขาด
+#     2) npm install (เฉพาะเมื่อยังไม่มี package mssql / xlsx)
+#     3) สร้างตารางจาก docs\schema-rcp.sql
+#     4) อ่านไฟล์ .xlsx แบบไม่เขียนอะไร (--dry-run) แล้วให้ยืนยันก่อนเขียนจริง
+#     5) นำเข้าจริง
+#
+#  ตัวเลือก
+#     -File <ไฟล์>   ไฟล์ .xlsx ที่ export มาจากชีท (ค่าเริ่มต้น Kios_Dtls.xlsx)
+#     -Yes           ไม่ต้องถามยืนยัน (ใช้ตอนรันซ้ำ/รันอัตโนมัติ)
+#     -SkipSchema    ข้ามขั้นสร้างตาราง (เคยรันแล้ว)
+#     -Tab <ชื่อแท็บ> แท็บในไฟล์ (ค่าเริ่มต้น RcpDtls)
+#     -DbName <ชื่อฐาน> ฐานปลายทาง (ค่าเริ่มต้น InventoryNarai)
+#
+#  ⚠️ ไฟล์นี้ต้องบันทึกเป็น UTF-8 "พร้อม BOM" เท่านั้น
+#     Windows PowerShell 5.1 อ่านไฟล์ .ps1 ที่ไม่มี BOM เป็น ANSI ตาม codepage ของเครื่อง
+#     ทำให้ข้อความไทยกลายเป็นขยะแล้ว parser พังทั้งไฟล์ (เหมือนที่เขียนไว้ใน migrate-qcrd.ps1)
+# ════════════════════════════════════════════════════════════
+[CmdletBinding()]
+param(
+  [string]$File = 'Kios_Dtls.xlsx',
+  [switch]$Yes,
+  [switch]$SkipSchema,
+  [string]$Tab = 'RcpDtls',
+  [string]$DbName = ''
+)
+
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+Set-Location $repo
+
+function Step($n, $text) { Write-Host "`n[$n] $text" -ForegroundColor Cyan }
+function Ok($text) { Write-Host "    ✓ $text" -ForegroundColor Green }
+function Warn($text) { Write-Host "    ⚠️  $text" -ForegroundColor Yellow }
+
+# ── 0) ไฟล์ต้นทาง ────────────────────────────────────────────────────
+if (-not (Test-Path $File)) {
+  throw "ไม่พบไฟล์ $File — วางไฟล์ที่ export จากชีทไว้ในโฟลเดอร์รีโป หรือระบุ -File <path> เต็ม ๆ"
+}
+$File = (Resolve-Path $File).Path
+
+# ── 1) ค่าเชื่อมต่อฐานข้อมูล ─────────────────────────────────────────
+Step 1 'ค่าเชื่อมต่อฐานข้อมูล'
+$secret = Join-Path $repo 'host-server\db.env.ps1'
+if (Test-Path $secret) { . $secret; Ok "โหลดค่าจาก host-server\db.env.ps1" }
+
+# ตาราง rcp_* อยู่ฐานเดียวกับ QC/RD บน SQLEXPRESS (คนละอินสแตนซ์กับ NaraiPos)
+if (-not $env:QCRD_DB_SERVER)   { $env:QCRD_DB_SERVER = if ($env:DB_SERVER -and $env:DB_SERVER -match '\\') { $env:DB_SERVER } else { 'localhost\SQLEXPRESS' } }
+if (-not $env:QCRD_DB_NAME)     { $env:QCRD_DB_NAME = if ($DbName) { $DbName } else { 'InventoryNarai' } }
+if ($DbName)                    { $env:QCRD_DB_NAME = $DbName }
+if (-not $env:QCRD_DB_USER)     { $env:QCRD_DB_USER = if ($env:DB_USER) { $env:DB_USER } else { 'sa' } }
+if (-not $env:QCRD_DB_PASSWORD) { $env:QCRD_DB_PASSWORD = $env:DB_PASSWORD }
+if (-not $env:QCRD_DB_PASSWORD) {
+  $sec = Read-Host "รหัสผ่านของ $($env:QCRD_DB_USER) บน $($env:QCRD_DB_SERVER)" -AsSecureString
+  $env:QCRD_DB_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+    [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+}
+Ok "ปลายทาง: $($env:QCRD_DB_SERVER)/$($env:QCRD_DB_NAME)  (user: $($env:QCRD_DB_USER))"
+
+# ── 2) package ที่สคริปต์ใช้ ─────────────────────────────────────────
+Step 2 'ตรวจ package mssql / xlsx'
+if ((-not (Test-Path (Join-Path $repo 'node_modules\mssql'))) -or (-not (Test-Path (Join-Path $repo 'node_modules\xlsx')))) {
+  Write-Host '    กำลัง npm install (ครั้งแรกใช้เวลาสักครู่)...'
+  npm install --no-audit --no-fund
+  if ($LASTEXITCODE -ne 0) { throw 'npm install ไม่สำเร็จ' }
+}
+Ok 'พร้อมใช้งาน'
+
+# ── 3) สร้างตาราง ───────────────────────────────────────────────────
+if (-not $SkipSchema) {
+  Step 3 'สร้างตาราง rcp_recipe / rcp_line จาก docs\schema-rcp.sql'
+  $sqlcmd = (Get-Command sqlcmd -ErrorAction SilentlyContinue).Source
+  if ($sqlcmd) {
+    & $sqlcmd -S $env:QCRD_DB_SERVER -d $env:QCRD_DB_NAME -U $env:QCRD_DB_USER -P $env:QCRD_DB_PASSWORD -i 'docs\schema-rcp.sql'
+    if ($LASTEXITCODE -ne 0) { throw 'รันสคีมาด้วย sqlcmd ไม่สำเร็จ' }
+  } else {
+    Warn 'ไม่พบ sqlcmd — ใช้ตัวรันของ node แทน (ผลเหมือนกัน)'
+    node scripts\run-sql.mjs docs\schema-rcp.sql
+    if ($LASTEXITCODE -ne 0) { throw 'รันสคีมาไม่สำเร็จ' }
+  }
+  Ok 'ตารางพร้อมแล้ว (รันซ้ำได้ ไม่ทับของเดิม)'
+} else {
+  Step 3 'ข้ามขั้นสร้างตาราง (-SkipSchema)'
+}
+
+# ── 4) อ่านไฟล์ก่อน ไม่เขียนอะไร ─────────────────────────────────────
+Step 4 'อ่านไฟล์และตรวจข้อมูล (ยังไม่เขียนลงฐาน)'
+node scripts\migrate-rcp.mjs $File --tab $Tab --dry-run
+if ($LASTEXITCODE -ne 0) { throw 'อ่านไฟล์ไม่สำเร็จ — ดูข้อความผิดพลาดด้านบน' }
+
+if (-not $Yes) {
+  Write-Host ''
+  Write-Host 'หมายเหตุ: การนำเข้าจะล้างสูตรเดิมในตาราง rcp_* ทั้งหมดแล้วใส่ชุดใหม่จากไฟล์นี้' -ForegroundColor Yellow
+  Write-Host '          (อยู่ในทรานแซกชันเดียว ล้มกลางทางของเดิมยังอยู่ครบ)' -ForegroundColor Yellow
+  $ans = Read-Host 'ดูตัวเลขข้างบนแล้ว นำเข้าลง SQL เลยไหม? (y/N)'
+  if ($ans -notmatch '^(y|yes|ใช่)$') { Write-Host 'ยกเลิก — ยังไม่ได้เขียนอะไรลงฐานข้อมูล' -ForegroundColor Yellow; exit 0 }
+}
+
+# ── 5) นำเข้าจริง ───────────────────────────────────────────────────
+Step 5 'นำเข้าลง SQL'
+node scripts\migrate-rcp.mjs $File --tab $Tab
+if ($LASTEXITCODE -ne 0) { throw 'นำเข้าไม่สำเร็จ — ดูข้อความผิดพลาดด้านบน' }
+
+Write-Host ''
+Write-Host 'เสร็จแล้ว — เปิดหน้า QC/RD > เมนู แล้วดูบรรทัดบนหัวหน้าว่า "เติมจากสูตร POS อีก N เมนู"' -ForegroundColor Green
+Write-Host 'ถ้ายังไม่ขึ้น ให้ตั้ง QCRD_DB_USER / QCRD_DB_PASSWORD บน Vercel ด้วย (หน้าเว็บต่อฐานคนละทางกับสคริปต์นี้)' -ForegroundColor Yellow
