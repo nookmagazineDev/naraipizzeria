@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Calendar, Search, Loader2, AlertCircle, AlertTriangle, Download, RefreshCw, Database, ChevronLeft, ChevronRight, HelpCircle } from 'lucide-react';
+import { Calendar, Search, Loader2, AlertCircle, AlertTriangle, Download, RefreshCw, Database, ChevronLeft, ChevronRight, HelpCircle, Info } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style';
 
@@ -54,6 +54,20 @@ const SORTS = {
 };
 
 const EMPTY_DETAIL = { month: '', months: [], branches: [], rows: [], layout: null, source: '' };
+
+/** คำอธิบายกติกา "รอบเดือน" — ต้องบอกไว้ให้ชัด ไม่งั้นคนดูจะงงว่าทำไมปิด 31 ส.ค. ไปอยู่รอบกันยายน */
+function CycleNote({ shiftDays }) {
+  if (!shiftDays) return null;
+  return (
+    <div className="mb-4 px-4 py-2.5 bg-sky-50 border border-sky-100 rounded-xl text-xs text-sky-800 flex items-start gap-2">
+      <Info size={14} className="mt-0.5 shrink-0" />
+      <span>
+        <b>รอบเดือน</b> คิดจากวันที่ปิดยอด โดยยอดที่ปิดใน <b>{shiftDays} วันสุดท้ายของเดือน นับเป็นรอบของเดือนถัดไป</b>
+        {' '}— ปิด 31 ส.ค. กับ 1 ก.ย. จึงอยู่ในรอบกันยายนเหมือนกัน ไม่ถูกแยกเป็นคนละรอบ
+      </span>
+    </div>
+  );
+}
 
 export default function MonthEndList() {
   const [view, setView] = useState('summary');   // 'summary' = หน้าแรก | 'detail' = รายไอเทม
@@ -180,7 +194,7 @@ export default function MonthEndList() {
 
   const exportExcel = () => {
     if (rows.length === 0) { toast.error('ไม่มีรายการให้ export'); return; }
-    const head = ['วันที่ปิดรอบ', 'สาขา', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'ยอดคงเหลือ'];
+    const head = ['รอบเดือน', 'วันที่ปิดยอด', 'สาขา', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'ยอดคงเหลือ'];
     if (has('unitValue')) head.push('มูลค่า/หน่วย');
     if (has('totalValue')) head.push('มูลค่ารวม');
     if (has('recordedBy')) head.push('ผู้บันทึก');
@@ -188,7 +202,7 @@ export default function MonthEndList() {
 
     const aoa = [head];
     rows.forEach((r) => {
-      const line = [r.date, r.branch, String(r.itemCode || ''), r.itemName, r.unit, Number(r.balance) || 0];
+      const line = [r.month || '', r.date, r.branch, String(r.itemCode || ''), r.itemName, r.unit, Number(r.balance) || 0];
       if (has('unitValue')) line.push(r.unitValue ?? '');
       if (has('totalValue')) line.push(r.totalValue ?? '');
       if (has('recordedBy')) line.push(r.recordedBy);
@@ -197,8 +211,8 @@ export default function MonthEndList() {
     });
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 45 }, { wch: 8 }, { wch: 12 },
-      ...head.slice(6).map(() => ({ wch: 14 }))];
+    ws['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 45 }, { wch: 8 }, { wch: 12 },
+      ...head.slice(7).map(() => ({ wch: 14 }))];
     const headerStyle = {
       font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
       fill: { patternType: 'solid', fgColor: { rgb: '2E74B5' } },
@@ -311,9 +325,11 @@ export default function MonthEndList() {
 
           {error && errorPanel(error)}
 
+          {!error && detail.rows.length > 0 && <CycleNote shiftDays={detail.layout?.cycleShiftDays} />}
+
           {!error && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-              <SummaryCard label="เดือนที่ปิดรอบ" value={detail.month ? monthLabel(detail.month) : '-'} tone="sky" />
+              <SummaryCard label="รอบเดือนที่ดูอยู่" value={detail.month ? monthLabel(detail.month) : '-'} tone="sky" />
               <SummaryCard label="จำนวนรายการ" value={fmt0(rows.length)} tone="indigo" />
               <SummaryCard label="ยอดคงเหลือรวม" value={fmt2(totals.balance)} tone="emerald" />
               <SummaryCard
@@ -332,7 +348,7 @@ export default function MonthEndList() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50/50">
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">วันที่ปิดรอบ</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">วันที่ปิดยอด</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-20">สาขา</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">รหัสสินค้า</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
@@ -405,8 +421,9 @@ export default function MonthEndList() {
 function SummaryView({ summary, loading, error, onReload, onOpen, renderError }) {
   const { branches, latestDate } = summary;
 
-  // สาขาที่ปิดยอดไม่ถึงเดือนล่าสุดที่มีในระบบ = ยังตามหลังอยู่ ควรเห็นชัดตั้งแต่แถวแรก
-  const latestMonth = String(latestDate || '').slice(0, 7);
+  // สาขาที่ปิดยังไม่ถึง "รอบ" ล่าสุดที่มีในระบบ = ยังตามหลังอยู่ ควรเห็นชัดตั้งแต่แถวแรก
+  // เทียบด้วยรอบเดือน ไม่ใช่วันที่ — ปิด 31 ส.ค. กับ 1 ก.ย. อยู่รอบเดียวกัน ไม่มีใครตามหลังใคร
+  const latestMonth = summary.latestMonth || String(latestDate || '').slice(0, 7);
   const behind = branches.filter((b) => b.month && latestMonth && b.month < latestMonth);
 
   return (
@@ -428,6 +445,8 @@ function SummaryView({ summary, loading, error, onReload, onOpen, renderError })
       </div>
 
       {error && renderError(error)}
+
+      {!loading && branches.length > 0 && <CycleNote shiftDays={summary.layout?.cycleShiftDays} />}
 
       {!error && !loading && branches.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
