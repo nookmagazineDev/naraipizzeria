@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Calendar, Search, Loader2, AlertCircle, AlertTriangle, Download, RefreshCw, Database, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Calendar, Search, Loader2, AlertCircle, AlertTriangle, Download, RefreshCw, Database, ChevronLeft, ChevronRight, HelpCircle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style';
 
@@ -71,6 +71,29 @@ export default function MonthEndList() {
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('branch');
+
+  // ── ตรวจการเชื่อมต่อ (โผล่เฉพาะตอนอ่านข้อมูลไม่ได้) ──
+  const [diag, setDiag] = useState(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+
+  const runDiag = async () => {
+    setDiagLoading(true);
+    setDiag(null);
+    try {
+      const res = await fetch('/api/stock-month-end?view=diag');
+      const json = await res.json();
+      if (json.status !== 'success') throw new Error(json.message || 'ตรวจการเชื่อมต่อไม่สำเร็จ');
+      setDiag(json.data);
+    } catch (err) {
+      setDiag({ hint: `ตรวจไม่สำเร็จ: ${err.message}` });
+    } finally {
+      setDiagLoading(false);
+    }
+  };
+
+  const errorPanel = (message) => (
+    <ErrorPanel message={message} onDiag={runDiag} diag={diag} diagLoading={diagLoading} />
+  );
 
   const loadSummary = useCallback(async ({ quiet = true } = {}) => {
     setSummaryLoading(true);
@@ -215,6 +238,7 @@ export default function MonthEndList() {
           error={summaryError}
           onReload={() => loadSummary({ quiet: false })}
           onOpen={openDetail}
+          renderError={errorPanel}
         />
       ) : (
         <>
@@ -285,7 +309,7 @@ export default function MonthEndList() {
             </button>
           </div>
 
-          {error && <ErrorBox message={error} />}
+          {error && errorPanel(error)}
 
           {!error && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -378,7 +402,7 @@ export default function MonthEndList() {
 
 /* ─────────────────── หน้าแรก: สาขาไหนปิดยอดถึงวันไหนแล้ว ─────────────────── */
 
-function SummaryView({ summary, loading, error, onReload, onOpen }) {
+function SummaryView({ summary, loading, error, onReload, onOpen, renderError }) {
   const { branches, latestDate } = summary;
 
   // สาขาที่ปิดยอดไม่ถึงเดือนล่าสุดที่มีในระบบ = ยังตามหลังอยู่ ควรเห็นชัดตั้งแต่แถวแรก
@@ -403,7 +427,7 @@ function SummaryView({ summary, loading, error, onReload, onOpen }) {
         )}
       </div>
 
-      {error && <ErrorBox message={error} />}
+      {error && renderError(error)}
 
       {!error && !loading && branches.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -503,12 +527,73 @@ function Spinner({ text }) {
   );
 }
 
-/** ข้อความ error จาก API บอกวิธีแก้มาด้วยเสมอ — แสดงตรง ๆ ทั้งก้อน อย่าตัดทิ้ง */
-function ErrorBox({ message }) {
+/**
+ * ข้อความ error จาก API บอกวิธีแก้มาด้วยเสมอ — แสดงตรง ๆ ทั้งก้อน อย่าตัดทิ้ง
+ * ปุ่ม "ตรวจการเชื่อมต่อ" ไล่ทีละขา (ต่อ SQL ตรง / host API / เวอร์ชัน host-server)
+ * แล้วบอกว่าต้องไปแก้ตรงไหน — ไม่งั้นเห็นแค่คำว่า timeout แล้วเดาต่อไม่ถูก
+ */
+function ErrorPanel({ message, onDiag, diag, diagLoading }) {
   return (
-    <div className="mb-4 p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm flex items-start gap-2">
-      <AlertCircle size={18} className="mt-0.5 shrink-0" />
-      <span className="whitespace-pre-wrap">{message}</span>
+    <div className="mb-4 p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm">
+      <div className="flex items-start gap-2">
+        <AlertCircle size={18} className="mt-0.5 shrink-0" />
+        <span className="whitespace-pre-wrap flex-1">{message}</span>
+        <button
+          onClick={onDiag}
+          disabled={diagLoading}
+          className="px-3 py-1.5 bg-white border border-rose-200 text-rose-700 text-xs rounded-lg hover:bg-rose-100 disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap transition-colors">
+          {diagLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <HelpCircle className="w-3.5 h-3.5" />}
+          ตรวจการเชื่อมต่อ
+        </button>
+      </div>
+
+      {diag && (
+        <div className="mt-3 pt-3 border-t border-rose-200 space-y-2 text-xs">
+          {diag.direct && (
+            <DiagRow
+              label="ต่อ SQL ตรงจาก Vercel"
+              ok={diag.direct.ok}
+              detail={diag.direct.target || ''}
+              note={diag.direct.error}
+              ms={diag.direct.ms} />
+          )}
+          {diag.host && (
+            <>
+              <DiagRow
+                label="host API /sheets/ping"
+                ok={diag.host.ping.ok && diag.host.ping.status === 200}
+                detail={diag.host.base}
+                note={diag.host.ping.error || (diag.host.ping.status !== 200 ? `HTTP ${diag.host.ping.status}` : '')}
+                ms={diag.host.ping.ms} />
+              <DiagRow
+                label="host API /sheets/month-end-summary"
+                ok={diag.host.summary.ok && diag.host.summary.status === 200}
+                detail="endpoint ของหน้านี้"
+                note={diag.host.summary.error || (diag.host.summary.status !== 200 ? `HTTP ${diag.host.summary.status}` : '')}
+                ms={diag.host.summary.ms} />
+            </>
+          )}
+          {diag.hint && (
+            <div className="mt-2 p-2.5 bg-white border border-rose-100 rounded-lg text-rose-800 whitespace-pre-wrap">
+              👉 {diag.hint}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiagRow({ label, ok, detail, note, ms }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className={`mt-0.5 w-2 h-2 rounded-full shrink-0 ${ok ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+      <div className="flex-1">
+        <span className="font-medium text-gray-700">{label}</span>
+        {detail && <span className="text-gray-400"> — {detail}</span>}
+        {note && <div className="text-rose-600 break-all">{note}</div>}
+      </div>
+      {ms !== undefined && <span className="text-gray-400 whitespace-nowrap">{(ms / 1000).toFixed(1)} วิ</span>}
     </div>
   );
 }
