@@ -14,15 +14,17 @@
 //   POST /api/qcrd-sync            { steps: ['item'] }        ← เรียกจากหน้าเว็บ
 //   GET  /api/qcrd-sync?steps=item,menu,bom,group&verify=1     ← เปิดจากเบราว์เซอร์ก็ได้
 //
-// ไปถึง SQL ได้ 2 ทาง เลือกให้เองตามที่ตั้งค่าไว้:
+// ไปถึง SQL ได้ 2 ทาง ลองตามลำดับนี้ (ทางแรกไม่ติดถอยไปทางที่สองให้เอง):
 //   1) ต่อ SQL ตรงจาก Vercel — ใช้ตัวย้ายชุดเดียวกับ /api/qcrd-migrate (ต้องตั้งรหัสฐานบน Vercel)
 //   2) host API GET /qcrd/migrate ที่เครื่องออฟฟิศ — เครื่องนั้นอ่านชีทเองแล้วเขียนลงฐานให้
 //      (ไม่มีลิมิต 60 วิเหมือน Vercel จึงจบในรอบเดียว) ต้องตั้ง QCRD_WRITE_KEY ให้ตรงกัน
+//   ที่ร้าน SQL ไม่ได้เปิดพอร์ตออกเน็ต แต่ตั้ง QCRD_DB_USER ไว้ใช้กับหน้าอื่น เมื่อก่อนจึงเลือกทางที่ 1
+//   แล้วขึ้น "ต่อ SQL Server ... ไม่ได้: Failed to connect ... in 15000ms" ทั้งที่ทางที่ 2 ใช้ได้อยู่
 //
 // ⚠️ การลบไม่ตามขึ้นไป — ตัวดันใช้ MERGE (เพิ่ม/อัปเดต) ไม่ลบแถวที่หายไปจากชีท
 //    จะเอาวัตถุดิบออกจากหน้านับสต๊อก ให้ตั้งสถานะเป็น "ปิดการใช้งาน" ในชีทแทนการลบแถว
 //    (หน้านับสต๊อกกรองสถานะนี้ออกอยู่แล้ว) ใส่ &verify=1 เพื่อดูว่าชีทกับ SQL มีกี่แถวห่างกันแค่ไหน
-import { QCRD_API_BASE, hasDirectDb, sqlRoute, saveQcrdSql } from '../../lib/qcrdSource';
+import { QCRD_API_BASE, sqlRoute, saveQcrdSql, viaDirectOrHost } from '../../lib/qcrdSource';
 import { runStep } from './qcrd-migrate';
 
 export const config = { maxDuration: 60 };
@@ -127,17 +129,23 @@ async function viaDirect(step, { verify = false, deadline }) {
  */
 export async function syncToSql(steps, { verify = false, budgetMs = 45000 } = {}) {
   const list = normalizeSteps(steps);
-  const route = hasDirectDb() ? 'direct' : 'host';
   const deadline = Date.now() + budgetMs;
   const results = [];
+
+  // ลองต่อตรงก่อน ต่อไม่ติดถอยไป host API ให้เอง (ดู viaDirectOrHost ใน lib/qcrdSource.js)
+  // — เดิมเลือกทางจาก hasDirectDb() อย่างเดียว พอ SQL ไม่ได้เปิดพอร์ตออกเน็ต ปุ่ม "อัพขึ้น SQL"
+  //   จึงขึ้น "ต่อ SQL Server ... ไม่ได้: Failed to connect ... in 15000ms" ทั้งที่ทาง host API ใช้ได้อยู่
+  const runStepBothWays = (step, { verify: v = false } = {}) => viaDirectOrHost(
+    `อัพขึ้น SQL (${step})`,
+    () => viaDirect(step, { verify: v, deadline }),
+    () => viaHost(step, { verify: v, timeoutMs: Math.max(5000, deadline - Date.now()) }),
+  );
 
   for (const step of list) {
     const t0 = Date.now();
     try {
-      const data = hasDirectDb()
-        ? await viaDirect(step, { deadline })
-        : await viaHost(step, { timeoutMs: Math.max(5000, deadline - Date.now()) });
-      results.push({ step, ok: true, tookMs: Date.now() - t0, ...data });
+      const { data, route } = await runStepBothWays(step);
+      results.push({ step, ok: true, tookMs: Date.now() - t0, ...data, route });
     } catch (err) {
       results.push({ step, ok: false, tookMs: Date.now() - t0, message: err.message });
       break;   // ชุดถัดไปก็ไปไม่ถึงอยู่ดี (ทางเดียวกัน) ไม่ต้องรอ timeout ซ้ำ
@@ -146,10 +154,8 @@ export async function syncToSql(steps, { verify = false, budgetMs = 45000 } = {}
 
   if (verify && results.every((r) => r.ok)) {
     try {
-      const data = hasDirectDb()
-        ? await viaDirect('verify', { verify: true, deadline })
-        : await viaHost('verify', { verify: true, timeoutMs: Math.max(5000, deadline - Date.now()) });
-      results.push({ step: 'verify', ok: true, ...data });
+      const { data, route } = await runStepBothWays('verify', { verify: true });
+      results.push({ step: 'verify', ok: true, ...data, route });
     } catch (err) {
       results.push({ step: 'verify', ok: false, message: err.message });
     }
@@ -158,7 +164,9 @@ export async function syncToSql(steps, { verify = false, budgetMs = 45000 } = {}
   const failed = results.filter((r) => !r.ok);
   return {
     ok: failed.length === 0 && results.length > 0,
-    route, via: sqlRoute(), steps: list, results,
+    // ทางที่ใช้จริง (อาจไม่ใช่ทางที่ตั้งค่าไว้ ถ้าถอยไป host API ระหว่างทาง)
+    route: results.find((r) => r.route)?.route || sqlRoute(),
+    via: sqlRoute(), steps: list, results,
     message: results.length === 0
       ? 'ไม่ได้ระบุชุดข้อมูลที่จะดันขึ้น SQL'
       : failed.length
