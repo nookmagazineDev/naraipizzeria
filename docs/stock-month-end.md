@@ -1,7 +1,16 @@
 # ดูข้อมูลปิดรอบเดือน (STOCK) — อ่านจาก `dbo.stock_month_end`
 
-หน้าใหม่ในเมนู **STOCK → ดูข้อมูลปิดรอบเดือน** แสดงยอดปิดรอบของเดือนที่เลือก
-ตรงจากตาราง `dbo.stock_month_end` ในฐาน `InventoryNarai` — **ดูอย่างเดียว ไม่มีปุ่มแก้/บันทึก**
+หน้าใหม่ในเมนู **STOCK → ดูข้อมูลปิดรอบเดือน** อ่านจากตาราง `dbo.stock_month_end`
+ในฐาน `InventoryNarai` — **ดูอย่างเดียว ไม่มีปุ่มแก้/บันทึก**
+
+สองหน้าจอ:
+
+1. **สรุป (หน้าแรก)** — แต่ละสาขาปิดยอดรอบล่าสุดถึงวันไหน กี่รายการ ยอด/มูลค่ารวมเท่าไหร่
+   บันทึกล่าสุดเมื่อไหร่ พร้อมป้าย "ตามหลังรอบล่าสุด" ให้สาขาที่ยังปิดไม่ถึงเดือนล่าสุดของระบบ
+   (คำถามแรกของออฟฟิศคือ "สาขาไหนยังไม่ปิดรอบ" ไม่ใช่ตัวเลขรายไอเทม — และเบากว่ามาก
+   ฐานสรุปมาให้เป็นสิบกว่าแถว ไม่ต้องลากรายไอเทมทั้งเดือนมาตั้งแต่เปิดหน้า)
+2. **รายละเอียด** — กดที่แถวสาขา (หรือปุ่ม "ดูรายการของ<เดือน> ทุกสาขา") แล้วค่อยโหลดรายไอเทม
+   ของรอบนั้น เปลี่ยนเดือน/สาขา ค้นหา เรียงลำดับ และ Export Excel ได้ในหน้านี้
 
 ## ⚠️ คนละชุดกับ "ยอดยกมา (Endding)" ในหน้านับสต๊อก
 
@@ -18,13 +27,16 @@
 เหมือนชุดอื่นในฐานนี้ทุกอย่าง (ดู `lib/sheetsSource.js`) — ลองตามลำดับ:
 
 1. ต่อ SQL ตรงจาก Vercel (`lib/qcrdPool.js`) เมื่อมี `QCRD_DB_USER/PASSWORD` (หรือ `ZK_DB_*` / `HR_DB_*`)
-2. host API ที่เครื่องออฟฟิศ — `GET /sheets/month-end?month=&branch=` และ `GET /sheets/month-end-months`
-   (`host-server/sheets-db.js` — ต้อง **git pull แล้วรีสตาร์ท** host-server ถึงจะมี endpoint นี้)
+2. host API ที่เครื่องออฟฟิศ — `GET /sheets/month-end-summary` · `GET /sheets/month-end?month=&branch=` ·
+   `GET /sheets/month-end-months` (`host-server/sheets-db.js` — ต้อง **git pull แล้วรีสตาร์ท**
+   host-server ถึงจะมี endpoint พวกนี้)
 
 **ต่อ SQL ตรงไม่ติดจะถอยไปทางที่ 2 ให้เอง** (ต่างจากชุดอื่นในไฟล์นี้ที่ยึดทางเดียวตามที่ตั้ง env ไว้)
 เพราะที่ร้าน SQL ไม่ได้เปิดพอร์ตออกเน็ต แต่ `QCRD_DB_USER` ถูกตั้งไว้บน Vercel เพื่อใช้กับหน้าอื่นอยู่แล้ว
 ถ้าไม่ถอยให้ หน้านี้จะตายที่ `Failed to connect to inventory.dyndns.tv:1433 in 15000ms` ทั้งที่ host API ใช้ได้
 ถอยเฉพาะ error ที่แปลว่า "ไปไม่ถึงเครื่อง" เท่านั้น — ตารางไม่มี/ไม่มีสิทธิ์/จับคู่คอลัมน์ไม่ได้ ยังเด้งขึ้นมาให้แก้เหมือนเดิม
+ต่อตรงไม่ติดครั้งหนึ่งแล้ว **จำไว้ 5 นาที** แล้วข้ามไป host API เลย (พอร์ตที่ปิดอยู่ไม่ได้เปิดเองใน 1 นาที)
+เวลา 15 วิที่ประหยัดได้เอาไปเผื่อให้ host API ตอบทัน — ฝั่ง host API รอถึง 40 วิ และ API route ตั้ง `maxDuration` ไว้ 60 วิ
 กล่องพับท้ายหน้าบอกว่ารอบนั้นอ่านผ่านทางไหน (`meta.source` ของ API ก็บอกเหมือนกัน)
 
 ไม่มีทางถอยไปอ่านชีท เพราะข้อมูลชุดนี้ไม่เคยอยู่ในชีท — ไปไม่ถึงฐานทั้งสองทาง = หน้านั้นขึ้นข้อความบอกสาเหตุทั้งคู่
@@ -32,12 +44,17 @@
 ## API
 
 ```
+GET /api/stock-month-end?view=summary             สรุปรายสาขา (หน้าแรก)
 GET /api/stock-month-end                          เดือนล่าสุดที่มีข้อมูล ทุกสาขา
 GET /api/stock-month-end?month=2026-08            เดือนที่ระบุ (YYYY-MM)
 GET /api/stock-month-end?month=2026-08&branch=CRM เฉพาะสาขานั้น
 ```
 
-คืน `{ status, data: { month, months[], branches[], rows[], layout }, meta }`
+`view=summary` คืน `{ status, data: { branches[], latestDate, layout, source }, meta }`
+โดย `branches[]` = `{ branch, date, month, items, balance, value, recordedAt }`
+(นับเฉพาะแถวของวันที่ปิดล่าสุดของสาขานั้น ไม่รวมเดือนก่อน ๆ)
+
+ส่วนแบบปกติคืน `{ status, data: { month, months[], branches[], rows[], layout, source }, meta }`
 โดย `rows[]` = `{ date, branch, itemCode, itemKey, itemName, unit, balance, unitValue, totalValue, recordedBy, recordedAt }`
 
 ## ชื่อคอลัมน์ — จับคู่ให้เองตอนอ่าน

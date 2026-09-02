@@ -176,7 +176,7 @@ $env:SHEETS_WRITE_KEY = '<สุ่มข้อความยาว ๆ>'   # �
   ดูรายละเอียดในข้อ 1 ของ `docs/sheets-sql-migration.md`
 - เช็กว่าพร้อมไหม: `http://localhost:14365/sheets/ping` — คืนจำนวนแถวของทั้ง 5 ตาราง
   ถ้าขึ้น `Invalid object name` แปลว่ายังไม่ได้สร้างตาราง ให้รัน `scripts\migrate-sheets.ps1` ก่อน
-- `/sheets/month-end` กับ `/sheets/month-end-months` อ่านตาราง `dbo.stock_month_end` ที่มีอยู่แล้วในฐาน
+- `/sheets/month-end-summary` · `/sheets/month-end` · `/sheets/month-end-months` อ่านตาราง `dbo.stock_month_end` ที่มีอยู่แล้วในฐาน
   (หน้า STOCK → "ดูข้อมูลปิดรอบเดือน" — ดูอย่างเดียว ไม่เกี่ยวกับการย้ายชีท ดู `docs/stock-month-end.md`)
 - ฝั่ง Vercel ตั้ง `SHEETS_API_BASE=<URL ของ host API>` · `SHEETS_WRITE_KEY=<ค่าเดียวกัน>`
   (`SHEETS_SOURCE=sql` คุมแพลน/ปิดรอบ/ค่าใช้จ่าย ส่วน**พนักงานยึด SQL เสมอ ไม่ต้องตั้งอะไร**)

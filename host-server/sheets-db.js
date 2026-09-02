@@ -14,6 +14,7 @@
 //    GET  /sheets/expense-ref              รหัสค่าใช้จ่าย (ประเภท/สาขา/รหัส)
 //    GET  /sheets/expense                  ค่าใช้จ่ายที่บันทึกแล้วทั้งหมด
 //    GET  /sheets/employee                 รายชื่อพนักงาน
+//    GET  /sheets/month-end-summary        สรุปรายสาขา: ปิดยอดรอบล่าสุดถึงวันไหน กี่รายการ มูลค่าเท่าไหร่
 //    GET  /sheets/month-end?month=&branch= แถวปิดรอบเดือนจาก dbo.stock_month_end (ไม่ระบุเดือน = เดือนล่าสุด)
 //    GET  /sheets/month-end-months         เดือนที่มีข้อมูลปิดรอบ ('YYYY-MM' ใหม่ก่อน)
 //    GET  /sheets/scan-edit?start=&end=    เวลาสแกนนิ้วที่แก้ด้วยมือ (แถวล่าสุดของแต่ละช่อง)
@@ -118,6 +119,9 @@ function mountSheets(app) {
   app.get('/sheets/employee', read('readEmployees'));
 
   // ข้อมูลปิดรอบเดือน — หน้า "ดูข้อมูลปิดรอบเดือน" (STOCK) ดูอย่างเดียว ไม่มีฝั่งเขียน
+  app.get('/sheets/month-end-summary', (req, res) =>
+    send(res, getMonthEnd().then(c => c.readMonthEndSummary()), 'readMonthEndSummary'));
+
   app.get('/sheets/month-end', (req, res) => send(res, getMonthEnd().then(c => c.readMonthEnd({
     month: str(req.query.month), branch: str(req.query.branch),
   })), 'readMonthEnd'));
