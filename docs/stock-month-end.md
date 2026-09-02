@@ -47,19 +47,23 @@ GET /api/stock-month-end?month=2026-08&branch=CRM เฉพาะสาขาน
 แล้วจับคู่กับรายชื่อที่รู้จักใน `MONTH_END_COLUMNS` (เทียบแบบไม่สนตัวพิมพ์/ขีดล่าง/ช่องว่าง —
 `close_date`, `CloseDate`, `[close date]` ถือว่าตัวเดียวกัน)
 
-| ช่องที่หน้าเว็บใช้ | ชื่อคอลัมน์ที่รู้จัก (เรียงตามลำดับที่เลือก) |
-|---|---|
-| `date` (บังคับ) | close_date · month_end_date · end_date · stock_date · doc_date · period · month · date |
-| `branch` | branch · branch_code · store · store_code · outlet · outlet_code |
-| `itemCode` | item_code · product_code · product_id · item_id · code · sku |
-| `itemKey` | item_key · product_key |
-| `itemName` | item_name · product_name · name · description |
-| `unit` | unit · unit_name · uom |
-| `balance` (บังคับ) | balance · end_qty · closing_qty · qty · quantity · stock_qty · remaining · remain |
-| `unitValue` | unit_value · unit_cost · unit_price · cost · price |
-| `totalValue` | total_value · total_cost · total_amount · amount · total |
-| `recordedBy` | recorded_by · created_by · updated_by · user_name · username |
-| `recordedAt` | recorded_at · record_time · created_at · updated_at · saved_at |
+| ช่องที่หน้าเว็บใช้ | คอลัมน์จริงที่ร้านใช้อยู่ | ชื่ออื่นที่รองรับด้วย |
+|---|---|---|
+| `date` (บังคับ) | `closing_date` (date) | close_date · month_end_date · end_date · stock_date · doc_date · period · month · date |
+| `branch` | `branch` | branch_code · store · store_code · outlet · outlet_code |
+| `itemCode` | `item_code` | product_code · product_id · item_id · code · sku |
+| `itemKey` | `item_key` | product_key |
+| `itemName` | `item_name` | product_name · name · description |
+| `balance` (บังคับ) | `qty` (decimal) | balance · end_qty · closing_qty · quantity · stock_qty · remaining · remain |
+| `unit` | `unit` | unit_name · uom |
+| `unitValue` | `unit_price` | unit_value · unit_cost · cost · price |
+| `totalValue` | `amount` | total_value · total_cost · total_amount · total |
+| `recordedBy` | `recorder` | recorded_by · created_by · updated_by · user_name · username |
+| `recordedAt` | `saved_at` (datetime2) | recorded_at · record_time · created_at · updated_at |
+| `rowId` (ใช้เรียงเท่านั้น) | `closing_id` (bigint) | month_end_id · id |
+
+โครงจริงที่ร้าน (เช็กเมื่อ 2026-09 — 15,104 แถว):
+`closing_id · closing_date · branch · item_key · item_code · item_name · unit · qty · unit_price · amount · recorder · saved_at`
 
 - ช่องที่ตารางไม่มีคอลัมน์ให้ — คอลัมน์นั้นจะ**หายไปจากตารางบนหน้าเว็บ**เลย (ไม่ใช่ขึ้น "-" ทั้งแถว)
 - ขาด `date` หรือ `balance` = อ่านไม่ได้ หน้าเว็บจะขึ้น error ที่**บอกชื่อคอลัมน์จริงทั้งหมดของตารางมาด้วย**
