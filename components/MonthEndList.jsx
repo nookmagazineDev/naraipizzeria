@@ -45,7 +45,7 @@ export default function MonthEndList() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('branch');
 
-  const [data, setData] = useState({ month: '', months: [], branches: [], rows: [], layout: null });
+  const [data, setData] = useState({ month: '', months: [], branches: [], rows: [], layout: null, source: '' });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -304,6 +304,8 @@ export default function MonthEndList() {
             <div className="pt-2 text-gray-400">
               คอลัมน์ทั้งหมดในตาราง: <span className="font-mono">{(data.layout.tableColumns || []).join(', ')}</span>
             </div>
+            {/* ทางที่อ่านได้จริง — ต่อ SQL ตรง หรือถอยมาทาง host API ที่เครื่องออฟฟิศ */}
+            {data.source && <div className="text-gray-400">อ่านผ่าน: {data.source}</div>}
           </div>
         </details>
       )}

@@ -17,6 +17,10 @@
 // ไม่มีทางถอยไปชีท — ข้อมูลชุดนี้ไม่เคยอยู่ในชีท ต่อฐานไม่ได้ = ตอบ error ให้หน้าเว็บขึ้นข้อความ
 import { readMonthEnd, sqlRoute } from '../../lib/sheetsSource';
 
+// ต่อ SQL ตรงไม่ติดจะรอ 15 วิ ก่อนถอยไปเรียก host API (ซึ่งรอได้อีก 20 วิ) — เกินเพดาน
+// ค่าเริ่มต้น 10 วิของ Vercel ไปไกล ไม่ยืดตรงนี้จะโดนตัดกลางทางแล้วขึ้นเป็น error คนละเรื่อง
+export const config = { maxDuration: 60 };
+
 const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
 
 export default async function handler(req, res) {
@@ -48,7 +52,8 @@ export default async function handler(req, res) {
         branch: branch || 'all',
         rows: data.rows.length,
         months: data.months.length,
-        source: sqlRoute(),
+        // ทางที่ใช้ได้จริง (ต่อ SQL ตรง หรือถอยมา host API) — ไม่ใช่ทางที่ตั้งใจจะใช้
+        source: data.source || sqlRoute(),
       },
     });
   } catch (error) {
