@@ -14,6 +14,8 @@
 //    GET  /sheets/expense-ref              รหัสค่าใช้จ่าย (ประเภท/สาขา/รหัส)
 //    GET  /sheets/expense                  ค่าใช้จ่ายที่บันทึกแล้วทั้งหมด
 //    GET  /sheets/employee                 รายชื่อพนักงาน
+//    GET  /sheets/month-end?month=&branch= แถวปิดรอบเดือนจาก dbo.stock_month_end (ไม่ระบุเดือน = เดือนล่าสุด)
+//    GET  /sheets/month-end-months         เดือนที่มีข้อมูลปิดรอบ ('YYYY-MM' ใหม่ก่อน)
 //    GET  /sheets/scan-edit?start=&end=    เวลาสแกนนิ้วที่แก้ด้วยมือ (แถวล่าสุดของแต่ละช่อง)
 //    GET  /sheets/scan-edit-history?date=&emp=   ประวัติการแก้ของคนหนึ่งในวันหนึ่ง
 //    POST /sheets/save   { action, ... }   เขียน (ต้องมี header x-api-key)
@@ -41,6 +43,18 @@ function getCore() {
       .catch(err => { corePromise = null; throw err; });
   }
   return corePromise;
+}
+
+// ข้อมูลปิดรอบเดือน (dbo.stock_month_end) อยู่ฐานเดียวกัน — ตรรกะอยู่ใน lib/monthEndSql.mjs
+// ตารางนี้ไม่ได้สร้างจากรีโปนี้ ตัวอ่านจึงจับคู่ชื่อคอลัมน์เอาเองตอนรันครั้งแรก (ดูหัวไฟล์นั้น)
+let monthEndPromise = null;
+function getMonthEnd() {
+  if (!monthEndPromise) {
+    monthEndPromise = import('../lib/monthEndSql.mjs')
+      .then(m => m.createMonthEnd({ q }))
+      .catch(err => { monthEndPromise = null; throw err; });
+  }
+  return monthEndPromise;
 }
 
 // เวลาสแกนนิ้วที่แก้ด้วยมือ (dbo.attendance_edit) อยู่ฐานเดียวกัน — ตรรกะอยู่ใน lib/scanEditSql.mjs
@@ -102,6 +116,14 @@ function mountSheets(app) {
   app.get('/sheets/expense-ref', read('readExpenseRefs'));
   app.get('/sheets/expense', read('readExpenses'));
   app.get('/sheets/employee', read('readEmployees'));
+
+  // ข้อมูลปิดรอบเดือน — หน้า "ดูข้อมูลปิดรอบเดือน" (STOCK) ดูอย่างเดียว ไม่มีฝั่งเขียน
+  app.get('/sheets/month-end', (req, res) => send(res, getMonthEnd().then(c => c.readMonthEnd({
+    month: str(req.query.month), branch: str(req.query.branch),
+  })), 'readMonthEnd'));
+
+  app.get('/sheets/month-end-months', (req, res) =>
+    send(res, getMonthEnd().then(c => c.readMonthEndMonths()), 'readMonthEndMonths'));
 
   // เวลาสแกนที่แก้ด้วยมือ — ช่วงวันที่เดียวกับที่หน้า "ดูสแกนหน้า" ดึงเวลาสแกนมา
   app.get('/sheets/scan-edit', (req, res) => send(res, getScanEdits().then(c => c.readScanEdits({

@@ -35,6 +35,7 @@ import {
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
+import MonthEndList from '../components/MonthEndList';
 import EmployeeList from '../components/EmployeeList';
 import Attendance from '../components/Attendance';
 import BranchList from '../components/BranchList';
@@ -2368,6 +2369,13 @@ export default function App() {
                     <Eye size={16} />
                     <span>ดูยอดรวมทุกสาขา</span>
                   </button>
+                  <button
+                    onClick={() => { setActiveTab('monthEnd'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'monthEnd' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <Calendar size={16} />
+                    <span>ดูข้อมูลปิดรอบเดือน</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -2522,6 +2530,7 @@ export default function App() {
                 {activeTab === 'details' && <Layers size={20} className="text-amber-600" />}
                 {activeTab === 'itemSearch' && <Search size={20} className="text-amber-600" />}
                 {(activeTab === 'stockList' || activeTab === 'stockTotal') && <PackageSearch size={20} className="text-amber-600" />}
+                {activeTab === 'monthEnd' && <Calendar size={20} className="text-amber-600" />}
                 {activeTab === 'employeeList' && <Users size={20} className="text-amber-600" />}
                 {activeTab === 'attendance' && <Fingerprint size={20} className="text-amber-600" />}
                 {activeTab === 'branchList' && <Building2 size={20} className="text-amber-600" />}
@@ -2537,6 +2546,7 @@ export default function App() {
                   : activeTab === 'itemSearch' ? 'ค้นหารายไอเทม'
                   : activeTab === 'stockList' ? 'นับสต๊อกและขอเบิก'
                   : activeTab === 'stockTotal' ? 'ดูยอดรวมทุกสาขา'
+                  : activeTab === 'monthEnd' ? 'ดูข้อมูลปิดรอบเดือน'
                   : activeTab === 'employeeList' ? 'รายชื่อพนักงาน'
                   : activeTab === 'attendance' ? 'ดูสแกนหน้า (เข้า-ออกงาน)'
                   : activeTab === 'branchList' ? 'จัดการสาขา'
@@ -2581,6 +2591,9 @@ export default function App() {
             {/* STOCK VIEWS (จาก Narai-branch — โหมดดูอย่างเดียว) */}
             {activeTab === 'stockList' && <StockList />}
             {activeTab === 'stockTotal' && <StockTotalList />}
+
+            {/* STOCK: ดูข้อมูลปิดรอบเดือน — จากตาราง dbo.stock_month_end ผ่าน /api/stock-month-end */}
+            {activeTab === 'monthEnd' && <MonthEndList />}
 
             {/* HR VIEWS (รายชื่อพนักงาน — ดึงจาก Google Sheet ผ่าน GAS) */}
             {activeTab === 'employeeList' && <EmployeeList />}
