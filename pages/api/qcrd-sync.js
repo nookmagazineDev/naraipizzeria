@@ -25,6 +25,7 @@
 //    จะเอาวัตถุดิบออกจากหน้านับสต๊อก ให้ตั้งสถานะเป็น "ปิดการใช้งาน" ในชีทแทนการลบแถว
 //    (หน้านับสต๊อกกรองสถานะนี้ออกอยู่แล้ว) ใส่ &verify=1 เพื่อดูว่าชีทกับ SQL มีกี่แถวห่างกันแค่ไหน
 import { QCRD_API_BASE, sqlRoute, saveQcrdSql, viaDirectOrHost } from '../../lib/qcrdSource';
+import { explainHostError } from '../../lib/directRoute';
 import { runStep } from './qcrd-migrate';
 
 export const config = { maxDuration: 60 };
@@ -94,7 +95,7 @@ async function viaHost(step, { verify = false, timeoutMs = 50000 } = {}) {
     cache: 'no-store',
     signal: AbortSignal.timeout(timeoutMs),
     headers: { 'ngrok-skip-browser-warning': 'true' },
-  });
+  }).catch((err) => { throw explainHostError(err, { base: QCRD_API_BASE, timeoutMs }); });
   const text = await res.text();
   let json;
   try { json = JSON.parse(text); }
