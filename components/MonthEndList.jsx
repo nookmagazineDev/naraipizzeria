@@ -57,27 +57,19 @@ const SORTS = {
 const EMPTY_DETAIL = { month: '', months: [], branches: [], rows: [], layout: null, source: '' };
 
 /**
- * คำอธิบายกติกา "รอบเดือน" — ต้องบอกไว้ให้ชัด ไม่งั้นคนดูจะงงว่าทำไมยอดที่ปิด 1 ก.ย. ไปอยู่รอบสิงหาคม
- * รองรับทั้งกติกาถอยหลัง (ค่าลบ ใช้อยู่ตอนนี้) และเลื่อนไปข้างหน้า เผื่อวันหลังเปลี่ยนใจ
+ * คำอธิบายกติกา "รอบเดือน" — ต้องบอกไว้ให้ชัด ไม่งั้นคนดูจะงงว่าทำไมยอดที่ปิด 3 ก.ย. ไปอยู่รอบสิงหาคม
+ * cutoffDay = 0 แปลว่าคอลัมน์วันที่เป็นข้อความ คิดกติกานี้ไม่ได้ จึงไม่ต้องขึ้นหมายเหตุ
  */
-function CycleNote({ shiftDays }) {
-  if (!shiftDays) return null;
-  const days = Math.abs(shiftDays);
+function CycleNote({ cutoffDay }) {
+  if (!cutoffDay) return null;
   return (
     <div className="mb-4 px-4 py-2.5 bg-sky-50 border border-sky-100 rounded-xl text-xs text-sky-800 flex items-start gap-2">
       <Info size={14} className="mt-0.5 shrink-0" />
-      {shiftDays < 0 ? (
-        <span>
-          <b>รอบเดือน</b> เรียกตามเดือนที่ปิด ไม่ใช่เดือนของวันที่ไปนับ — ยอดที่ปิดใน{' '}
-          <b>{days} วันแรกของเดือน นับเป็นรอบของเดือนก่อนหน้า</b>
-          {' '}ปิด 31 ส.ค. · 1 ก.ย. · 2 ก.ย. จึงอยู่ใน <b>รอบสิงหาคม</b> เหมือนกันหมด ไม่ถูกแยกเป็นคนละรอบ
-        </span>
-      ) : (
-        <span>
-          <b>รอบเดือน</b> คิดจากวันที่ปิดยอด โดยยอดที่ปิดใน <b>{days} วันสุดท้ายของเดือน นับเป็นรอบของเดือนถัดไป</b>
-          {' '}— ปิด 31 ส.ค. กับ 1 ก.ย. จึงอยู่ในรอบกันยายนเหมือนกัน
-        </span>
-      )}
+      <span>
+        <b>รอบเดือน</b> เรียกตามเดือนที่ปิด ไม่ใช่เดือนของวันที่ไปนับ — ยอดที่ปิด{' '}
+        <b>วันที่ 1–{cutoffDay} ของเดือน นับเป็นรอบของเดือนก่อนหน้า</b>
+        {' '}ปิด 31 ส.ค. · 1 ก.ย. · 3 ก.ย. จึงอยู่ใน <b>รอบสิงหาคม</b> เหมือนกันหมด ไม่ถูกแยกเป็นคนละรอบ
+      </span>
     </div>
   );
 }
@@ -338,7 +330,7 @@ export default function MonthEndList() {
 
           {error && errorPanel(error)}
 
-          {!error && detail.rows.length > 0 && <CycleNote shiftDays={detail.layout?.cycleShiftDays} />}
+          {!error && detail.rows.length > 0 && <CycleNote cutoffDay={detail.layout?.cycleCutoffDay} />}
 
           {!error && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -472,7 +464,7 @@ function SummaryView({ summary, loading, error, onReload, onOpen, renderError })
 
       {error && renderError(error)}
 
-      {!loading && branches.length > 0 && <CycleNote shiftDays={summary.layout?.cycleShiftDays} />}
+      {!loading && branches.length > 0 && <CycleNote cutoffDay={summary.layout?.cycleCutoffDay} />}
 
       {!error && !loading && branches.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
