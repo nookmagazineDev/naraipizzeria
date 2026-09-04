@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Calendar, Search, Loader2, AlertCircle, AlertTriangle, Download, RefreshCw, Database, ChevronLeft, ChevronRight, HelpCircle, Info } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style';
+import { useBranches } from '../lib/useBranches';
 
 /*
  * NARAI OFFICE — STOCK → ดูข้อมูลปิดรอบเดือน
@@ -433,10 +434,23 @@ export default function MonthEndList() {
 function SummaryView({ summary, loading, error, onReload, onOpen, renderError }) {
   const { branches, latestDate } = summary;
 
+  // ทะเบียนสาขากลาง (หน้า HR → จัดการสาขา) — ใช้หา "สาขาที่ไม่มีแถวในตารางเลย"
+  // ตาราง stock_month_end บอกได้แค่ว่าใครเคยปิดบ้าง สาขาที่ยังไม่เคยปิดสักรอบจะไม่โผล่มาเอง
+  const { codes: registryCodes } = useBranches();
+
+  // กดการ์ดแล้วเปิดรายชื่อในกลุ่มนั้น — ตัวเลขอย่างเดียวตอบไม่ได้ว่า "แล้วสาขาไหนล่ะ"
+  const [modal, setModal] = useState(null);
+
   // สาขาที่ปิดยังไม่ถึง "รอบ" ล่าสุดที่มีในระบบ = ยังตามหลังอยู่ ควรเห็นชัดตั้งแต่แถวแรก
   // เทียบด้วยรอบเดือน ไม่ใช่วันที่ — ปิด 31 ส.ค. กับ 1 ก.ย. อยู่รอบเดียวกัน ไม่มีใครตามหลังใคร
   const latestMonth = summary.latestMonth || String(latestDate || '').slice(0, 7);
   const behind = branches.filter((b) => b.month && latestMonth && b.month < latestMonth);
+  const done = branches.filter((b) => b.month && b.month === latestMonth);
+
+  // ไม่มีแถวในตารางเลยสักรอบ — คนละเรื่องกับ "ตามหลัง" (ตามหลัง = เคยปิด แต่ยังไม่ถึงรอบล่าสุด)
+  const withData = new Set(branches.map((b) => b.branch));
+  const never = registryCodes.filter((code) => !withData.has(code)).map((code) => ({ branch: code }));
+  const notDone = [...behind, ...never];
 
   return (
     <>
@@ -462,18 +476,40 @@ function SummaryView({ summary, loading, error, onReload, onOpen, renderError })
 
       {!error && !loading && branches.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-          <SummaryCard label="สาขาที่มีข้อมูล" value={fmt0(branches.length)} tone="indigo" />
+          <SummaryCard
+            label="สาขาที่เคยปิดรอบ"
+            value={fmt0(branches.length)}
+            tone="indigo"
+            note="กดดูรายชื่อ"
+            onClick={() => setModal({
+              title: 'สาขาที่เคยปิดรอบ',
+              subtitle: 'ทุกสาขาที่มีข้อมูลในตาราง พร้อมรอบล่าสุดของแต่ละสาขา',
+              items: branches,
+            })} />
+
           <SummaryCard label="รอบล่าสุดในระบบ" value={latestMonth ? monthLabel(latestMonth) : '-'} tone="sky" note={dateLabel(latestDate)} />
+
           <SummaryCard
-            label="ปิดถึงรอบล่าสุดแล้ว"
-            value={fmt0(branches.length - behind.length)}
+            label={`ปิดรอบ ${monthLabel(latestMonth)} แล้ว`}
+            value={fmt0(done.length)}
             tone="emerald"
-            note={`จาก ${branches.length} สาขา`} />
+            note="กดดูรายชื่อ"
+            onClick={() => setModal({
+              title: `ปิดรอบ ${monthLabel(latestMonth)} แล้ว`,
+              subtitle: `${done.length} สาขา — กดที่สาขาเพื่อดูรายการของรอบนั้น`,
+              items: done,
+            })} />
+
           <SummaryCard
-            label="ยังตามหลัง"
-            value={fmt0(behind.length)}
-            tone={behind.length ? 'rose' : 'emerald'}
-            note={behind.length ? behind.map((b) => b.branch).join(', ').slice(0, 60) : 'ครบทุกสาขา'} />
+            label="ยังไม่ปิดรอบล่าสุด"
+            value={fmt0(notDone.length)}
+            tone={notDone.length ? 'rose' : 'emerald'}
+            note={notDone.length ? 'กดดูรายชื่อ' : 'ครบทุกสาขา'}
+            onClick={notDone.length ? () => setModal({
+              title: `ยังไม่ปิดรอบ ${monthLabel(latestMonth)}`,
+              subtitle: 'ตามหลัง = เคยปิดแต่ยังไม่ถึงรอบล่าสุด · ยังไม่เคยปิด = ไม่มีข้อมูลในตารางเลย',
+              items: notDone,
+            }) : undefined} />
         </div>
       )}
 
@@ -543,7 +579,76 @@ function SummaryView({ summary, loading, error, onReload, onOpen, renderError })
           </div>
         )}
       </div>
+
+      {modal && (
+        <BranchListModal
+          {...modal}
+          latestMonth={latestMonth}
+          onClose={() => setModal(null)}
+          onOpen={(m, b) => { setModal(null); onOpen(m, b); }} />
+      )}
     </>
+  );
+}
+
+/**
+ * รายชื่อสาขาในกลุ่มที่กดมาจากการ์ด
+ * สาขาที่มีข้อมูลกดต่อเพื่อไปดูรายการของรอบนั้นได้ ส่วนสาขาที่ยังไม่เคยปิดกดไม่ได้ (ไม่มีอะไรให้ดู)
+ */
+function BranchListModal({ title, subtitle, items, latestMonth, onClose, onOpen }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between p-4 border-b border-sky-100 bg-sky-50/50">
+          <div>
+            <h3 className="font-bold text-sky-800">{title} ({items.length} สาขา)</h3>
+            {subtitle && <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>}
+          </div>
+          <button onClick={onClose} className="text-sky-400 hover:text-sky-700 font-bold text-xl leading-none">&times;</button>
+        </div>
+
+        <div className="p-4 max-h-[65vh] overflow-y-auto">
+          {items.length === 0 ? (
+            <div className="text-center py-8 text-gray-400 text-sm">ไม่มีสาขาในกลุ่มนี้</div>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {items.map((b) => {
+                const closed = Boolean(b.month);
+                const late = closed && latestMonth && b.month < latestMonth;
+                return (
+                  <button
+                    key={b.branch}
+                    onClick={() => closed && onOpen(b.month, b.branch)}
+                    disabled={!closed}
+                    className={`text-left px-3 py-2 rounded-xl border transition-colors ${closed
+                      ? (late ? 'border-rose-100 bg-rose-50/50 hover:bg-rose-100' : 'border-emerald-100 bg-emerald-50/50 hover:bg-emerald-100')
+                      : 'border-gray-100 bg-gray-50 cursor-default'}`}
+                  >
+                    <div className={`text-sm font-bold ${closed ? (late ? 'text-rose-700' : 'text-emerald-700') : 'text-gray-400'}`}>
+                      {b.branch}
+                    </div>
+                    <div className="text-[11px] text-gray-500">
+                      {closed ? `${monthLabel(b.month)} · ปิด ${dateLabel(b.date)}` : 'ยังไม่เคยปิดรอบ'}
+                    </div>
+                    {closed && b.items !== undefined && (
+                      <div className="text-[11px] text-gray-400">{fmt0(b.items)} รายการ</div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
+          <button
+            className="px-4 py-2 bg-sky-100 text-sky-700 rounded-lg text-sm font-medium hover:bg-sky-200 transition-colors"
+            onClick={onClose}>
+            ปิดหน้าต่าง
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -629,7 +734,8 @@ function DiagRow({ label, ok, detail, note, ms }) {
   );
 }
 
-function SummaryCard({ label, value, tone, note }) {
+/** การ์ดสรุป — ส่ง onClick มาด้วยจะกดได้ (เปิดรายชื่อสาขาในกลุ่มนั้น) */
+function SummaryCard({ label, value, tone, note, onClick }) {
   const tones = {
     sky: 'from-sky-50 to-cyan-50 border-sky-100 text-sky-700',
     indigo: 'from-indigo-50 to-violet-50 border-indigo-100 text-indigo-700',
@@ -637,11 +743,23 @@ function SummaryCard({ label, value, tone, note }) {
     amber: 'from-amber-50 to-orange-50 border-amber-100 text-amber-700',
     rose: 'from-rose-50 to-pink-50 border-rose-100 text-rose-700',
   };
-  return (
-    <div className={`bg-gradient-to-r ${tones[tone] || tones.sky} border rounded-xl p-3`}>
+  const body = (
+    <>
       <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">{label}</div>
       <div className="text-lg font-bold mt-0.5">{value}</div>
-      {note && <div className="text-[11px] text-gray-400 mt-0.5 truncate" title={note}>{note}</div>}
-    </div>
+      {note && (
+        <div className={`text-[11px] mt-0.5 truncate ${onClick ? 'text-sky-600 font-medium' : 'text-gray-400'}`} title={note}>
+          {onClick ? `${note} →` : note}
+        </div>
+      )}
+    </>
+  );
+  const cls = `bg-gradient-to-r ${tones[tone] || tones.sky} border rounded-xl p-3`;
+
+  if (!onClick) return <div className={cls}>{body}</div>;
+  return (
+    <button type="button" onClick={onClick} className={`${cls} text-left hover:brightness-95 hover:shadow-sm transition-all`}>
+      {body}
+    </button>
   );
 }
