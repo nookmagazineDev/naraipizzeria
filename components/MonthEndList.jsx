@@ -29,6 +29,17 @@ const fmt2 = (v) => {
 };
 const fmt0 = (v) => (Number(v) || 0).toLocaleString('th-TH');
 
+/**
+ * รหัสสินค้าฝั่งคลังเป็นเลข 8 หลักเสมอ แต่ในตารางบางแถวเก็บมาแค่ 7 หลัก (0 นำหน้าหายไป
+ * ตอนที่ค่าเคยผ่านช่องที่มองเป็นตัวเลข) — เติมกลับให้ครบตอน export ไฟล์จะได้เอาไปใช้ต่อได้เลย
+ * เติมเฉพาะรหัสที่เป็นตัวเลขล้วนและสั้นกว่า 8 หลัก ส่วนรหัสที่มีตัวอักษรปนปล่อยตามเดิม
+ */
+const ITEM_CODE_DIGITS = 8;
+const padItemCode = (code) => {
+  const s = String(code ?? '').trim();
+  return /^\d+$/.test(s) && s.length < ITEM_CODE_DIGITS ? s.padStart(ITEM_CODE_DIGITS, '0') : s;
+};
+
 const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
   'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 
@@ -231,7 +242,7 @@ export default function MonthEndList() {
 
     const aoa = [head];
     rows.forEach((r) => {
-      const line = [r.month || '', r.date, r.branch, String(r.itemCode || ''), r.itemName, r.unit, Number(r.balance) || 0];
+      const line = [r.month || '', r.date, r.branch, padItemCode(r.itemCode || r.itemKey), r.itemName, r.unit, Number(r.balance) || 0];
       if (has('unitValue')) line.push(r.unitValue ?? '');
       if (has('totalValue')) line.push(r.totalValue ?? '');
       if (has('recordedBy')) line.push(r.recordedBy);
@@ -250,6 +261,14 @@ export default function MonthEndList() {
       const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
       if (cell) cell.s = headerStyle;
     });
+
+    // บังคับคอลัมน์รหัสสินค้าเป็น "ข้อความ" — ไม่งั้น Excel มองเป็นตัวเลขแล้วกิน 0 นำหน้าทิ้ง
+    // ตอนเปิดไฟล์ ซึ่งทำให้ที่เติมมาสูญเปล่า (ต้องตั้งทั้ง t และ z ถึงจะอยู่ครบทุกเครื่อง)
+    const codeCol = head.indexOf('รหัสสินค้า');
+    for (let r = 1; r < aoa.length; r++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c: codeCol })];
+      if (cell) { cell.t = 's'; cell.z = '@'; }
+    }
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'ปิดรอบเดือน');
