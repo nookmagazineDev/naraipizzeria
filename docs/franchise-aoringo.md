@@ -35,7 +35,28 @@
                                                                   └─▶ lib/aoringoSql.mjs (ตรรกะชุดเดียวกันทั้งสองทาง)
 ```
 
-## การจับคู่ตาราง/คอลัมน์ (สำคัญเวลาข้อมูลไม่ขึ้น)
+## โครงฐานจริงที่ร้านใช้ (โหมด `app`)
+
+ตรวจเมื่อ 2026-09 ฐาน Aoringo ไม่ใช่โครง POS แบบ NaraiPos แต่เป็นแอปร้านอาหารที่กระจายข้อมูลหลายตาราง
+โค้ดจึงมีตัวอ่านเฉพาะสำหรับโครงนี้ (`buildAppPlan` ใน `lib/aoringoSql.mjs`) ซึ่งถูกเลือกอัตโนมัติ
+เมื่อเจอทั้ง `SaleOrder` และ `SaleOrderItem`:
+
+| ข้อมูล | มาจาก |
+|---|---|
+| บิล | `SaleOrder` (`OrderNo` · `Total` · `SubTotal` · `VatAmount` · `DiscountAmount` · `ServiceChargeAmount` · `GuestCount` · `OrderType` · `Status`) |
+| วันที่ของบิล | `COALESCE(PaidAt, OrderDate, OpenedAt)` — ยึดเวลาปิดบิลก่อน ยังไม่ปิดค่อยใช้เวลาเปิดออร์เดอร์ |
+| ช่องทางชำระ | `OrderPayment` ยุบเป็นบิลละแถว แล้วจัดเข้าถัง (เงินสด/บัตร/QR/QR Credit/Voucher/เดลิเวอรี) ตามชื่อวิธีจ่าย |
+| รายการสินค้า | `SaleOrderItem` (ไม่มีคอลัมน์วันที่ ต้อง join `SaleOrder`) + ชื่อ/รหัสจาก `MenuItem` + หมวดจาก `Category` |
+| คนปิดบิล | `AppUser` join ด้วย `PaidByUserId` (join ให้เมื่อตรวจเจอคอลัมน์ที่ตรงเท่านั้น) |
+| บิลที่ยกเลิก | `Status` มีคำว่า void/cancel/refund/ยกเลิก/คืนเงิน → ตัดออกจากยอดขาย |
+| รายจ่าย | `Expense` (`ExpenseDate` · `CategoryName` · `ItemName` · `Qty` × `UnitPrice` → `Amount`) |
+
+ทุกคอลัมน์ยังเช็กก่อนใช้ว่ามีจริง — แอปเวอร์ชันหน้าเพิ่ม/ตัดคอลัมน์แล้วหน้าเว็บต้องไม่ล้มทั้งหน้า
+อยากดูคำสั่ง SQL ที่ยิงจริง เปิด `/api/franchise?view=schema` แล้วดูช่อง `sqlPreview` ของแต่ละบทบาท
+
+บังคับกลับไปใช้ตัวจับคู่อัตโนมัติได้ด้วย `AORINGO_SCHEMA_MODE=generic` (หรือตั้ง `AORINGO_*_TABLE` ตัวใดตัวหนึ่ง)
+
+## การจับคู่ตาราง/คอลัมน์อัตโนมัติ (โหมด `generic` — ใช้กับฐานอื่นที่ไม่ใช่โครงข้างบน)
 
 ฐาน Aoringo เป็นของร้านเฟรนไชส์ ไม่มีใครรับประกันว่าชื่อตาราง/คอลัมน์จะตรงกับ `dbo.Cpaid` /
 `dbo.Ctrans` ของ NaraiPos `lib/aoringoSql.mjs` จึงอ่าน `INFORMATION_SCHEMA` ตอนรัน แล้วให้คะแนน

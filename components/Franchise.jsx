@@ -43,14 +43,17 @@ const qtyFmt = (v) => {
 const dayOf = (v) => str(v).slice(0, 10);
 const timeOf = (v) => str(v).slice(11, 16);
 
-/** บิลที่ถูกยกเลิก — ฐานแต่ละที่เก็บไม่เหมือนกัน (1 / true / 'Y' / 'Void') */
+/** บิลที่ถูกยกเลิก — ฐานแต่ละที่เก็บไม่เหมือนกัน (1 / true / 'Y' / 'Void' / 'Cancelled')
+ *  ต้องเป็น "ใช่" แบบชัดเจนเท่านั้นถึงจะตัดออก: ถ้าคอลัมน์ที่จับคู่มาเป็นสถานะข้อความ
+ *  (Paid / Completed / Open) แล้วเหมาว่าข้อความไหนก็คือยกเลิก ยอดขายจะกลายเป็นศูนย์ทั้งหน้า */
 const isVoid = (r) => {
   const v = r?.voided;
   if (v === null || v === undefined || v === '') return false;
   if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
   const s = String(v).trim().toLowerCase();
-  if (s === '0' || s === 'false' || s === 'n' || s === 'no' || s === '-') return false;
-  return true;
+  if (['1', 'true', 'y', 'yes', 'void', 'voided'].includes(s)) return true;
+  return /void|cancel|refund|ยกเลิก|คืนเงิน/.test(s);
 };
 
 /** ยอดของบิล — บางฐานเก็บยอดสุทธิที่ billTotal บางฐานที่ amount */
@@ -71,6 +74,19 @@ const CHANNELS = [
   { key: 'oc', label: 'OC' },
   { key: 'delivery', label: 'เดลิเวอรี' },
 ];
+
+/* ช่องของรายจ่ายที่ "มีก็ดี ไม่มีก็ได้" — ฐาน Aoringo เก็บ จำนวน/หน่วย/ราคาต่อหน่วย
+   ส่วนฐานอื่นอาจเก็บผู้ขาย/เลขที่เอกสารแทน โชว์เฉพาะช่องที่มีข้อมูลจริงจะได้ไม่มีคอลัมน์ขีดกลางเปล่า ๆ */
+const EXPENSE_OPTIONAL_COLS = [
+  { key: 'quantity', label: 'จำนวน', align: 'right', render: (v) => qtyFmt(v) },
+  { key: 'unit', label: 'หน่วย' },
+  { key: 'unitPrice', label: 'ราคา/หน่วย', align: 'right', render: (v) => `฿${money(v)}` },
+  { key: 'vendor', label: 'ผู้ขาย/ร้านค้า' },
+  { key: 'ref', label: 'เลขที่เอกสาร' },
+  { key: 'payType', label: 'ชำระโดย' },
+  { key: 'user', label: 'ผู้บันทึก' },
+];
+const hasValue = (v) => v !== null && v !== undefined && String(v).trim() !== '';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const firstOfMonthISO = () => {
@@ -290,6 +306,11 @@ export default function Franchise({ view = 'fcDashboard' }) {
     return [...map.values()].sort((a, b) => b.amount - a.amount);
   }, [items]);
 
+  const expenseCols = useMemo(
+    () => EXPENSE_OPTIONAL_COLS.filter((c) => expenses.some((e) => hasValue(e[c.key]))),
+    [expenses]
+  );
+
   const byExpenseCategory = useMemo(() => {
     const map = new Map();
     expenses.forEach((e) => {
@@ -304,7 +325,7 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const matches = useCallback((fields) => !kw || fields.some((f) => str(f).toLowerCase().includes(kw)), [kw]);
 
   const filteredBills = useMemo(
-    () => (!kw ? bills : bills.filter((b) => matches([b.checkId, b.tableId, b.cashier, b.paidType, b.memberTel, b.note, dayOf(b.date)]))),
+    () => (!kw ? bills : bills.filter((b) => matches([b.checkId, b.tableId, b.cashier, b.paidType, b.orderType, b.status, b.memberTel, b.note, dayOf(b.date)]))),
     [bills, kw, matches]
   );
   const filteredItems = useMemo(
@@ -586,7 +607,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
   /* ── หน้าย่อย 3: รายการขาย (รายบิล) ── */
   const billsExport = () => exportRows(filteredBills.map((b) => ({
     วันที่: dayOf(b.date), เวลา: timeOf(b.date), เลขที่บิล: str(b.checkId), โต๊ะ: str(b.tableId),
-    จำนวนลูกค้า: num(b.cover), ประเภทการชำระ: str(b.paidType), แคชเชียร์: str(b.cashier),
+    จำนวนลูกค้า: num(b.cover), ประเภทการชำระ: str(b.paidType), ประเภทออร์เดอร์: str(b.orderType),
+    สถานะ: str(b.status), แคชเชียร์: str(b.cashier),
     ...Object.fromEntries(usedChannels.map((c) => [c.label, num(b[c.key])])),
     ส่วนลด: num(b.discount), VAT: num(b.vat), ยอดบิล: billAmount(b),
   })), 'รายการขาย', `เฟรนไชส์_รายการขาย_${rangeLabel}.xlsx`);
@@ -610,6 +632,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
                   <th className="px-3 py-2.5 text-left font-semibold">โต๊ะ</th>
                   <th className="px-3 py-2.5 text-right font-semibold">ลูกค้า</th>
                   <th className="px-3 py-2.5 text-left font-semibold">ชำระโดย</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">ประเภท</th>
+                  <th className="px-3 py-2.5 text-left font-semibold">สถานะ</th>
                   <th className="px-3 py-2.5 text-left font-semibold">แคชเชียร์</th>
                   <th className="px-3 py-2.5 text-right font-semibold">ส่วนลด</th>
                   <th className="px-3 py-2.5 text-right font-semibold">VAT</th>
@@ -625,6 +649,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
                     <td className="px-3 py-2 text-slate-600">{str(b.tableId) || '-'}</td>
                     <td className="px-3 py-2 text-right text-slate-600">{b.cover === null ? '-' : int(b.cover)}</td>
                     <td className="px-3 py-2 text-slate-600">{str(b.paidType) || '-'}</td>
+                    <td className="px-3 py-2 text-slate-500">{str(b.orderType) || '-'}</td>
+                    <td className="px-3 py-2 text-slate-500">{str(b.status) || '-'}</td>
                     <td className="px-3 py-2 text-slate-600">{str(b.cashier) || '-'}</td>
                     <td className="px-3 py-2 text-right text-slate-500">{num(b.discount) ? `฿${money(b.discount)}` : '-'}</td>
                     <td className="px-3 py-2 text-right text-slate-500">{num(b.vat) ? `฿${money(b.vat)}` : '-'}</td>
@@ -634,7 +660,7 @@ export default function Franchise({ view = 'fcDashboard' }) {
               </tbody>
               <tfoot className="bg-slate-50 font-bold text-slate-800">
                 <tr>
-                  <td colSpan={9} className="px-3 py-2.5">รวม {int(filteredBills.length)} บิล{kw ? ' (ตามคำค้น)' : ''}</td>
+                  <td colSpan={11} className="px-3 py-2.5">รวม {int(filteredBills.length)} บิล{kw ? ' (ตามคำค้น)' : ''}</td>
                   <td className="px-3 py-2.5 text-right text-emerald-700">
                     ฿{money(filteredBills.reduce((s, b) => s + billAmount(b), 0))}
                   </td>
@@ -775,6 +801,7 @@ export default function Franchise({ view = 'fcDashboard' }) {
   /* ── หน้าย่อย 5: รายจ่าย ── */
   const expenseExport = () => exportRows(filteredExpenses.map((e) => ({
     วันที่: dayOf(e.date), ประเภท: str(e.category), รายละเอียด: str(e.detail), ผู้ขาย: str(e.vendor),
+    จำนวน: num(e.quantity), หน่วย: str(e.unit), 'ราคา/หน่วย': num(e.unitPrice),
     เลขที่เอกสาร: str(e.ref), ชำระโดย: str(e.payType), ผู้บันทึก: str(e.user), จำนวนเงิน: num(e.amount),
   })), 'รายจ่าย', `เฟรนไชส์_รายจ่าย_${rangeLabel}.xlsx`);
 
@@ -818,9 +845,9 @@ export default function Franchise({ view = 'fcDashboard' }) {
                     <th className="px-3 py-2.5 text-left font-semibold">วันที่</th>
                     <th className="px-3 py-2.5 text-left font-semibold">ประเภท</th>
                     <th className="px-3 py-2.5 text-left font-semibold">รายละเอียด</th>
-                    <th className="px-3 py-2.5 text-left font-semibold">ผู้ขาย/ร้านค้า</th>
-                    <th className="px-3 py-2.5 text-left font-semibold">เลขที่เอกสาร</th>
-                    <th className="px-3 py-2.5 text-left font-semibold">ชำระโดย</th>
+                    {expenseCols.map((c) => (
+                      <th key={c.key} className={`px-3 py-2.5 font-semibold ${c.align === 'right' ? 'text-right' : 'text-left'}`}>{c.label}</th>
+                    ))}
                     <th className="px-3 py-2.5 text-right font-semibold">จำนวนเงิน</th>
                   </tr>
                 </thead>
@@ -830,16 +857,18 @@ export default function Franchise({ view = 'fcDashboard' }) {
                       <td className="px-3 py-2 text-slate-600">{dayOf(e.date)}</td>
                       <td className="px-3 py-2 font-semibold text-slate-700">{str(e.category) || '-'}</td>
                       <td className="px-3 py-2 text-slate-600 whitespace-normal min-w-[16rem]">{str(e.detail) || '-'}</td>
-                      <td className="px-3 py-2 text-slate-500">{str(e.vendor) || '-'}</td>
-                      <td className="px-3 py-2 text-slate-500">{str(e.ref) || '-'}</td>
-                      <td className="px-3 py-2 text-slate-500">{str(e.payType) || '-'}</td>
+                      {expenseCols.map((c) => (
+                        <td key={c.key} className={`px-3 py-2 text-slate-500 ${c.align === 'right' ? 'text-right' : ''}`}>
+                          {hasValue(e[c.key]) ? (c.render ? c.render(e[c.key]) : str(e[c.key])) : '-'}
+                        </td>
+                      ))}
                       <td className="px-3 py-2 text-right font-bold text-rose-600">฿{money(e.amount)}</td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot className="bg-slate-50 font-bold text-slate-800">
                   <tr>
-                    <td colSpan={6} className="px-3 py-2.5">รวม {int(filteredExpenses.length)} รายการ{kw ? ' (ตามคำค้น)' : ''}</td>
+                    <td colSpan={3 + expenseCols.length} className="px-3 py-2.5">รวม {int(filteredExpenses.length)} รายการ{kw ? ' (ตามคำค้น)' : ''}</td>
                     <td className="px-3 py-2.5 text-right text-rose-600">
                       ฿{money(filteredExpenses.reduce((s, e) => s + num(e.amount), 0))}
                     </td>
