@@ -6,14 +6,11 @@
 // ⚠️ ผู้ดูแลระบบ (role='admin') เท่านั้น — เส้นนี้แจกสิทธิ์เข้าถึงทุกเมนูของแดชบอร์ดได้
 //    ต่างจาก /api/branches ที่ไม่ได้กันอะไรไว้เลย เพราะแค่แก้ทะเบียนสาขา
 //
-// ต่อฐานด้วย pool เดียวกับ QC/RD (lib/qcrdPool.js) ซึ่งชี้ InventoryNarai อยู่แล้ว
+// ไปถึงฐานสองทาง (ต่อ SQL ตรง หรือ host API ที่เครื่องออฟฟิศ) — lib/authUsers.js เป็นคนเลือกให้
 // คืน 200 พร้อม status:'error' เหมือน /api/branches ยกเว้น 401/403 ที่หน้าเว็บใช้แยกกรณี
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { runQuery } from '../../lib/qcrdPool';
 import {
-  deleteUser, explainUserError, hasDirectDb, hasEnvAdmin, listUsers,
-  saveUser, setPassword, setupModeActive, tableIsReady,
+  createTable, deleteUser, explainUserError, hasAnyRoute, hasDirectDb, hasEnvAdmin,
+  hasHostRoute, listUsers, saveUser, setPassword, setupModeActive, tableIsReady,
 } from '../../lib/authUsers';
 import { secretIsWeak, sessionFromRequest } from '../../lib/authToken';
 import { ROLE_ADMIN, validatePassword, validateUsername } from '../../lib/permissions';
@@ -22,25 +19,14 @@ export const config = { maxDuration: 60 };
 
 const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
 
-/** สร้างตารางจาก docs/schema-app-user.sql (รันซ้ำได้ ไม่ทับข้อมูลเดิม) */
-async function createTable() {
-  // next.config.js สั่งแนบไฟล์นี้ไปกับฟังก์ชัน ไม่งั้นบน Vercel จะขึ้น ENOENT
-  const file = path.join(process.cwd(), 'docs', 'schema-app-user.sql');
-  const sqlText = await readFile(file, 'utf8');
-  const batches = sqlText.split(/^\s*GO\s*;?\s*$/gim).map((b) => b.trim()).filter(Boolean);
-  // ชุด CREATE DATABASE/USE รันจากคอนเนกชันที่ชี้ฐานนั้นอยู่แล้วไม่ได้ (และไม่จำเป็น)
-  const runnable = batches.filter((b) => !/CREATE\s+DATABASE|^\s*USE\s+/im.test(b));
-  let ran = 0;
-  for (const b of runnable) { await runQuery(b); ran++; }
-  return { ran, of: runnable.length };
-}
-
 async function stateOf() {
   const tableReady = await tableIsReady();
   return {
     tableReady,
     hasDb: hasDirectDb(),
-    canWrite: hasDirectDb(),
+    hasHost: hasHostRoute(),
+    // เขียนได้ถ้ามีทางไปถึงฐานสักทาง — ต่อ SQL ตรงจาก Vercel หรือผ่าน host API ที่ออฟฟิศ
+    canWrite: hasAnyRoute(),
     setupMode: setupModeActive({ tableReady }),
     weakSecret: secretIsWeak(),
     hasEnvAdmin: hasEnvAdmin(),
@@ -63,10 +49,10 @@ export default async function handler(req, res) {
       // (หน้าเว็บจะได้ขึ้นปุ่ม "สร้างตาราง" ให้กด แทนที่จะโชว์แดงแล้วจบ)
       return res.status(200).json({
         status: 'success', data: [], ...state,
-        warning: hasDirectDb()
-          ? 'ยังไม่ได้สร้างตารางผู้ใช้ — กดปุ่ม "สร้างตาราง" เพื่อเริ่มใช้งาน'
-          : 'ยังไม่ได้ตั้งรหัสฐานข้อมูลบน Vercel (QCRD_DB_USER/QCRD_DB_PASSWORD) — ' +
-            'เก็บผู้ใช้ลงฐานยังไม่ได้ ตอนนี้เข้าระบบได้ด้วยบัญชีสำรองเท่านั้น',
+        warning: hasAnyRoute()
+          ? 'ยังไม่ได้สร้างตารางผู้ใช้ หรือยังไปถึงฐานไม่ได้ — กดปุ่ม "สร้างตาราง" เพื่อเริ่มใช้งาน'
+          : 'ยังไม่มีทางไปถึงฐานข้อมูลผู้ใช้ — ตั้ง AUTH_API_KEY (หรือ QCRD_WRITE_KEY) บน Vercel ' +
+            'ให้ตรงกับเครื่องออฟฟิศ ตอนนี้เข้าระบบได้ด้วยบัญชีสำรองเท่านั้น',
       });
     }
     try {
@@ -89,11 +75,12 @@ export default async function handler(req, res) {
     : (req.body || {});
   const action = str(body.action);
 
-  if (!hasDirectDb()) {
+  if (!hasAnyRoute()) {
     return res.status(200).json({
       status: 'error',
-      message: 'แก้คลังผู้ใช้ไม่ได้ — ยังไม่ได้ตั้ง QCRD_DB_USER/QCRD_DB_PASSWORD บน Vercel ' +
-        '(หรือ ZK_DB_* / HR_DB_* ที่มีสิทธิ์ในฐาน InventoryNarai)',
+      message: 'แก้คลังผู้ใช้ไม่ได้ — ยังไม่มีทางไปถึงฐาน InventoryNarai สักทาง ' +
+        'ตั้ง AUTH_API_KEY (หรือ QCRD_WRITE_KEY) บน Vercel ให้ตรงกับที่ตั้งไว้บนเครื่องออฟฟิศ ' +
+        'หรือตั้ง QCRD_DB_USER/QCRD_DB_PASSWORD ถ้าเปิดพอร์ต SQL ออกเน็ตแล้ว',
     });
   }
 

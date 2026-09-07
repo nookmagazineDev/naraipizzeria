@@ -9,6 +9,9 @@ Dashboard เรียกผ่าน proxy ฝั่ง Next.js:
 - `pages/api/attendance.js` (หน้า "ดูสแกนหน้า") → `/zk/transactions`, `/zk/employees`
 - `pages/api/ai-chat.js` (AI NARAI) → `/zk/transactions`, `/zk/employees`
 - `pages/api/franchise.js` (เมนู "เฟรนไชส์") → `/aoringo/sales`, `/aoringo/detail`, `/aoringo/expense` (ฐาน Aoringo — ดู `docs/franchise-aoringo.md`)
+- `pages/api/auth.js` (หน้าล็อกอิน) และ `pages/api/users.js` (เมนู "จัดการผู้ใช้") → `/auth/verify`, `/auth/users`, `/auth/save` (ดู `docs/login-permissions.md`)
+  ต้องตั้ง env `AUTH_API_KEY` บนเครื่องนี้ให้ตรงกับบน Vercel — ไม่ตั้ง จะถอยไปใช้ `QCRD_WRITE_KEY`
+  ไม่มีสักตัว = ปิด `/auth/*` ทั้งชุด แล้วหน้าเว็บจะเข้าได้เฉพาะบัญชีสำรอง
 
 > หมายเหตุ: `/usagemenu`, `/usagebytable` (port 8787) ยังใช้เซิร์ฟเวอร์เดิม `storenarai.dyndns.tv` ไม่เกี่ยวกับไฟล์นี้
 

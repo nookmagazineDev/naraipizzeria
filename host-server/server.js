@@ -38,6 +38,7 @@ const compression = require('compression'); // บีบ JSON ด้วย gzip 
 const { mountQcrd } = require('./qcrd-db'); // QC/RD บน InventoryNarai (ดู docs/schema-qcrd.sql)
 const { mountSheets } = require('./sheets-db'); // แพลน/ปิดรอบ/ค่าใช้จ่าย/พนักงาน (ดู docs/schema-sheets.sql)
 const { mountAoringo } = require('./aoringo-db'); // ร้านเฟรนไชส์ บนฐาน Aoringo (ดู docs/franchise-aoringo.md)
+const { mountAuth } = require('./auth-db');      // ผู้ใช้และสิทธิ์เมนู (ดู docs/login-permissions.md)
 
 const app = express();
 app.use(compression()); // ต้องมาก่อน route
@@ -425,6 +426,10 @@ mountSheets(app);
 
 // ── ร้านเฟรนไชส์ (ฐาน Aoringo บนเครื่องเดียวกัน) — ทางถอยของหน้าเมนู "เฟรนไชส์" บน Vercel ──
 mountAoringo(app);
+
+// ── ผู้ใช้และสิทธิ์เมนูของแดชบอร์ด (ฐาน InventoryNarai ใช้ pool ร่วมกับ QC/RD) ──
+//    Vercel ต่อ SQL ที่ร้านตรง ๆ ไม่ได้เป็นปกติ ทางนี้จึงเป็นทางเดียวที่หน้าล็อกอินใช้ได้จริง
+mountAuth(app);
 
 // ── เช็กว่า API ยังมีชีวิต ──
 app.get('/ping', (req, res) => res.json({ ok: true, time: new Date() }));
