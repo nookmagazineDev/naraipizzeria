@@ -31,7 +31,8 @@ import {
   FileText,
   PackageOpen,
   Fingerprint,
-  Wallet
+  Wallet,
+  Store
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
@@ -46,6 +47,7 @@ import QcRdItems from '../components/QcRdItems';
 import AiNarai from '../components/AiNarai';
 import PlanList from '../components/PlanList';
 import BranchRequisition from '../components/BranchRequisition';
+import Franchise from '../components/Franchise';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -626,6 +628,18 @@ const getItemColFilterValue = (row, key) => {
    แล้วแผงกรองของยอดขายจะไปโผล่ในหน้าที่ไม่เกี่ยวข้อง (เคยหลุดไปแล้วที่หน้ารายงานเงินเดือน) */
 const SALES_TABS = ['dashboard', 'sales', 'dailySale', 'details', 'itemSearch'];
 
+/* เมนู "เฟรนไชส์" (ข้อมูลจากฐาน Aoringo — ดู docs/franchise-aoringo.md)
+   ห้าหน้าย่อยใช้คอมโพเนนต์ตัวเดียวกัน เปลี่ยนแค่ prop view เพื่อให้ข้อมูลที่โหลดไว้
+   ไม่หายตอนสลับเมนู (ถ้าแยกเป็นคนละ element React จะถอดของเก่าทิ้งแล้ว state หายทุกครั้ง) */
+const FRANCHISE_TABS = ['fcDashboard', 'fcDaily', 'fcSales', 'fcDetail', 'fcExpense'];
+const FRANCHISE_TITLES = {
+  fcDashboard: 'เฟรนไชส์ — แดชบอร์ด',
+  fcDaily: 'เฟรนไชส์ — ยอดขายรายวัน',
+  fcSales: 'เฟรนไชส์ — รายการขาย',
+  fcDetail: 'เฟรนไชส์ — รายละเอียดการขาย',
+  fcExpense: 'เฟรนไชส์ — รายจ่าย',
+};
+
 export default function App() {
   const [isMounted, setIsMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -635,6 +649,7 @@ export default function App() {
   const [hrOpen, setHrOpen] = useState(true);
   const [qcrdOpen, setQcrdOpen] = useState(true);
   const [purchaseOpen, setPurchaseOpen] = useState(true);
+  const [franchiseOpen, setFranchiseOpen] = useState(true);
   const [branchChartMode, setBranchChartMode] = useState('sales'); // 'sales' or 'covers'
   const [dashValueMode, setDashValueMode] = useState('money'); // 'money' | 'percent' (การ์ดแดชบอร์ด: ตัวเงิน หรือ %ของยอดขาย)
   const [pendingSearch, setPendingSearch] = useState(false); // ตั้งวันที่จากปุ่มด่วนแล้วให้ค้นหาอัตโนมัติ
@@ -2493,6 +2508,61 @@ export default function App() {
               )}
             </div>
 
+            {/* เฟรนไชส์ Main Menu — ข้อมูลร้านเฟรนไชส์จากฐาน Aoringo (SQL Server 203.154.185.48)
+                ใช้สีเขียวทั้งเมนู เพื่อให้แยกออกจากเมนูเดิมของร้านตัวเอง (เหลืองอำพัน) ตั้งแต่แรกเห็น */}
+            <div className="pt-2">
+              <button
+                onClick={() => setFranchiseOpen(!franchiseOpen)}
+                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${franchiseOpen ? 'bg-emerald-900/40 text-emerald-300' : 'hover:bg-emerald-900/30 text-emerald-400 hover:text-emerald-300'}`}
+              >
+                <div className="flex items-center gap-3">
+                  <Store size={18} className="text-emerald-400" />
+                  <span>เฟรนไชส์</span>
+                </div>
+                {franchiseOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              </button>
+
+              {franchiseOpen && (
+                <div className="pl-4 space-y-1.5 mt-1 border-l border-emerald-800/60 ml-6">
+                  <button
+                    onClick={() => { setActiveTab('fcDashboard'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcDashboard' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
+                  >
+                    <LayoutDashboard size={16} />
+                    <span>แดชบอร์ด</span>
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('fcDaily'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcDaily' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
+                  >
+                    <Receipt size={16} />
+                    <span>ยอดขายรายวัน</span>
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('fcSales'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcSales' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
+                  >
+                    <TrendingUp size={16} />
+                    <span>รายการขาย</span>
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('fcDetail'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcDetail' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
+                  >
+                    <Layers size={16} />
+                    <span>รายละเอียดการขาย</span>
+                  </button>
+                  <button
+                    onClick={() => { setActiveTab('fcExpense'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcExpense' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
+                  >
+                    <DollarSign size={16} />
+                    <span>รายจ่าย</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* AI NARAI — แชทถามข้อมูลด้วย Gemini (function calling → host API → SQL) */}
             <div className="pt-2">
               <button
@@ -2540,6 +2610,11 @@ export default function App() {
                 {activeTab === 'qcrdItems' && <ClipboardList size={20} className="text-amber-600" />}
                 {activeTab === 'planList' && <ShoppingBag size={20} className="text-amber-600" />}
                 {activeTab === 'branchRequisition' && <PackageOpen size={20} className="text-amber-600" />}
+                {activeTab === 'fcDashboard' && <LayoutDashboard size={20} className="text-emerald-600" />}
+                {activeTab === 'fcDaily' && <Receipt size={20} className="text-emerald-600" />}
+                {activeTab === 'fcSales' && <TrendingUp size={20} className="text-emerald-600" />}
+                {activeTab === 'fcDetail' && <Layers size={20} className="text-emerald-600" />}
+                {activeTab === 'fcExpense' && <DollarSign size={20} className="text-emerald-600" />}
                 {activeTab === 'dashboard' ? 'แดชบอร์ดหลัก'
                   : activeTab === 'sales' ? 'รายงานยอดการขาย'
                   : activeTab === 'dailySale' ? 'รายงานยอดรายวันทุกสาขา'
@@ -2556,6 +2631,7 @@ export default function App() {
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
                   : activeTab === 'planList' ? 'จัดซื้อ — แพลนสินค้า'
                   : activeTab === 'branchRequisition' ? 'จัดซื้อ — เบิกของสาขา'
+                  : FRANCHISE_TABS.includes(activeTab) ? FRANCHISE_TITLES[activeTab]
                   : activeTab === 'aiNarai' ? '✨ AI NARAI'
                   : 'รายละเอียดรายการ'}
               </h1>
@@ -2622,6 +2698,12 @@ export default function App() {
 
             {/* จัดซื้อ: เบิกของสาขา จากชีท ใบเบิก + data */}
             {activeTab === 'branchRequisition' && <BranchRequisition />}
+
+            {/* เฟรนไชส์: แดชบอร์ด · ยอดขายรายวัน · รายการขาย · รายละเอียดการขาย · รายจ่าย
+                (ฐาน Aoringo บน SQL Server 203.154.185.48 ผ่าน /api/franchise)
+                เรนเดอร์ element เดียวสำหรับทั้ง 5 เมนู เปลี่ยนแค่ prop view — ข้อมูลที่โหลดไว้
+                จะได้ไม่หายตอนสลับหน้าย่อย (ไม่งั้นต้องกดค้นหาใหม่ทุกครั้งที่เปลี่ยนเมนู) */}
+            {FRANCHISE_TABS.includes(activeTab) && <Franchise view={activeTab} />}
 
             {/* FILTER PANEL — เฉพาะหน้าที่ใช้ช่วงวันที่/สาขาชุดนี้จริงเท่านั้น (ดู SALES_TABS)
                 หน้าอื่น (HR, สต๊อก, QC/RD, จัดซื้อ) มีตัวกรองของตัวเองอยู่แล้ว */}

@@ -8,6 +8,7 @@ Dashboard เรียกผ่าน proxy ฝั่ง Next.js:
 - `pages/api/detail.js` → `/ctranbetweendate`
 - `pages/api/attendance.js` (หน้า "ดูสแกนหน้า") → `/zk/transactions`, `/zk/employees`
 - `pages/api/ai-chat.js` (AI NARAI) → `/zk/transactions`, `/zk/employees`
+- `pages/api/franchise.js` (เมนู "เฟรนไชส์") → `/aoringo/sales`, `/aoringo/detail`, `/aoringo/expense` (ฐาน Aoringo — ดู `docs/franchise-aoringo.md`)
 
 > หมายเหตุ: `/usagemenu`, `/usagebytable` (port 8787) ยังใช้เซิร์ฟเวอร์เดิม `storenarai.dyndns.tv` ไม่เกี่ยวกับไฟล์นี้
 
@@ -73,6 +74,7 @@ powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart -NoTunnel
 ```powershell
 curl.exe http://localhost:14365/qcrd/ping     # ต้องได้ writeEnabled:true + จำนวนเมนู
 curl.exe http://localhost:14365/sheets/ping   # ตาราง 5 ตารางพร้อมไหม
+curl.exe http://localhost:14365/aoringo/ping   # ฐานเฟรนไชส์ Aoringo ต่อได้ไหม + จับคู่ตารางได้อะไร
 ```
 
 เปิด ngrok ชี้ที่ port 14365:
