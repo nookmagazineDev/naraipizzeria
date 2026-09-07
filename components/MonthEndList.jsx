@@ -86,24 +86,21 @@ function CycleNote({ cutoffDay }) {
 }
 
 /**
- * ตรรกะ "รอบเดือน" อยู่ใน lib/monthEndSql.mjs ซึ่ง **รันที่เครื่องออฟฟิศ** เมื่อ Vercel ต่อ SQL ตรงไม่ได้
- * (host-server โหลดไฟล์เดียวกันนี้จาก checkout ของเครื่องนั้น) — deploy เว็บอย่างเดียวจึงไม่พอ
- * ถ้าเครื่องนั้นยังไม่ได้ git pull ตัวเลขรอบเดือนจะเป็นของเวอร์ชันเก่าโดยที่หน้าเว็บดูปกติทุกอย่าง
- * ตรวจจากการที่คำตอบไม่มีคีย์ cycleCutoffDay เลย (โค้ดใหม่ส่งมาเสมอ ต่อให้เป็น 0)
+ * ตรรกะ "รอบเดือน" อยู่ใน lib/monthEndSql.mjs ซึ่งรันที่เครื่องออฟฟิศเมื่อ Vercel ต่อ SQL ตรงไม่ได้
+ * เครื่องนั้นอัปเดตช้ากว่าเว็บเสมอ (ต้องมีคนไป git pull + รีสตาร์ท) ฝั่ง Vercel จึงคิดรอบเดือน
+ * ให้เองเมื่อเจอคำตอบจาก host เวอร์ชันเก่า — ตัวเลขบนหน้านี้ถูกต้องแล้วโดยไม่ต้องรอเครื่องนั้น
+ * แต่ยังบอกไว้ให้เห็น เพราะโหมดนี้ต้องยิงข้อมูลสองเดือนมารวมเอง ช้ากว่าให้ต้นทางคัดมาให้
  */
-const isStaleHost = (layout) => Boolean(layout) && layout.cycleCutoffDay === undefined;
-
-function StaleHostNote() {
+function LegacyHostNote() {
   return (
     <div className="mb-4 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2">
       <AlertTriangle size={14} className="mt-0.5 shrink-0" />
       <span>
-        <b>host-server ที่เครื่องออฟฟิศยังรันโค้ดเวอร์ชันเก่า</b> — คอลัมน์ "รอบเดือน" บนหน้านี้จึงยังเป็น
-        เดือนของวันที่ปิดยอดตรง ๆ ยังไม่ได้ใช้กติกา "ปิดวันที่ 1–10 = รอบของเดือนก่อน"
-        {' '}(ปิด 31 ส.ค. กับ 3 ก.ย. เลยยังถูกแยกเป็นคนละรอบอยู่)
+        <b>เว็บกำลังคิดรอบเดือนให้เอง</b> เพราะ host-server ที่เครื่องออฟฟิศยังรันโค้ดเวอร์ชันเก่า —
+        ตัวเลขที่เห็นถูกต้องแล้ว แต่หน้านี้ต้องยิงข้อมูลสองเดือนมารวมเอง จึงช้ากว่าปกติเล็กน้อย
         <br />
-        ที่เครื่องนั้น: <span className="font-mono">cd C:\naraipizzeria · git pull · cd host-server ·
-        start-narai.ps1 -Restart</span> — git pull เฉย ๆ ไม่พอ ต้องรีสตาร์ท node ด้วย
+        อัปเดตเมื่อสะดวกที่เครื่องนั้น: <span className="font-mono">cd C:\naraipizzeria · git pull ·
+        cd host-server · start-narai.ps1 -Restart</span> (git pull เฉย ๆ ไม่พอ ต้องรีสตาร์ท node ด้วย)
       </span>
     </div>
   );
@@ -454,9 +451,12 @@ export default function MonthEndList() {
 
           {error && errorPanel(error)}
 
-          {!error && detail.rows.length > 0 && (isStaleHost(detail.layout)
-            ? <StaleHostNote />
-            : <CycleNote cutoffDay={detail.layout?.cycleCutoffDay} />)}
+          {!error && detail.rows.length > 0 && (
+            <>
+              <CycleNote cutoffDay={detail.layout?.cycleCutoffDay} />
+              {detail.layout?.hostLegacy && <LegacyHostNote />}
+            </>
+          )}
 
           {!error && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -591,9 +591,12 @@ function SummaryView({ summary, loading, error, onReload, onOpen, renderError, o
 
       {error && renderError(error)}
 
-      {!loading && branches.length > 0 && (isStaleHost(summary.layout)
-        ? <StaleHostNote />
-        : <CycleNote cutoffDay={summary.layout?.cycleCutoffDay} />)}
+      {!loading && branches.length > 0 && (
+        <>
+          <CycleNote cutoffDay={summary.layout?.cycleCutoffDay} />
+          {summary.layout?.hostLegacy && <LegacyHostNote />}
+        </>
+      )}
 
       {!error && !loading && branches.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
