@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
-  TrendingUp, Receipt, Layers, DollarSign, Search, Download,
+  TrendingUp, Receipt, Layers, DollarSign, Search, Download, X,
   Loader2, AlertCircle, RefreshCw, Store, Users, CreditCard, Wallet, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import {
@@ -88,6 +88,41 @@ const EXPENSE_OPTIONAL_COLS = [
 ];
 const hasValue = (v) => v !== null && v !== undefined && String(v).trim() !== '';
 
+/* ประเภทออร์เดอร์ — ฐาน Aoringo เก็บเป็นข้อความใน SaleOrder.OrderType ซึ่งแต่ละที่เขียนไม่เหมือนกัน
+   (DineIn / Dine-in / ทานที่ร้าน / TakeAway / กลับบ้าน / Delivery / Grab …)
+   อะไรที่ไม่ใช่ "กลับบ้าน" หรือ "เดลิเวอรี" นับเป็นทานที่ร้าน — ตรงกับที่เมนู ACC ทำกับโต๊ะ 300/400/401 */
+// ชื่อช่องขึ้นต้นด้วย type… เพราะ "delivery" ชนกับช่องทางจ่ายชื่อเดียวกัน
+// (ถ้าใช้ชื่อซ้ำ ยอดขายแบบเดลิเวอรีกับยอดที่จ่ายผ่านเดลิเวอรีจะบวกทับกันในช่องเดียว)
+const orderBucket = (b) => {
+  const t = `${str(b.orderType)} ${str(b.tableId)}`.toLowerCase();
+  if (/deliver|grab|line ?man|shopee|robinhood|panda|ส่ง|เดลิ/.test(t)) return 'typeDelivery';
+  if (/take.?away|take.?home|to.?go|กลับบ้าน|กลับ|ห่อ|takeout/.test(t)) return 'typeTakeHome';
+  return 'typeDineIn';
+};
+
+/* คอลัมน์ตารางยอดขายรายวัน — ทรงเดียวกับ "ยอดรายวัน" ของเมนู ACC (pages/index.js: DAILY_COLUMNS)
+   ต่างกันเฉพาะช่องที่ฐานเฟรนไชส์ไม่มี (ต้นทุน/บุฟเฟต์รายไอเทม) และมีรายจ่ายของวันนั้นเพิ่มมาแทน
+   ช่องทางจ่ายไม่ได้ fix ไว้ตายตัวเหมือน ACC — เติมตามช่องที่ฐานนั้นมียอดจริง (ดู usedChannels) */
+const FC_DAILY_FIXED_HEAD = [
+  { key: 'date', label: 'วันที่', type: 'text' },
+  { key: 'typeDineIn', label: 'Dine-in', type: 'money', drill: 'typeDineIn' },
+  { key: 'typeTakeHome', label: 'Take-Home', type: 'money', drill: 'typeTakeHome' },
+  { key: 'typeDelivery', label: 'Delivery', type: 'money', drill: 'typeDelivery' },
+  { key: 'serviceChg', label: 'Service Charge', type: 'money' },
+  { key: 'discount', label: 'ส่วนลด', type: 'money' },
+  { key: 'netSales', label: 'Net Sales', type: 'money', tone: 'emerald' },
+  { key: 'vat', label: 'Vat', type: 'money', tone: 'muted' },
+  { key: 'grossSales', label: 'Gross Sales', type: 'money', tone: 'brand', drill: 'all' },
+];
+const FC_DAILY_FIXED_TAIL = [
+  { key: 'totalSales', label: 'Total Sales', type: 'money', tone: 'brand', drill: 'all' },
+  { key: 'billCount', label: 'ผลรวมบิล', type: 'number', drill: 'all' },
+  { key: 'cover', label: 'จำนวนหัว', type: 'number' },
+  { key: 'avgPerBill', label: 'เฉลี่ย/บิล', type: 'money' },
+  { key: 'avgPerCover', label: 'เฉลี่ย/หัว', type: 'money' },
+  { key: 'expense', label: 'รายจ่าย', type: 'money', tone: 'rose' },
+];
+
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const firstOfMonthISO = () => {
   const d = new Date();
@@ -173,6 +208,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [detailMode, setDetailMode] = useState('summary'); // 'summary' = สรุปตามเมนู · 'line' = รายบรรทัด
+  const [dailySort, setDailySort] = useState({ col: 'date', asc: true });      // เรียงตารางรายวัน (กดหัวคอลัมน์)
+  const [drill, setDrill] = useState({ open: false, title: '', rows: [] });    // บิลเบื้องหลังตัวเลขที่กด
 
   const load = useCallback(async () => {
     if (!startDate || !endDate) { setError('กรุณาเลือกวันที่เริ่มต้นและสิ้นสุด'); return; }
@@ -229,19 +266,25 @@ export default function Franchise({ view = 'fcDashboard' }) {
 
   /** ยอดรายวัน — ตัวตั้งของทั้งหน้า "ยอดขายรายวัน" และกราฟบนแดชบอร์ด */
   const daily = useMemo(() => {
+    const blank = (d) => ({
+      date: d, billCount: 0, cover: 0, sales: 0, vat: 0, discount: 0, serviceChg: 0,
+      typeDineIn: 0, typeTakeHome: 0, typeDelivery: 0,
+      ...Object.fromEntries(CHANNELS.map((c) => [c.key, 0])),
+    });
     const map = new Map();
     bills.forEach((b) => {
       const d = dayOf(b.date);
       if (!d) return;
-      if (!map.has(d)) {
-        map.set(d, { date: d, bills: 0, cover: 0, sales: 0, vat: 0, discount: 0, ...Object.fromEntries(CHANNELS.map((c) => [c.key, 0])) });
-      }
+      if (!map.has(d)) map.set(d, blank(d));
       const row = map.get(d);
-      row.bills += 1;
+      const amt = billAmount(b);
+      row.billCount += 1;
       row.cover += num(b.cover);
-      row.sales += billAmount(b);
+      row.sales += amt;
       row.vat += num(b.vat);
       row.discount += num(b.discount);
+      row.serviceChg += num(b.serviceChg);
+      row[orderBucket(b)] += amt;            // Dine-in / Take-Home / Delivery แบบเดียวกับ ACC
       CHANNELS.forEach((c) => { row[c.key] += num(b[c.key]); });
     });
     const expByDay = new Map();
@@ -250,13 +293,24 @@ export default function Franchise({ view = 'fcDashboard' }) {
       if (!d) return;
       expByDay.set(d, (expByDay.get(d) || 0) + num(e.amount));
     });
-    expByDay.forEach((v, d) => {
-      if (!map.has(d)) {
-        map.set(d, { date: d, bills: 0, cover: 0, sales: 0, vat: 0, discount: 0, ...Object.fromEntries(CHANNELS.map((c) => [c.key, 0])) });
-      }
-    });
+    // วันที่มีแต่รายจ่าย (ไม่มีบิลขาย) ก็ต้องมีแถวของตัวเอง ไม่งั้นยอดรายจ่ายรวมจะไม่ตรงกับหน้ารายจ่าย
+    expByDay.forEach((v, d) => { if (!map.has(d)) map.set(d, blank(d)); });
+
     return [...map.values()]
-      .map((r) => ({ ...r, expense: expByDay.get(r.date) || 0, avgPerBill: r.bills ? r.sales / r.bills : 0 }))
+      .map((r) => {
+        // ยอดที่เก็บเงินได้จริงจากทุกช่องทาง — ACC เรียกช่องนี้ว่า Total Sales และใช้เทียบกับ Gross
+        // ฐานไหนไม่มีตารางการชำระเงินให้ตกมาใช้ยอดบิล จะได้ไม่เห็นเป็น 0 ทั้งคอลัมน์
+        const channelSum = CHANNELS.reduce((s, c) => s + num(r[c.key]), 0);
+        return {
+          ...r,
+          grossSales: r.sales,                      // ยอดบิลรวม (รวม VAT แล้ว)
+          netSales: r.sales - num(r.vat),           // ยอดก่อน VAT
+          totalSales: channelSum > 0 ? channelSum : r.sales,
+          expense: expByDay.get(r.date) || 0,
+          avgPerBill: r.billCount ? r.sales / r.billCount : 0,
+          avgPerCover: r.cover ? r.sales / r.cover : 0,
+        };
+      })
       .sort((a, b) => a.date.localeCompare(b.date));
   }, [bills, expenses]);
 
@@ -545,61 +599,135 @@ export default function Franchise({ view = 'fcDashboard' }) {
     </div>
   );
 
-  /* ── หน้าย่อย 2: ยอดขายรายวัน ── */
-  const dailyExport = () => exportRows(daily.map((r) => ({
-    วันที่: r.date, จำนวนบิล: r.bills, จำนวนลูกค้า: r.cover, ยอดขาย: r.sales,
-    'เฉลี่ย/บิล': r.avgPerBill,
-    ...Object.fromEntries(usedChannels.map((c) => [c.label, r[c.key]])),
-    รายจ่าย: r.expense,
-  })), 'ยอดขายรายวัน', `เฟรนไชส์_ยอดขายรายวัน_${rangeLabel}.xlsx`);
+  /* ── หน้าย่อย 2: ยอดขายรายวัน (ทรงเดียวกับตาราง "ยอดรายวัน" ของเมนู ACC) ── */
+
+  // คอลัมน์จริงของตาราง = ช่องคงที่ + ช่องทางจ่ายเท่าที่ฐานนี้มียอด + ช่องท้าย
+  const dailyColumns = useMemo(() => [
+    ...FC_DAILY_FIXED_HEAD,
+    ...usedChannels.map((c) => ({ key: c.key, label: c.label, type: 'money', drill: `channel:${c.key}` })),
+    ...FC_DAILY_FIXED_TAIL,
+  ], [usedChannels]);
+
+  const dailyRows = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    const list = term ? daily.filter((r) => r.date.toLowerCase().includes(term)) : daily;
+    const { col, asc } = dailySort;
+    const sorted = [...list].sort((a, b) => {
+      const x = a[col], y = b[col];
+      const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
+      return asc ? c : -c;
+    });
+    return sorted;
+  }, [daily, search, dailySort]);
+
+  /** ยอดรวมท้ายตาราง — รวมทุกช่องที่เป็นตัวเลข (ยกเว้นค่าเฉลี่ย ซึ่งต้องคิดจากยอดรวมอีกที) */
+  const dailyTotals = useMemo(() => {
+    const t = {};
+    dailyColumns.forEach((c) => {
+      if (c.type === 'money' || c.type === 'number') t[c.key] = dailyRows.reduce((s, r) => s + num(r[c.key]), 0);
+    });
+    t.avgPerBill = t.billCount ? t.grossSales / t.billCount : 0;
+    t.avgPerCover = t.cover ? t.grossSales / t.cover : 0;
+    return t;
+  }, [dailyRows, dailyColumns]);
+
+  /** กดตัวเลขในตาราง → เปิดดูบิลที่อยู่เบื้องหลังตัวเลขนั้น (เหมือนกดเซลล์ในตารางของ ACC) */
+  const openDrill = (row, colDef) => {
+    if (!colDef.drill) return;
+    const sameDay = (b) => dayOf(b.date) === row.date;
+    let fn = sameDay;
+    let title = `${colDef.label} · ${row.date}`;
+    if (colDef.drill.startsWith('channel:')) {
+      const key = colDef.drill.slice(8);
+      fn = (b) => sameDay(b) && num(b[key]) > 0;
+    } else if (['typeDineIn', 'typeTakeHome', 'typeDelivery'].includes(colDef.drill)) {
+      fn = (b) => sameDay(b) && orderBucket(b) === colDef.drill;
+    } else {
+      title = `บิลทั้งหมด · ${row.date}`;
+    }
+    setDrill({ open: true, title, rows: bills.filter(fn) });
+  };
+
+  const dailyExport = () => exportRows(
+    dailyRows.map((r) => Object.fromEntries(dailyColumns.map((c) => [c.label, c.type === 'text' ? r[c.key] : num(r[c.key])]))),
+    'ยอดขายรายวัน', `เฟรนไชส์_ยอดขายรายวัน_${rangeLabel}.xlsx`
+  );
+
+  const cellTone = {
+    emerald: 'text-emerald-600 font-semibold',
+    brand: 'text-emerald-700 font-bold',
+    muted: 'text-slate-500',
+    rose: 'text-rose-600',
+  };
 
   const dailyView = (
-    <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden">
-      {sectionHead(<Receipt size={16} className="text-emerald-600" />, 'ยอดขายรายวัน', exportBtn(dailyExport, !daily.length))}
+    <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden flex flex-col">
+      {sectionHead(
+        <Receipt size={16} className="text-emerald-600" />,
+        'ตารางรายงานยอดขายรายวัน',
+        <>{searchBox('ค้นหาวันที่...')}{exportBtn(dailyExport, !dailyRows.length)}</>
+      )}
       {daily.length ? (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs whitespace-nowrap">
-            <thead className="bg-slate-50 text-slate-500 sticky top-0">
-              <tr>
-                <th className="px-3 py-2.5 text-left font-semibold">วันที่</th>
-                <th className="px-3 py-2.5 text-right font-semibold">บิล</th>
-                <th className="px-3 py-2.5 text-right font-semibold">ลูกค้า</th>
-                <th className="px-3 py-2.5 text-right font-semibold">ยอดขาย</th>
-                <th className="px-3 py-2.5 text-right font-semibold">เฉลี่ย/บิล</th>
-                {usedChannels.map((c) => <th key={c.key} className="px-3 py-2.5 text-right font-semibold">{c.label}</th>)}
-                <th className="px-3 py-2.5 text-right font-semibold">รายจ่าย</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {daily.map((r) => (
-                <tr key={r.date} className="hover:bg-emerald-50/40">
-                  <td className="px-3 py-2 font-semibold text-slate-700">{r.date}</td>
-                  <td className="px-3 py-2 text-right text-slate-600">{int(r.bills)}</td>
-                  <td className="px-3 py-2 text-right text-slate-600">{int(r.cover)}</td>
-                  <td className="px-3 py-2 text-right font-bold text-emerald-700">฿{money(r.sales)}</td>
-                  <td className="px-3 py-2 text-right text-slate-600">฿{money(r.avgPerBill)}</td>
-                  {usedChannels.map((c) => <td key={c.key} className="px-3 py-2 text-right text-slate-500">{r[c.key] ? `฿${money(r[c.key])}` : '-'}</td>)}
-                  <td className="px-3 py-2 text-right text-rose-600">{r.expense ? `฿${money(r.expense)}` : '-'}</td>
+        <>
+          <div className="px-5 py-2 text-[11px] text-slate-400 border-b border-slate-100">
+            พบบันทึกยอดขายรายวัน {int(dailyRows.length)} วัน · กดที่ตัวเลขในคอลัมน์ที่ขีดเส้นใต้ได้ เพื่อดูบิลที่อยู่เบื้องหลัง
+          </div>
+          <div className="overflow-auto max-h-[70vh] min-h-[320px] w-full">
+            <table className="w-full text-left text-[11px] border-collapse">
+              <thead className="sticky top-0 z-10">
+                <tr className="bg-slate-50 border-b border-slate-100 text-slate-600 font-bold">
+                  {dailyColumns.map((c) => (
+                    <th
+                      key={c.key}
+                      onClick={() => setDailySort((prev) => ({ col: c.key, asc: prev.col === c.key ? !prev.asc : c.type === 'text' }))}
+                      className={`px-3 py-2.5 cursor-pointer hover:bg-slate-100 hover:text-emerald-600 transition-colors whitespace-nowrap ${c.type === 'text' ? 'text-left' : 'text-right'}`}
+                    >
+                      <div className={`flex items-center gap-0.5 ${c.type === 'text' ? '' : 'justify-end'}`}>
+                        <span>{c.label}</span>
+                        {dailySort.col === c.key && <span>{dailySort.asc ? '▲' : '▼'}</span>}
+                      </div>
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-            <tfoot className="bg-slate-50 font-bold text-slate-800">
-              <tr>
-                <td className="px-3 py-2.5">รวม {int(daily.length)} วัน</td>
-                <td className="px-3 py-2.5 text-right">{int(summary.billCount)}</td>
-                <td className="px-3 py-2.5 text-right">{int(summary.cover)}</td>
-                <td className="px-3 py-2.5 text-right text-emerald-700">฿{money(summary.sales)}</td>
-                <td className="px-3 py-2.5 text-right">฿{money(summary.avgPerBill)}</td>
-                {usedChannels.map((c) => (
-                  <td key={c.key} className="px-3 py-2.5 text-right">
-                    ฿{money(daily.reduce((s, r) => s + num(r[c.key]), 0))}
-                  </td>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
+                {dailyRows.map((r) => (
+                  <tr key={r.date} className="hover:bg-emerald-50/40 transition-colors">
+                    {dailyColumns.map((c) => {
+                      if (c.type === 'text') {
+                        return <td key={c.key} className="px-3 py-2 whitespace-nowrap font-semibold text-slate-800">{r[c.key]}</td>;
+                      }
+                      const v = num(r[c.key]);
+                      const text = c.type === 'number' ? int(v) : `฿${money(v)}`;
+                      return (
+                        <td key={c.key} className={`px-3 py-2 whitespace-nowrap text-right font-mono ${cellTone[c.tone] || 'text-slate-600'}`}>
+                          {c.drill && v !== 0 ? (
+                            <button onClick={() => openDrill(r, c)} className="hover:underline cursor-pointer">{text}</button>
+                          ) : (v === 0 ? <span className="text-slate-300">-</span> : text)}
+                        </td>
+                      );
+                    })}
+                  </tr>
                 ))}
-                <td className="px-3 py-2.5 text-right text-rose-600">฿{money(summary.expense)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+              </tbody>
+              <tfoot className="sticky bottom-0">
+                <tr className="bg-emerald-50 border-t-2 border-emerald-500 font-bold text-slate-800">
+                  {dailyColumns.map((c, i) => {
+                    if (c.type === 'text') {
+                      return <td key={c.key} className="px-3 py-2.5 whitespace-nowrap">{i === 0 ? `รวม ${int(dailyRows.length)} วัน` : ''}</td>;
+                    }
+                    const v = num(dailyTotals[c.key]);
+                    return (
+                      <td key={c.key} className={`px-3 py-2.5 text-right font-mono ${cellTone[c.tone] || 'text-slate-800'}`}>
+                        {c.type === 'number' ? int(v) : `฿${money(v)}`}
+                      </td>
+                    );
+                  })}
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </>
       ) : <Empty>ยังไม่มีข้อมูล — เลือกช่วงวันที่แล้วกด &quot;ค้นหาข้อมูล&quot;</Empty>}
     </div>
   );
@@ -922,6 +1050,60 @@ export default function Franchise({ view = 'fcDashboard' }) {
       )}
 
       {loaded && (views[view] || dashboardView)}
+
+      {/* บิลเบื้องหลังตัวเลขที่กดในตารางรายวัน — แบบเดียวกับที่กดเซลล์ในตารางของเมนู ACC */}
+      {drill.open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          onClick={() => setDrill({ open: false, title: '', rows: [] })}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-sm font-bold text-slate-800">{drill.title}</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {int(drill.rows.length)} บิล · รวม ฿{money(drill.rows.reduce((s2, b) => s2 + billAmount(b), 0))}
+                </p>
+              </div>
+              <button
+                onClick={() => setDrill({ open: false, title: '', rows: [] })}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              ><X size={18} /></button>
+            </div>
+            <div className="overflow-auto">
+              <table className="w-full text-[11px] whitespace-nowrap">
+                <thead className="bg-slate-50 text-slate-500 sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-semibold">เวลา</th>
+                    <th className="px-3 py-2 text-left font-semibold">เลขที่บิล</th>
+                    <th className="px-3 py-2 text-left font-semibold">โต๊ะ</th>
+                    <th className="px-3 py-2 text-left font-semibold">ประเภท</th>
+                    <th className="px-3 py-2 text-left font-semibold">ชำระโดย</th>
+                    <th className="px-3 py-2 text-right font-semibold">ลูกค้า</th>
+                    <th className="px-3 py-2 text-right font-semibold">ยอดบิล</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {drill.rows.map((b, i) => (
+                    <tr key={`${str(b.checkId)}-${i}`} className="hover:bg-emerald-50/40">
+                      <td className="px-3 py-2 text-slate-500">{timeOf(b.date) || '-'}</td>
+                      <td className="px-3 py-2 font-semibold text-slate-700">{str(b.checkId) || '-'}</td>
+                      <td className="px-3 py-2 text-slate-600">{str(b.tableId) || '-'}</td>
+                      <td className="px-3 py-2 text-slate-500">{str(b.orderType) || '-'}</td>
+                      <td className="px-3 py-2 text-slate-600">{str(b.paidType) || '-'}</td>
+                      <td className="px-3 py-2 text-right text-slate-600">{b.cover === null ? '-' : int(b.cover)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700">฿{money(billAmount(b))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
