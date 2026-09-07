@@ -631,9 +631,10 @@ const SALES_TABS = ['dashboard', 'sales', 'dailySale', 'details', 'itemSearch'];
 /* เมนู "เฟรนไชส์" (ข้อมูลจากฐาน Aoringo — ดู docs/franchise-aoringo.md)
    ห้าหน้าย่อยใช้คอมโพเนนต์ตัวเดียวกัน เปลี่ยนแค่ prop view เพื่อให้ข้อมูลที่โหลดไว้
    ไม่หายตอนสลับเมนู (ถ้าแยกเป็นคนละ element React จะถอดของเก่าทิ้งแล้ว state หายทุกครั้ง) */
-const FRANCHISE_TABS = ['fcDashboard', 'fcDaily', 'fcSales', 'fcDetail', 'fcExpense'];
+const FRANCHISE_TABS = ['fcDashboard', 'fcReport', 'fcDaily', 'fcSales', 'fcDetail', 'fcExpense'];
 const FRANCHISE_TITLES = {
   fcDashboard: 'เฟรนไชส์ — แดชบอร์ด',
+  fcReport: 'เฟรนไชส์ — รายงานยอดขาย',
   fcDaily: 'เฟรนไชส์ — ยอดขายรายวัน',
   fcSales: 'เฟรนไชส์ — รายการขาย',
   fcDetail: 'เฟรนไชส์ — รายละเอียดการขาย',
@@ -2532,6 +2533,13 @@ export default function App() {
                     <span>แดชบอร์ด</span>
                   </button>
                   <button
+                    onClick={() => { setActiveTab('fcReport'); if (window.innerWidth < 768) setSidebarOpen(false); }}
+                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcReport' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
+                  >
+                    <FileText size={16} />
+                    <span>รายงานยอดขาย</span>
+                  </button>
+                  <button
                     onClick={() => { setActiveTab('fcDaily'); if (window.innerWidth < 768) setSidebarOpen(false); }}
                     className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcDaily' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
                   >
@@ -2611,6 +2619,7 @@ export default function App() {
                 {activeTab === 'planList' && <ShoppingBag size={20} className="text-amber-600" />}
                 {activeTab === 'branchRequisition' && <PackageOpen size={20} className="text-amber-600" />}
                 {activeTab === 'fcDashboard' && <LayoutDashboard size={20} className="text-emerald-600" />}
+                {activeTab === 'fcReport' && <FileText size={20} className="text-emerald-600" />}
                 {activeTab === 'fcDaily' && <Receipt size={20} className="text-emerald-600" />}
                 {activeTab === 'fcSales' && <TrendingUp size={20} className="text-emerald-600" />}
                 {activeTab === 'fcDetail' && <Layers size={20} className="text-emerald-600" />}

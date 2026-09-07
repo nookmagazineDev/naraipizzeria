@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
-  TrendingUp, Receipt, Layers, DollarSign, Search, Download, X,
+  TrendingUp, Receipt, Layers, DollarSign, Search, Download, X, Eye, History, FileText,
   Loader2, AlertCircle, RefreshCw, Store, Users, CreditCard, Wallet, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import {
@@ -210,6 +210,9 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const [detailMode, setDetailMode] = useState('summary'); // 'summary' = สรุปตามเมนู · 'line' = รายบรรทัด
   const [dailySort, setDailySort] = useState({ col: 'date', asc: true });      // เรียงตารางรายวัน (กดหัวคอลัมน์)
   const [drill, setDrill] = useState({ open: false, title: '', rows: [] });    // บิลเบื้องหลังตัวเลขที่กด
+  const [reportSort, setReportSort] = useState({ col: 'date', asc: true });   // เรียงตารางรายงานยอดขาย
+  const [billModal, setBillModal] = useState({ open: false, bill: null, lines: [] });  // ดูบิล (รายการในบิลนั้น)
+  const [tableModal, setTableModal] = useState({ open: false, tableId: '' });          // ประวัติโต๊ะ
 
   const load = useCallback(async () => {
     if (!startDate || !endDate) { setError('กรุณาเลือกวันที่เริ่มต้นและสิ้นสุด'); return; }
@@ -732,6 +735,156 @@ export default function Franchise({ view = 'fcDashboard' }) {
     </div>
   );
 
+  /* ── หน้าย่อย: รายงานยอดขาย (รายบิล + ดูบิล + ประวัติโต๊ะ) ──
+     ทรงเดียวกับ "รายงานยอดการขาย" ของเมนู ACC ที่มีปุ่มดูบิลอยู่หน้าสุดของแต่ละแถว
+     ต่างกันตรงที่ฐานเฟรนไชส์มีเลขโต๊ะเป็นชื่อโต๊ะจริง จึงดู "ประวัติโต๊ะ" ต่อได้ในคลิกเดียว */
+
+  /** รายการสินค้าของแต่ละบิล — จับคู่ด้วย วันที่+เลขที่บิล เพราะเลขบิลของ POS มักวนใหม่ทุกวัน */
+  const itemsByBill = useMemo(() => {
+    const map = new Map();
+    items.forEach((i) => {
+      const k = `${dayOf(i.date)}|${str(i.checkId)}`;
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(i);
+    });
+    return map;
+  }, [items]);
+
+  const openBill = (b) => setBillModal({
+    open: true, bill: b, lines: itemsByBill.get(`${dayOf(b.date)}|${str(b.checkId)}`) || [],
+  });
+  const openTableHistory = (tableId) => setTableModal({ open: true, tableId: str(tableId) });
+
+  /** ทุกบิลของโต๊ะนั้นในช่วงวันที่ที่โหลดไว้ (ใหม่สุดอยู่บน) */
+  const tableHistory = useMemo(() => {
+    if (!tableModal.open) return [];
+    return bills
+      .filter((b) => str(b.tableId) === tableModal.tableId)
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  }, [tableModal, bills]);
+
+  const reportRows = useMemo(() => {
+    const { col, asc } = reportSort;
+    const val = (b) => (col === 'billTotal' ? billAmount(b)
+      : col === 'cover' ? num(b.cover)
+      : col === 'vat' ? num(b.vat)
+      : str(b[col]));
+    return [...filteredBills].sort((a, b) => {
+      const x = val(a), y = val(b);
+      const c = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
+      return asc ? c : -c;
+    });
+  }, [filteredBills, reportSort]);
+
+  const REPORT_COLUMNS = [
+    { key: 'date', label: 'วันที่/เวลา', type: 'text' },
+    { key: 'checkId', label: 'เลขที่บิล', type: 'text' },
+    { key: 'tableId', label: 'โต๊ะ', type: 'text' },
+    { key: 'orderType', label: 'ประเภท', type: 'text' },
+    { key: 'cover', label: 'ลูกค้า', type: 'number' },
+    { key: 'paidType', label: 'ชำระโดย', type: 'text' },
+    { key: 'cashier', label: 'ผู้ทำรายการ', type: 'text' },
+    { key: 'discount', label: 'ส่วนลด', type: 'money' },
+    { key: 'vat', label: 'VAT', type: 'money' },
+    { key: 'billTotal', label: 'ยอดรวมบิล', type: 'money' },
+    { key: 'status', label: 'สถานะ', type: 'text' },
+  ];
+
+  const reportExport = () => exportRows(reportRows.map((b) => ({
+    วันที่: dayOf(b.date), เวลา: timeOf(b.date), เลขที่บิล: str(b.checkId), โต๊ะ: str(b.tableId),
+    ประเภท: str(b.orderType), ลูกค้า: num(b.cover), ชำระโดย: str(b.paidType), ผู้ทำรายการ: str(b.cashier),
+    ส่วนลด: num(b.discount), VAT: num(b.vat), ยอดรวมบิล: billAmount(b), สถานะ: str(b.status),
+    จำนวนรายการในบิล: (itemsByBill.get(`${dayOf(b.date)}|${str(b.checkId)}`) || []).length,
+  })), 'รายงานยอดขาย', `เฟรนไชส์_รายงานยอดขาย_${rangeLabel}.xlsx`);
+
+  const reportView = (
+    <div className="bg-white border border-slate-100 rounded-2xl shadow-sm overflow-hidden flex flex-col">
+      {sectionHead(
+        <FileText size={16} className="text-emerald-600" />,
+        'รายงานยอดขาย',
+        <>{searchBox('ค้นหาเลขที่บิล / โต๊ะ / ผู้ทำรายการ')}{exportBtn(reportExport, !reportRows.length)}</>
+      )}
+      {reportRows.length ? (
+        <>
+          <div className="px-5 py-2 text-[11px] text-slate-400 border-b border-slate-100">
+            {int(reportRows.length)} บิล · รวม ฿{money(reportRows.reduce((t, b) => t + billAmount(b), 0))}
+            {' '}· กด <b>ดูบิล</b> เพื่อดูรายการในบิล · กด <b>ประวัติโต๊ะ</b> เพื่อดูทุกบิลของโต๊ะนั้น
+          </div>
+          <div className="overflow-auto max-h-[70vh]">
+            <table className="w-full text-left text-[11px] border-collapse">
+              <thead className="sticky top-0 z-10">
+                <tr className="bg-slate-50 border-b border-slate-100 text-slate-600 font-bold">
+                  <th className="px-3 py-2.5 whitespace-nowrap">ดูข้อมูล</th>
+                  {REPORT_COLUMNS.map((c) => (
+                    <th
+                      key={c.key}
+                      onClick={() => setReportSort((prev) => ({ col: c.key, asc: prev.col === c.key ? !prev.asc : c.type === 'text' }))}
+                      className={`px-3 py-2.5 cursor-pointer hover:bg-slate-100 hover:text-emerald-600 transition-colors whitespace-nowrap ${c.type === 'text' ? 'text-left' : 'text-right'}`}
+                    >
+                      <div className={`flex items-center gap-0.5 ${c.type === 'text' ? '' : 'justify-end'}`}>
+                        <span>{c.label}</span>
+                        {reportSort.col === c.key && <span>{reportSort.asc ? '▲' : '▼'}</span>}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {paged(reportRows).map((b, i) => (
+                  <tr key={`${str(b.checkId)}-${i}`} className="hover:bg-emerald-50/40 transition-colors">
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => openBill(b)}
+                          className="flex items-center gap-1 px-2 py-1 border border-emerald-200 hover:bg-emerald-50 text-emerald-700 font-semibold rounded-lg text-[10px] transition-colors"
+                        ><Eye size={12} /><span>ดูบิล</span></button>
+                        <button
+                          onClick={() => openTableHistory(b.tableId)}
+                          disabled={!str(b.tableId)}
+                          title={str(b.tableId) ? `ดูทุกบิลของโต๊ะ ${str(b.tableId)}` : 'บิลนี้ไม่มีข้อมูลโต๊ะ'}
+                          className="flex items-center gap-1 px-2 py-1 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-lg text-[10px] transition-colors disabled:opacity-40"
+                        ><History size={12} /><span>ประวัติโต๊ะ</span></button>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap">{dayOf(b.date)} <span className="text-slate-400">{timeOf(b.date)}</span></td>
+                    <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-slate-800">{str(b.checkId) || '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{str(b.tableId) || '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-500">{str(b.orderType) || '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{b.cover === null ? '-' : int(b.cover)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-600">{str(b.paidType) || '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-slate-600">{str(b.cashier) || '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-slate-500">{num(b.discount) ? `฿${money(b.discount)}` : '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-right font-mono text-slate-500">{num(b.vat) ? `฿${money(b.vat)}` : '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-right font-mono font-bold text-emerald-700">฿{money(billAmount(b))}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {str(b.status) ? (
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${isVoid(b) ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                          {str(b.status)}
+                        </span>
+                      ) : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="sticky bottom-0">
+                <tr className="bg-emerald-50 border-t-2 border-emerald-500 font-bold text-slate-800">
+                  <td className="px-3 py-2.5" colSpan={5}>รวม {int(reportRows.length)} บิล{kw ? ' (ตามคำค้น)' : ''}</td>
+                  <td className="px-3 py-2.5 text-right font-mono">{int(reportRows.reduce((t, b) => t + num(b.cover), 0))}</td>
+                  <td className="px-3 py-2.5" colSpan={2} />
+                  <td className="px-3 py-2.5 text-right font-mono">฿{money(reportRows.reduce((t, b) => t + num(b.discount), 0))}</td>
+                  <td className="px-3 py-2.5 text-right font-mono">฿{money(reportRows.reduce((t, b) => t + num(b.vat), 0))}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-emerald-700">฿{money(reportRows.reduce((t, b) => t + billAmount(b), 0))}</td>
+                  <td className="px-3 py-2.5" />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <Pager page={clampPage(reportRows)} pageCount={pageCount(reportRows)} total={reportRows.length} onPage={setPage} />
+        </>
+      ) : <Empty>{loaded ? 'ไม่พบบิลตามเงื่อนไขที่เลือก' : 'ยังไม่มีข้อมูล — เลือกช่วงวันที่แล้วกด "ค้นหาข้อมูล"'}</Empty>}
+    </div>
+  );
+
   /* ── หน้าย่อย 3: รายการขาย (รายบิล) ── */
   const billsExport = () => exportRows(filteredBills.map((b) => ({
     วันที่: dayOf(b.date), เวลา: timeOf(b.date), เลขที่บิล: str(b.checkId), โต๊ะ: str(b.tableId),
@@ -1013,6 +1166,7 @@ export default function Franchise({ view = 'fcDashboard' }) {
 
   const views = {
     fcDashboard: dashboardView,
+    fcReport: reportView,
     fcDaily: dailyView,
     fcSales: salesView,
     fcDetail: detailView,
@@ -1100,6 +1254,184 @@ export default function Franchise({ view = 'fcDashboard' }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ประวัติโต๊ะ — ทุกบิลของโต๊ะนั้นในช่วงวันที่ที่โหลดไว้ */}
+      {tableModal.open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          onClick={() => setTableModal({ open: false, tableId: '' })}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                  <History size={16} className="text-emerald-600" /> ประวัติโต๊ะ {tableModal.tableId}
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {int(tableHistory.length)} บิล · รวม ฿{money(tableHistory.reduce((t, b) => t + billAmount(b), 0))}
+                  {' '}· ลูกค้า {int(tableHistory.reduce((t, b) => t + num(b.cover), 0))} คน
+                  {' '}· เฉลี่ย ฿{money(tableHistory.length ? tableHistory.reduce((t, b) => t + billAmount(b), 0) / tableHistory.length : 0)} / บิล
+                  {' '}· ช่วง {data?.range?.start} ถึง {data?.range?.end}
+                </p>
+              </div>
+              <button
+                onClick={() => setTableModal({ open: false, tableId: '' })}
+                className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              ><X size={18} /></button>
+            </div>
+            <div className="overflow-auto">
+              <table className="w-full text-[11px] whitespace-nowrap">
+                <thead className="bg-slate-50 text-slate-500 sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-semibold">ดูบิล</th>
+                    <th className="px-3 py-2 text-left font-semibold">วันที่</th>
+                    <th className="px-3 py-2 text-left font-semibold">เวลา</th>
+                    <th className="px-3 py-2 text-left font-semibold">เลขที่บิล</th>
+                    <th className="px-3 py-2 text-left font-semibold">ประเภท</th>
+                    <th className="px-3 py-2 text-left font-semibold">ชำระโดย</th>
+                    <th className="px-3 py-2 text-right font-semibold">ลูกค้า</th>
+                    <th className="px-3 py-2 text-right font-semibold">ยอดบิล</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {tableHistory.map((b, i) => (
+                    <tr key={`${str(b.checkId)}-${i}`} className="hover:bg-emerald-50/40">
+                      <td className="px-3 py-2">
+                        <button
+                          onClick={() => openBill(b)}
+                          className="flex items-center gap-1 px-2 py-1 border border-emerald-200 hover:bg-emerald-50 text-emerald-700 font-semibold rounded-lg text-[10px]"
+                        ><Eye size={12} /><span>ดูบิล</span></button>
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">{dayOf(b.date)}</td>
+                      <td className="px-3 py-2 text-slate-500">{timeOf(b.date) || '-'}</td>
+                      <td className="px-3 py-2 font-mono font-semibold text-slate-700">{str(b.checkId) || '-'}</td>
+                      <td className="px-3 py-2 text-slate-500">{str(b.orderType) || '-'}</td>
+                      <td className="px-3 py-2 text-slate-600">{str(b.paidType) || '-'}</td>
+                      <td className="px-3 py-2 text-right font-mono">{b.cover === null ? '-' : int(b.cover)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700">฿{money(billAmount(b))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ดูบิล — หัวบิล + รายการในบิล + วิธีชำระ (ข้อมูลอยู่ในเครื่องแล้ว ไม่ต้องยิงถามฐานซ้ำ) */}
+      {billModal.open && billModal.bill && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          onClick={() => setBillModal({ open: false, bill: null, lines: [] })}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                  <Receipt size={16} className="text-emerald-600" /> บิลเลขที่ {str(billModal.bill.checkId) || '-'}
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {dayOf(billModal.bill.date)} {timeOf(billModal.bill.date)}
+                  {str(billModal.bill.tableId) && <> · โต๊ะ {str(billModal.bill.tableId)}</>}
+                  {str(billModal.bill.orderType) && <> · {str(billModal.bill.orderType)}</>}
+                  {billModal.bill.cover !== null && <> · {int(billModal.bill.cover)} คน</>}
+                  {str(billModal.bill.cashier) && <> · {str(billModal.bill.cashier)}</>}
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                {str(billModal.bill.tableId) && (
+                  <button
+                    onClick={() => openTableHistory(billModal.bill.tableId)}
+                    className="flex items-center gap-1 px-2 py-1 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-lg text-[10px]"
+                  ><History size={12} /><span>ประวัติโต๊ะ</span></button>
+                )}
+                <button
+                  onClick={() => setBillModal({ open: false, bill: null, lines: [] })}
+                  className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                ><X size={18} /></button>
+              </div>
+            </div>
+
+            <div className="overflow-auto flex-1">
+              {billModal.lines.length ? (
+                <table className="w-full text-[11px]">
+                  <thead className="bg-slate-50 text-slate-500 sticky top-0">
+                    <tr>
+                      <th className="px-4 py-2 text-left font-semibold">รายการ</th>
+                      <th className="px-4 py-2 text-right font-semibold">จำนวน</th>
+                      <th className="px-4 py-2 text-right font-semibold">ราคา/หน่วย</th>
+                      <th className="px-4 py-2 text-right font-semibold">รวม</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {billModal.lines.map((i, idx) => (
+                      <tr key={idx} className="hover:bg-emerald-50/40">
+                        <td className="px-4 py-2">
+                          <div className="font-semibold text-slate-700">{str(i.itemName) || '-'}</div>
+                          <div className="text-[10px] text-slate-400">
+                            {str(i.itemCode) && <>รหัส {str(i.itemCode)}</>}
+                            {str(i.groupName) && <> · {str(i.groupName)}</>}
+                          </div>
+                        </td>
+                        <td className="px-4 py-2 text-right font-mono">{qtyFmt(i.quantity)}</td>
+                        <td className="px-4 py-2 text-right font-mono text-slate-500">฿{money(i.unitPrice)}</td>
+                        <td className="px-4 py-2 text-right font-mono font-semibold text-slate-700">฿{money(lineAmount(i))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="px-5 py-10 text-center text-xs text-slate-400">
+                  ไม่พบรายการสินค้าของบิลนี้ในช่วงวันที่ที่โหลดไว้
+                </div>
+              )}
+            </div>
+
+            {/* สรุปท้ายบิล */}
+            <div className="border-t border-slate-100 bg-slate-50 px-5 py-4 text-[11px] space-y-1">
+              {[
+                ['รวมรายการ', billModal.lines.reduce((t, i) => t + lineAmount(i), 0)],
+                ['ยอดก่อนส่วนลด/ภาษี', num(billModal.bill.amount)],
+                ['ส่วนลด', -num(billModal.bill.discount)],
+                ['Service Charge', num(billModal.bill.serviceChg)],
+                ['VAT', num(billModal.bill.vat)],
+              ].filter(([, v]) => v !== 0).map(([label, v]) => (
+                <div key={label} className="flex justify-between text-slate-500">
+                  <span>{label}</span>
+                  <span className="font-mono">฿{money(v)}</span>
+                </div>
+              ))}
+              <div className="flex justify-between pt-2 border-t border-slate-200 text-sm font-bold text-slate-800">
+                <span>ยอดสุทธิ</span>
+                <span className="font-mono text-emerald-700">฿{money(billAmount(billModal.bill))}</span>
+              </div>
+              <div className="pt-2 flex flex-wrap gap-1.5">
+                {(() => {
+                  const paid = CHANNELS.filter((c) => num(billModal.bill[c.key]) > 0);
+                  if (paid.length) {
+                    return paid.map((c) => (
+                      <span key={c.key} className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-semibold">
+                        {c.label} ฿{money(billModal.bill[c.key])}
+                      </span>
+                    ));
+                  }
+                  return str(billModal.bill.paidType) ? (
+                    <span className="px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-semibold">
+                      {str(billModal.bill.paidType)}
+                    </span>
+                  ) : null;
+                })()}
+              </div>
             </div>
           </div>
         </div>
