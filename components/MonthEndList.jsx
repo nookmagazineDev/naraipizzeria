@@ -126,6 +126,8 @@ export default function MonthEndList() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('branch');
 
+  const [exporting, setExporting] = useState(false);
+
   // ── ตรวจการเชื่อมต่อ (โผล่เฉพาะตอนอ่านข้อมูลไม่ได้) ──
   const [diag, setDiag] = useState(null);
   const [diagLoading, setDiagLoading] = useState(false);
@@ -232,33 +234,120 @@ export default function MonthEndList() {
   const layout = view === 'summary' ? summary.layout : (detail.layout || summary.layout);
   const has = (field) => Boolean(layout?.mapped?.[field]);
 
-  const exportExcel = () => {
-    if (rows.length === 0) { toast.error('ไม่มีรายการให้ export'); return; }
-    const head = ['รอบเดือน', 'วันที่ปิดยอด', 'สาขา', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'ยอดคงเหลือ'];
+  // ── Export Excel: ยอดล่าสุดของทุกสาขา แยกแท็บรายสาขา ──
+  //
+  // ไม่ผูกกับสิ่งที่กำลังดูอยู่บนหน้าจอ (เดือน/สาขา/ช่องค้นหา) เพราะไฟล์นี้เอาไปใช้ต่อทั้งชุด
+  // ต้องได้ "รอบล่าสุดของแต่ละสาขา" เสมอ ซึ่งแต่ละสาขาอาจอยู่คนละรอบกัน
+  //
+  // ยิงทีละสาขาโดยใช้ endpoint เดิม (month + branch) แทนที่จะเพิ่ม endpoint ใหม่ฝั่ง SQL
+  // เพราะ host-server ที่เครื่องออฟฟิศอัปเดตช้ากว่าเว็บเสมอ — ทำแบบนี้ใช้ได้ทันทีทุกเวอร์ชัน
+  // แล้วคัดเฉพาะแถวของ "วันที่ปิดล่าสุด" ของสาขานั้นอีกชั้น จะได้ไม่ติดรอบเก่ามาด้วยถ้าเดือนนั้นปิดสองครั้ง
+  const exportExcel = async () => {
+    const targets = summary.branches || [];
+    if (targets.length === 0) { toast.error('ยังไม่มีข้อมูลสาขาให้ export'); return; }
+
+    setExporting(true);
+    const toastId = toast.loading(`กำลังดึงยอดล่าสุด 0/${targets.length} สาขา...`);
+    try {
+      const results = await fetchLatestByBranch(targets, (done) =>
+        toast.loading(`กำลังดึงยอดล่าสุด ${done}/${targets.length} สาขา...`, { id: toastId }));
+
+      const ok = results.filter((r) => r.rows.length > 0);
+      const failed = results.filter((r) => r.error);
+      if (ok.length === 0) {
+        toast.error(`ดึงข้อมูลไม่สำเร็จสักสาขา (${failed[0]?.error || 'ไม่มีข้อมูล'})`, { id: toastId });
+        return;
+      }
+
+      const wb = XLSX.utils.book_new();
+
+      // แท็บแรก = รวมทุกสาขาไว้ในตารางเดียว (ไว้ pivot ต่อ) แล้วตามด้วยแท็บของแต่ละสาขา
+      const allRows = ok.flatMap((r) => r.rows);
+      XLSX.utils.book_append_sheet(wb, buildSheet(allRows, true), 'รวมทุกสาขา');
+
+      const used = new Set(['รวมทุกสาขา']);
+      ok.forEach((r) => {
+        // ชื่อแท็บห้ามซ้ำ ห้ามยาวเกิน 31 ตัว และห้ามมี : \ / ? * [ ]
+        let name = String(r.branch.branch).replace(/[\\/?*[\]:]/g, '').slice(0, 31) || 'สาขา';
+        let n = 2;
+        while (used.has(name)) name = `${name.slice(0, 28)}_${n++}`;
+        used.add(name);
+        XLSX.utils.book_append_sheet(wb, buildSheet(r.rows, false), name);
+      });
+
+      const today = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      XLSX.writeFile(wb, `stock_month_end_latest_${today}.xlsx`);
+
+      const note = failed.length ? ` (ดึงไม่ได้ ${failed.length} สาขา: ${failed.map((f) => f.branch.branch).join(', ')})` : '';
+      toast.success(`Export สำเร็จ ${ok.length} สาขา · ${allRows.length} รายการ${note}`, { id: toastId, duration: 6000 });
+    } catch (err) {
+      toast.error(`Export ไม่สำเร็จ: ${err.message}`, { id: toastId });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  /** ยอดล่าสุดของแต่ละสาขา — ยิงทีละชุดเล็ก ๆ เพราะ host API ที่ออฟฟิศช้าลงมากเมื่อโดนพร้อมกันหลายคำขอ */
+  async function fetchLatestByBranch(targets, onProgress) {
+    const BATCH = 4;
+    const out = [];
+    for (let i = 0; i < targets.length; i += BATCH) {
+      const chunk = targets.slice(i, i + BATCH);
+      const done = await Promise.all(chunk.map(async (b) => {
+        try {
+          const p = new URLSearchParams({ branch: b.branch });
+          if (b.month) p.set('month', b.month);
+          const res = await fetch(`/api/stock-month-end?${p}`);
+          const json = await res.json();
+          if (json.status !== 'success') throw new Error(json.message || 'ดึงข้อมูลไม่สำเร็จ');
+          // เดือนหนึ่งอาจมีปิดยอดหลายวัน — เอาเฉพาะวันล่าสุดที่หน้าสรุปบอกมา
+          const rows = (json.data.rows || []).filter((x) => !b.date || x.date === b.date);
+          return { branch: b, rows };
+        } catch (err) {
+          return { branch: b, rows: [], error: err.message };
+        }
+      }));
+      out.push(...done);
+      onProgress?.(out.length);
+    }
+    return out;
+  }
+
+  /** หนึ่งแท็บ — withBranch = ใส่คอลัมน์สาขาด้วย (แท็บรวม) ส่วนแท็บรายสาขาไม่ต้องมี ซ้ำทั้งคอลัมน์ */
+  function buildSheet(rows, withBranch) {
+    const head = ['รอบเดือน', 'วันที่ปิดยอด'];
+    if (withBranch) head.push('สาขา');
+    head.push('รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'ยอดคงเหลือ');
     if (has('unitValue')) head.push('มูลค่า/หน่วย');
     if (has('totalValue')) head.push('มูลค่ารวม');
     if (has('recordedBy')) head.push('ผู้บันทึก');
     if (has('recordedAt')) head.push('เวลาบันทึก');
 
     const aoa = [head];
-    rows.forEach((r) => {
-      const line = [r.month || '', r.date, r.branch, padItemCode(r.itemCode || r.itemKey), r.itemName, r.unit, Number(r.balance) || 0];
-      if (has('unitValue')) line.push(r.unitValue ?? '');
-      if (has('totalValue')) line.push(r.totalValue ?? '');
-      if (has('recordedBy')) line.push(r.recordedBy);
-      if (has('recordedAt')) line.push(r.recordedAt);
-      aoa.push(line);
-    });
+    [...rows]
+      .sort((a, b) => String(a.branch).localeCompare(String(b.branch))
+        || String(a.itemCode).localeCompare(String(b.itemCode)))
+      .forEach((r) => {
+        const line = [r.month || '', r.date];
+        if (withBranch) line.push(r.branch);
+        line.push(padItemCode(r.itemCode || r.itemKey), r.itemName, r.unit, Number(r.balance) || 0);
+        if (has('unitValue')) line.push(r.unitValue ?? '');
+        if (has('totalValue')) line.push(r.totalValue ?? '');
+        if (has('recordedBy')) line.push(r.recordedBy);
+        if (has('recordedAt')) line.push(r.recordedAt);
+        aoa.push(line);
+      });
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 10 }, { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 45 }, { wch: 8 }, { wch: 12 },
-      ...head.slice(7).map(() => ({ wch: 14 }))];
+    const widths = { 'รอบเดือน': 10, 'วันที่ปิดยอด': 12, 'สาขา': 8, 'รหัสสินค้า': 12, 'ชื่อสินค้า': 45, 'หน่วย': 8 };
+    ws['!cols'] = head.map((h) => ({ wch: widths[h] || 14 }));
+
     const headerStyle = {
       font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
       fill: { patternType: 'solid', fgColor: { rgb: '2E74B5' } },
     };
-    head.forEach((_, c) => {
-      const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+    head.forEach((_, col) => {
+      const cell = ws[XLSX.utils.encode_cell({ r: 0, c: col })];
       if (cell) cell.s = headerStyle;
     });
 
@@ -269,13 +358,8 @@ export default function MonthEndList() {
       const cell = ws[XLSX.utils.encode_cell({ r, c: codeCol })];
       if (cell) { cell.t = 's'; cell.z = '@'; }
     }
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'ปิดรอบเดือน');
-    const suffix = branch === 'all' ? 'all' : branch.toUpperCase();
-    XLSX.writeFile(wb, `stock_month_end_${detail.month || 'latest'}_${suffix}.xlsx`);
-    toast.success('Export สำเร็จ');
-  };
+    return ws;
+  }
 
   return (
     <div className="max-w-7xl mx-auto pb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -301,6 +385,8 @@ export default function MonthEndList() {
           onReload={() => loadSummary({ quiet: false })}
           onOpen={openDetail}
           renderError={errorPanel}
+          onExport={exportExcel}
+          exporting={exporting}
         />
       ) : (
         <>
@@ -363,12 +449,7 @@ export default function MonthEndList() {
               </select>
             </div>
 
-            <button
-              onClick={exportExcel}
-              disabled={loading || rows.length === 0}
-              className="px-4 py-2 bg-emerald-600 text-white text-sm rounded-xl hover:bg-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors whitespace-nowrap">
-              <Download className="w-4 h-4" /> Export Excel
-            </button>
+            <ExportButton onClick={exportExcel} exporting={exporting} disabled={(summary.branches || []).length === 0} />
           </div>
 
           {error && errorPanel(error)}
@@ -468,7 +549,7 @@ export default function MonthEndList() {
 
 /* ─────────────────── หน้าแรก: สาขาไหนปิดยอดถึงวันไหนแล้ว ─────────────────── */
 
-function SummaryView({ summary, loading, error, onReload, onOpen, renderError }) {
+function SummaryView({ summary, loading, error, onReload, onOpen, renderError, onExport, exporting }) {
   const { branches, latestDate } = summary;
 
   // ทะเบียนสาขากลาง (หน้า HR → จัดการสาขา) — ใช้หา "สาขาที่ไม่มีแถวในตารางเลย"
@@ -505,6 +586,7 @@ function SummaryView({ summary, loading, error, onReload, onOpen, renderError })
             ดูรายการของ {monthLabel(latestMonth)} ทุกสาขา <ChevronRight className="w-4 h-4" />
           </button>
         )}
+        {branches.length > 0 && <ExportButton onClick={onExport} exporting={exporting} />}
       </div>
 
       {error && renderError(error)}
@@ -692,6 +774,23 @@ function BranchListModal({ title, subtitle, items, latestMonth, onClose, onOpen 
 }
 
 /* ─────────────────────────────── ชิ้นส่วนย่อย ─────────────────────────────── */
+
+/**
+ * ปุ่ม Export — ได้ "ยอดล่าสุดของทุกสาขา" เสมอ ไม่ขึ้นกับเดือน/สาขา/คำค้นที่กำลังดูอยู่
+ * เขียนกำกับไว้บนปุ่มเลย ไม่งั้นคนกดจากหน้ารายละเอียดจะคิดว่าได้เฉพาะที่เห็นตรงหน้า
+ */
+function ExportButton({ onClick, exporting, disabled }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={exporting || disabled}
+      title="ได้ยอดล่าสุดของทุกสาขา แยกแท็บรายสาขาในไฟล์เดียว"
+      className="px-4 py-2 bg-emerald-600 text-white text-sm rounded-xl hover:bg-emerald-700 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors whitespace-nowrap">
+      {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+      Export Excel (ล่าสุดทุกสาขา)
+    </button>
+  );
+}
 
 function Spinner({ text }) {
   return (
