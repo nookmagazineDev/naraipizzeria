@@ -877,7 +877,9 @@ export default function Franchise({ view = 'fcDashboard' }) {
                         ><Eye size={12} /><span>ดูบิล</span></button>
                         <button
                           onClick={() => openActivity(b)}
-                          title={`ดูความเคลื่อนไหวของออเดอร์ ${str(b.checkId) || '-'} (${int(activityOf(b).length)} รายการ)`}
+                          title={meta?.activityError
+                            ? 'ยังอ่านตาราง OrderActivity จากฐานนี้ไม่ได้ — กดดูเหตุผล'
+                            : `ดูความเคลื่อนไหวของออเดอร์ ${str(b.checkId) || '-'} (${int(activityOf(b).length)} รายการ)`}
                           className="flex items-center gap-1 px-2 py-1 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-lg text-[10px] transition-colors"
                         >
                           <History size={12} /><span>ประวัติออเดอร์</span>
@@ -1322,7 +1324,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
                   {str(activityModal.bill.orderType) && <> · {str(activityModal.bill.orderType)}</>}
                   {str(activityModal.bill.status) && <> · {str(activityModal.bill.status)}</>}
                   {' '}· ยอดบิล ฿{money(billAmount(activityModal.bill))}
-                  {' '}· {int(orderHistory.length)} ความเคลื่อนไหว
+                  {/* อ่านตารางไม่ได้ ≠ ออเดอร์นี้ไม่มีความเคลื่อนไหว — ขึ้น "0" จะเข้าใจผิดว่าไม่มีประวัติ */}
+                  {' '}· {meta?.activityError ? 'อ่านประวัติไม่ได้' : `${int(orderHistory.length)} ความเคลื่อนไหว`}
                 </p>
               </div>
               <button
