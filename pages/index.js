@@ -32,7 +32,13 @@ import {
   PackageOpen,
   Fingerprint,
   Wallet,
-  Store
+  Store,
+  Settings,
+  UserCog,
+  LogOut,
+  KeyRound,
+  Lock,
+  Loader2
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
@@ -48,6 +54,10 @@ import AiNarai from '../components/AiNarai';
 import PlanList from '../components/PlanList';
 import BranchRequisition from '../components/BranchRequisition';
 import Franchise from '../components/Franchise';
+import LoginPage from '../components/LoginPage';
+import UserList from '../components/UserList';
+import ChangePasswordModal from '../components/ChangePasswordModal';
+import { MENU_GROUPS, MENU_LABELS, ROLE_ADMIN, firstAllowedMenu, hasPerm } from '../lib/permissions';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -641,16 +651,65 @@ const FRANCHISE_TITLES = {
   fcExpense: 'เฟรนไชส์ — รายจ่าย',
 };
 
+/* ───────── แถบเมนูด้านข้าง ─────────
+   รายชื่อเมนูและกลุ่มอยู่ที่ lib/permissions.js (MENU_GROUPS) ที่เดียว — ทะเบียนเดียวกับ
+   ที่หน้า "จัดการผู้ใช้" เอาไปให้ติ๊กสิทธิ์ เปิดเมนูใหม่ที่นั่นแล้วมันจะโผล่ทั้งสองที่พร้อมกัน
+   ที่นี่เก็บเฉพาะ "หน้าตา" ของแต่ละกลุ่ม/เมนู (ไอคอนและสี) ซึ่งเป็นเรื่องของหน้าเว็บล้วน ๆ */
+const MENU_ICONS = {
+  dashboard: LayoutDashboard, sales: TrendingUp, dailySale: Receipt, details: Layers,
+  itemSearch: Search, otherExpense: DollarSign,
+  stockList: PackageSearch, stockTotal: Eye, monthEnd: Calendar,
+  employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, branchList: Building2,
+  qcrdMenu: FileText, qcrdItems: PackageSearch,
+  planList: ClipboardList, branchRequisition: PackageOpen,
+  fcDashboard: LayoutDashboard, fcReport: FileText, fcDaily: Receipt,
+  fcSales: TrendingUp, fcDetail: Layers, fcExpense: DollarSign,
+  userList: UserCog,
+};
+
+// สีเหลืองอำพันคือชุดหลักของร้านตัวเอง · เขียวคือเฟรนไชส์ (แยกให้เห็นตั้งแต่แรกเห็น)
+const AMBER_STYLE = {
+  icon: Folder,
+  rule: 'border-slate-800',
+  groupIcon: 'text-amber-500',
+  header: 'hover:bg-slate-800 text-slate-400 hover:text-slate-200',
+  headerOpen: 'bg-slate-800 text-white',
+  active: 'bg-amber-500 text-white',
+  idle: 'hover:bg-slate-800 text-slate-400 hover:text-slate-200',
+};
+const GROUP_STYLE = {
+  acc: { ...AMBER_STYLE, icon: Folder },
+  stock: { ...AMBER_STYLE, icon: PackageSearch },
+  hr: { ...AMBER_STYLE, icon: Users },
+  qcrd: { ...AMBER_STYLE, icon: ClipboardList },
+  purchase: { ...AMBER_STYLE, icon: ShoppingBag },
+  franchise: {
+    icon: Store,
+    rule: 'border-emerald-800/60',
+    groupIcon: 'text-emerald-400',
+    header: 'hover:bg-emerald-900/30 text-emerald-400 hover:text-emerald-300',
+    headerOpen: 'bg-emerald-900/40 text-emerald-300',
+    active: 'bg-emerald-600 text-white',
+    idle: 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300',
+  },
+  // AI NARAI มีเมนูเดียว วาดเป็นปุ่มเดี่ยวไม่ต้องมีหัวข้อให้กดพับ
+  ai: { ...AMBER_STYLE, flat: true, emoji: '✨', active: 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white' },
+  system: { ...AMBER_STYLE, icon: Settings },
+};
+
 export default function App() {
   const [isMounted, setIsMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'sales', 'dailySale', 'details', 'itemSearch'
-  const [accOpen, setAccOpen] = useState(true);
-  const [stockOpen, setStockOpen] = useState(true);
-  const [hrOpen, setHrOpen] = useState(true);
-  const [qcrdOpen, setQcrdOpen] = useState(true);
-  const [purchaseOpen, setPurchaseOpen] = useState(true);
-  const [franchiseOpen, setFranchiseOpen] = useState(true);
+  // กลุ่มเมนูที่ถูกพับเก็บไว้ — ค่าเริ่มต้นกางหมดเหมือนเดิม (ไม่มีชื่อกลุ่มในนี้ = กางอยู่)
+  const [collapsedGroups, setCollapsedGroups] = useState({});
+
+  // ── เข้าสู่ระบบ ──
+  // authUser มาจากตั๋วในคุกกี้ httpOnly ที่ JS อ่านเองไม่ได้ — ต้องถาม /api/auth ทุกครั้งที่เปิดหน้า
+  const [authUser, setAuthUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);   // false = ยังไม่รู้ว่าล็อกอินอยู่ไหม
+  const [authSetup, setAuthSetup] = useState(null);        // สถานะการตั้งค่า (ไว้ขึ้นแถบเตือนหน้าล็อกอิน)
+  const [showChangePwd, setShowChangePwd] = useState(false);
   const [branchChartMode, setBranchChartMode] = useState('sales'); // 'sales' or 'covers'
   const [dashValueMode, setDashValueMode] = useState('money'); // 'money' | 'percent' (การ์ดแดชบอร์ด: ตัวเงิน หรือ %ของยอดขาย)
   const [pendingSearch, setPendingSearch] = useState(false); // ตั้งวันที่จากปุ่มด่วนแล้วให้ค้นหาอัตโนมัติ
@@ -719,6 +778,57 @@ export default function App() {
     setStartDate(som.toISOString().slice(0, 10));
     setEndDate(now.toISOString().slice(0, 10));
   }, []);
+
+  /* ───────── เข้าสู่ระบบ ─────────
+     ถามว่าตอนนี้เป็นใครทุกครั้งที่เปิดหน้า — ตั๋วอยู่ในคุกกี้ httpOnly ที่ JS อ่านไม่ได้
+     ถามไม่สำเร็จ (เน็ตหลุด/เซิร์ฟเวอร์ล่ม) ถือว่ายังไม่ได้ล็อกอิน แล้วโชว์หน้าล็อกอินไปก่อน */
+  useEffect(() => {
+    fetch('/api/auth')
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.status !== 'success') return;
+        setAuthUser(res.data.user || null);
+        setAuthSetup(res.data);
+      })
+      .catch(() => { /* ถามไม่ได้ = ให้ล็อกอินใหม่ */ })
+      .finally(() => setAuthChecked(true));
+  }, []);
+
+  // เมนูที่ค้างอยู่เปิดไม่ได้แล้ว (รีเฟรชหน้าแล้วสิทธิ์ไม่ครอบเมนูเดิม) — ย้ายไปเมนูแรกที่เปิดได้
+  useEffect(() => {
+    if (!authUser || hasPerm(authUser, activeTab)) return;
+    setActiveTab(firstAllowedMenu(authUser) || 'dashboard');
+  }, [authUser, activeTab]);
+
+  /** เมนูนี้ผู้ใช้ที่ล็อกอินอยู่เปิดได้ไหม */
+  const can = (key) => hasPerm(authUser, key);
+
+  const onLoggedIn = (data) => {
+    setAuthUser(data.user);
+    setAuthSetup(data);
+    // หน้าแรกหลังล็อกอิน = เมนูแรกที่คนนี้เปิดได้ (ไม่ใช่แดชบอร์ดเสมอไป
+    // เพราะบางบัญชีอาจไม่ได้สิทธิ์แดชบอร์ดเลย แล้วจะเจอหน้าว่างตั้งแต่เข้ามา)
+    setActiveTab(firstAllowedMenu(data.user) || 'dashboard');
+  };
+
+  const doLogout = async () => {
+    try {
+      await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'logout' }),
+      });
+    } catch { /* ล้างคุกกี้ไม่สำเร็จก็ยังต้องเด้งออกจากหน้าจอ */ }
+    setAuthUser(null);
+    setShowChangePwd(false);
+  };
+
+  const openTab = (key) => {
+    setActiveTab(key);
+    if (window.innerWidth < 768) setSidebarOpen(false);
+  };
+
+  const toggleGroup = (key) => setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
 
   // Helper to chunk date range
   function getChunks(startStr, endStr, chunkSizeDays = 5) {
@@ -2270,6 +2380,28 @@ export default function App() {
 
   if (!isMounted) return null;
 
+  // ยังไม่รู้ว่าล็อกอินอยู่ไหม — อย่าเพิ่งวาดอะไร ไม่งั้นหน้าล็อกอินจะแวบขึ้นมาให้คนที่ล็อกอินอยู่แล้ว
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 text-slate-400 text-sm gap-2">
+        <Loader2 size={18} className="animate-spin" />
+        กำลังตรวจสอบสิทธิ์…
+      </div>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <>
+        <Head>
+          <title>เข้าสู่ระบบ — NARAI OFFICE</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+        </Head>
+        <LoginPage setup={authSetup} onSuccess={onLoggedIn} />
+      </>
+    );
+  }
+
   return (
     <>
       <Head>
@@ -2294,301 +2426,98 @@ export default function App() {
 
           {/* Navigation Links */}
           <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
-            {/* ACC Main Menu Accordion */}
-            <div className="space-y-1">
-              <button 
-                onClick={() => setAccOpen(!accOpen)}
-                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${accOpen ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <Folder size={18} className="text-amber-500" />
-                  <span>ACC</span>
-                </div>
-                {accOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              </button>
+            {/* เมนูทั้งหมดวาดจาก MENU_GROUPS (lib/permissions.js) — ทะเบียนเดียวกับที่หน้า
+                "จัดการผู้ใช้" เอาไปให้ติ๊กสิทธิ์ เมนูที่ผู้ใช้คนนี้ไม่ได้สิทธิ์จะไม่ถูกวาดเลย
+                กลุ่มที่ไม่เหลือเมนูให้ดูสักอันก็ไม่ต้องมีหัวข้อ
 
-              {/* ACC Submenus */}
-              {accOpen && (
-                <div className="pl-4 space-y-1.5 mt-1 border-l border-slate-800 ml-6">
-                  <button 
-                    onClick={() => { setActiveTab('dashboard'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'dashboard' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <LayoutDashboard size={16} />
-                    <span>แดชบอร์ด</span>
-                  </button>
-                  <button 
-                    onClick={() => { setActiveTab('sales'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'sales' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <TrendingUp size={16} />
-                    <span>รายงานยอดการขาย</span>
-                  </button>
-                  <button 
-                    onClick={() => { setActiveTab('dailySale'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'dailySale' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <Receipt size={16} />
-                    <span>ยอดรายวัน</span>
-                  </button>
-                  <button 
-                    onClick={() => { setActiveTab('details'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'details' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <Layers size={16} />
-                    <span>รายละเอียดรายการ</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('itemSearch'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'itemSearch' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <Search size={16} />
-                    <span>ค้นหารายไอเทม</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('otherExpense'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'otherExpense' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <DollarSign size={16} />
-                    <span>ค่าใช้จ่ายอื่นๆ</span>
-                  </button>
-                </div>
-              )}
-            </div>
+                ⚠️ การซ่อนปุ่มตรงนี้เป็นแค่ชั้นหน้าจอ — ด่านจริงอยู่ที่ middleware.js
+                   (ไม่มีตั๋ว = ยิง /api/* ไม่ผ่าน) และ /api/users ที่เช็กบทบาทซ้ำอีกชั้น */}
+            {MENU_GROUPS.map((group) => {
+              const items = group.items.filter((i) => can(i.key));
+              if (!items.length) return null;
+              const style = GROUP_STYLE[group.key] || AMBER_STYLE;
 
-            {/* STOCK Main Menu */}
-            <div className="pt-2">
-              <button
-                onClick={() => setStockOpen(!stockOpen)}
-                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${stockOpen ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <PackageSearch size={18} className="text-amber-500" />
-                  <span>STOCK</span>
-                </div>
-                {stockOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              </button>
+              // กลุ่มเมนูเดียว (AI NARAI) วาดเป็นปุ่มเดี่ยว ไม่ต้องมีหัวข้อให้กดพับ
+              if (style.flat) {
+                const item = items[0];
+                return (
+                  <div key={group.key} className="pt-2">
+                    <button
+                      onClick={() => openTab(item.key)}
+                      className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${activeTab === item.key ? style.active : style.idle}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-base leading-none">{style.emoji}</span>
+                        <span>{group.label}</span>
+                      </div>
+                    </button>
+                  </div>
+                );
+              }
 
-              {stockOpen && (
-                <div className="pl-4 space-y-1.5 mt-1 border-l border-slate-800 ml-6">
+              const GroupIcon = style.icon;
+              const open = !collapsedGroups[group.key];
+              return (
+                <div key={group.key} className="pt-2 first:pt-0">
                   <button
-                    onClick={() => { setActiveTab('stockList'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'stockList' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
+                    onClick={() => toggleGroup(group.key)}
+                    className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${open ? style.headerOpen : style.header}`}
                   >
-                    <PackageSearch size={16} />
-                    <span>นับสต๊อกและขอเบิก</span>
+                    <div className="flex items-center gap-3">
+                      <GroupIcon size={18} className={style.groupIcon} />
+                      <span>{group.label}</span>
+                    </div>
+                    {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                   </button>
-                  <button
-                    onClick={() => { setActiveTab('stockTotal'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'stockTotal' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <Eye size={16} />
-                    <span>ดูยอดรวมทุกสาขา</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('monthEnd'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'monthEnd' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <Calendar size={16} />
-                    <span>ดูข้อมูลปิดรอบเดือน</span>
-                  </button>
-                </div>
-              )}
-            </div>
 
-            {/* HR Main Menu */}
-            <div className="pt-2">
-              <button
-                onClick={() => setHrOpen(!hrOpen)}
-                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${hrOpen ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <Users size={18} className="text-amber-500" />
-                  <span>HR</span>
+                  {open && (
+                    <div className={`pl-4 space-y-1.5 mt-1 border-l ${style.rule} ml-6`}>
+                      {items.map((item) => {
+                        const Icon = MENU_ICONS[item.key] || Folder;
+                        return (
+                          <button
+                            key={item.key}
+                            onClick={() => openTab(item.key)}
+                            className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === item.key ? style.active : style.idle}`}
+                          >
+                            <Icon size={16} />
+                            <span>{item.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-                {hrOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              </button>
-
-              {hrOpen && (
-                <div className="pl-4 space-y-1.5 mt-1 border-l border-slate-800 ml-6">
-                  <button
-                    onClick={() => { setActiveTab('employeeList'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'employeeList' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <Users size={16} />
-                    <span>รายชื่อพนักงาน</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('attendance'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'attendance' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <Fingerprint size={16} />
-                    <span>ดูสแกนหน้า</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('salaryReport'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'salaryReport' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <Wallet size={16} />
-                    <span>รายงานเงินเดือน</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('branchList'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'branchList' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <Building2 size={16} />
-                    <span>จัดการสาขา</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* QC/RD Main Menu — เมนู+สูตร (BOM) และวัตถุดิบ จากชีทต้นทุนเมนู 1v8WRT… */}
-            <div className="pt-2">
-              <button
-                onClick={() => setQcrdOpen(!qcrdOpen)}
-                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${qcrdOpen ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <ClipboardList size={18} className="text-amber-500" />
-                  <span>QC/RD</span>
-                </div>
-                {qcrdOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              </button>
-
-              {qcrdOpen && (
-                <div className="pl-4 space-y-1.5 mt-1 border-l border-slate-800 ml-6">
-                  <button
-                    onClick={() => { setActiveTab('qcrdMenu'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'qcrdMenu' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <FileText size={16} />
-                    <span>เมนู</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('qcrdItems'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'qcrdItems' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <PackageSearch size={16} />
-                    <span>วัตถุดิบ</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* จัดซื้อ Main Menu — แพลนสินค้า จากชีท plan (ประวัติการสั่งของแต่ละสาขา) */}
-            <div className="pt-2">
-              <button
-                onClick={() => setPurchaseOpen(!purchaseOpen)}
-                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${purchaseOpen ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <ShoppingBag size={18} className="text-amber-500" />
-                  <span>จัดซื้อ</span>
-                </div>
-                {purchaseOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              </button>
-
-              {purchaseOpen && (
-                <div className="pl-4 space-y-1.5 mt-1 border-l border-slate-800 ml-6">
-                  <button
-                    onClick={() => { setActiveTab('planList'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'planList' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <ClipboardList size={16} />
-                    <span>แพลนสินค้า</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('branchRequisition'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'branchRequisition' ? 'bg-amber-500 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-                  >
-                    <PackageOpen size={16} />
-                    <span>เบิกของสาขา</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* เฟรนไชส์ Main Menu — ข้อมูลร้านเฟรนไชส์จากฐาน Aoringo (SQL Server 203.154.185.48)
-                ใช้สีเขียวทั้งเมนู เพื่อให้แยกออกจากเมนูเดิมของร้านตัวเอง (เหลืองอำพัน) ตั้งแต่แรกเห็น */}
-            <div className="pt-2">
-              <button
-                onClick={() => setFranchiseOpen(!franchiseOpen)}
-                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${franchiseOpen ? 'bg-emerald-900/40 text-emerald-300' : 'hover:bg-emerald-900/30 text-emerald-400 hover:text-emerald-300'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <Store size={18} className="text-emerald-400" />
-                  <span>เฟรนไชส์</span>
-                </div>
-                {franchiseOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-              </button>
-
-              {franchiseOpen && (
-                <div className="pl-4 space-y-1.5 mt-1 border-l border-emerald-800/60 ml-6">
-                  <button
-                    onClick={() => { setActiveTab('fcDashboard'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcDashboard' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
-                  >
-                    <LayoutDashboard size={16} />
-                    <span>แดชบอร์ด</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('fcReport'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcReport' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
-                  >
-                    <FileText size={16} />
-                    <span>รายงานยอดขาย</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('fcDaily'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcDaily' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
-                  >
-                    <Receipt size={16} />
-                    <span>ยอดขายรายวัน</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('fcSales'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcSales' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
-                  >
-                    <TrendingUp size={16} />
-                    <span>รายการขาย</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('fcDetail'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcDetail' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
-                  >
-                    <Layers size={16} />
-                    <span>รายละเอียดการขาย</span>
-                  </button>
-                  <button
-                    onClick={() => { setActiveTab('fcExpense'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                    className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${activeTab === 'fcExpense' ? 'bg-emerald-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-emerald-300'}`}
-                  >
-                    <DollarSign size={16} />
-                    <span>รายจ่าย</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* AI NARAI — แชทถามข้อมูลด้วย Gemini (function calling → host API → SQL) */}
-            <div className="pt-2">
-              <button
-                onClick={() => { setActiveTab('aiNarai'); if (window.innerWidth < 768) setSidebarOpen(false); }}
-                className={`flex items-center justify-between w-full px-4 py-3 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'aiNarai' ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'}`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className="text-base leading-none">✨</span>
-                  <span>AI NARAI</span>
-                </div>
-              </button>
-            </div>
+              );
+            })}
           </nav>
 
-          {/* Sidebar Footer */}
-          <div className="p-4 bg-slate-950 border-t border-slate-800 text-xs text-slate-500">
-            <div>ผู้ใช้งาน: magazine</div>
-            <div className="mt-1">เวอร์ชัน: 1.0.0 (Tailwind Build)</div>
+          {/* Sidebar Footer — ใครล็อกอินอยู่ และปุ่มออกจากระบบ */}
+          <div className="p-4 bg-slate-950 border-t border-slate-800 text-xs text-slate-500 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-slate-300 font-semibold truncate">{authUser.displayName || authUser.username}</div>
+                <div className="font-mono text-[11px] truncate">
+                  {authUser.username}
+                  {authUser.role === ROLE_ADMIN && <span className="ml-1 text-violet-400">· ผู้ดูแลระบบ</span>}
+                </div>
+              </div>
+              <button
+                onClick={doLogout}
+                title="ออกจากระบบ"
+                className="p-2 rounded-lg text-slate-400 hover:text-rose-300 hover:bg-slate-800 transition-colors flex-shrink-0"
+              >
+                <LogOut size={16} />
+              </button>
+            </div>
+            <button
+              onClick={() => setShowChangePwd(true)}
+              className="flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+            >
+              <KeyRound size={13} />
+              <span>เปลี่ยนรหัสผ่าน</span>
+            </button>
+            <div className="pt-1 border-t border-slate-800/80">เวอร์ชัน: 1.0.0 (Tailwind Build)</div>
           </div>
         </aside>
 
@@ -2624,6 +2553,7 @@ export default function App() {
                 {activeTab === 'fcSales' && <TrendingUp size={20} className="text-emerald-600" />}
                 {activeTab === 'fcDetail' && <Layers size={20} className="text-emerald-600" />}
                 {activeTab === 'fcExpense' && <DollarSign size={20} className="text-emerald-600" />}
+                {activeTab === 'userList' && <UserCog size={20} className="text-amber-600" />}
                 {activeTab === 'dashboard' ? 'แดชบอร์ดหลัก'
                   : activeTab === 'sales' ? 'รายงานยอดการขาย'
                   : activeTab === 'dailySale' ? 'รายงานยอดรายวันทุกสาขา'
@@ -2640,6 +2570,7 @@ export default function App() {
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
                   : activeTab === 'planList' ? 'จัดซื้อ — แพลนสินค้า'
                   : activeTab === 'branchRequisition' ? 'จัดซื้อ — เบิกของสาขา'
+                  : activeTab === 'userList' ? 'จัดการผู้ใช้และสิทธิ์'
                   : FRANCHISE_TABS.includes(activeTab) ? FRANCHISE_TITLES[activeTab]
                   : activeTab === 'aiNarai' ? '✨ AI NARAI'
                   : 'รายละเอียดรายการ'}
@@ -2665,6 +2596,20 @@ export default function App() {
 
           {/* PAGE CONTENT CONTAINER */}
           <div className="flex-1 overflow-y-auto p-6 space-y-6 print-reset">
+
+            {/* กันหน้าที่ไม่ได้สิทธิ์ไว้อีกชั้น — เมนูที่ไม่ได้สิทธิ์ไม่โผล่ในแถบข้างอยู่แล้ว
+                แต่ activeTab อาจค้างอยู่ที่เมนูเดิมได้ (เช่นสิทธิ์เพิ่งถูกแก้ระหว่างเปิดหน้าค้างไว้) */}
+            {!can(activeTab) ? (
+              <div className="bg-white border border-slate-100 rounded-2xl p-10 shadow-sm text-center space-y-2">
+                <Lock size={28} className="mx-auto text-slate-300" />
+                <div className="font-bold text-slate-700">ไม่มีสิทธิ์เข้าเมนูนี้</div>
+                <div className="text-sm text-slate-500">
+                  {MENU_LABELS[activeTab] ? `เมนู "${MENU_LABELS[activeTab]}" ` : ''}
+                  ต้องให้ผู้ดูแลระบบเปิดสิทธิ์ให้ที่หน้า “ระบบ → จัดการผู้ใช้” ก่อน
+                </div>
+              </div>
+            ) : (
+            <>
             
             {error && (
               <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm flex items-center gap-2">
@@ -2707,6 +2652,9 @@ export default function App() {
 
             {/* จัดซื้อ: เบิกของสาขา จากชีท ใบเบิก + data */}
             {activeTab === 'branchRequisition' && <BranchRequisition />}
+
+            {/* ระบบ: จัดการผู้ใช้และสิทธิ์เมนู (InventoryNarai.dbo.app_user ผ่าน /api/users) */}
+            {activeTab === 'userList' && <UserList me={authUser} />}
 
             {/* เฟรนไชส์: แดชบอร์ด · ยอดขายรายวัน · รายการขาย · รายละเอียดการขาย · รายจ่าย
                 (ฐาน Aoringo บน SQL Server 203.154.185.48 ผ่าน /api/franchise)
@@ -4159,9 +4107,14 @@ export default function App() {
         )}
 
 
+            </>
+            )}
           </div>
         </main>
       </div>
+
+      {/* เปลี่ยนรหัสผ่านของตัวเอง (ปุ่มท้ายแถบข้าง) */}
+      {showChangePwd && <ChangePasswordModal onClose={() => setShowChangePwd(false)} />}
 
       {/* จำนวนบิลแยกตามสาขา + บิลที่มีเลขที่สมาชิก */}
       {billsModalOpen && (

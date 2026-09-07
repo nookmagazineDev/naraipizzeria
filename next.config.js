@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // /api/qcrd-migrate, /api/sheets-migrate, /api/branches และ /api/plan-items อ่านไฟล์สคีมาจากรีโปตอนรัน
+  // /api/qcrd-migrate, /api/sheets-migrate, /api/branches, /api/plan-items และ /api/users
+  // อ่านไฟล์สคีมาจากรีโปตอนรัน
   // ตัวไล่หา dependency ของ Next มองไม่เห็น path ที่ประกอบขึ้นตอนรัน จึงต้องสั่งแนบไฟล์เอง
   // ไม่งั้นบน Vercel จะขึ้น ENOENT ทั้งที่ไฟล์อยู่ในรีโป
   experimental: {
@@ -10,6 +11,7 @@ const nextConfig = {
       '/api/sheets-migrate': ['./docs/schema-sheets.sql'],
       '/api/branches': ['./docs/schema-hr-branch.sql'],
       '/api/plan-items': ['./docs/schema-plan-item.sql'],
+      '/api/users': ['./docs/schema-app-user.sql'],
     },
   },
 };
