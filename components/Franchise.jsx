@@ -88,6 +88,16 @@ const EXPENSE_OPTIONAL_COLS = [
 ];
 const hasValue = (v) => v !== null && v !== undefined && String(v).trim() !== '';
 
+/* ช่องของ "ประวัติออเดอร์" ที่มีก็โชว์ ไม่มีก็ซ่อน — ตาราง OrderActivity แต่ละเวอร์ชันเก็บไม่เท่ากัน
+   (บางที่ log แค่ประเภท+ข้อความ บางที่ log เมนู/จำนวน/ยอดของทุกความเคลื่อนไหวด้วย)
+   ถ้าโชว์หมดทุกช่องจะได้คอลัมน์ขีดกลางเปล่า ๆ เต็มไปหมด */
+const ACTIVITY_OPTIONAL_COLS = [
+  { key: 'itemName', label: 'เมนู' },
+  { key: 'quantity', label: 'จำนวน', align: 'right', render: (v) => qtyFmt(v) },
+  { key: 'amount', label: 'ยอด', align: 'right', render: (v) => `฿${money(v)}` },
+  { key: 'user', label: 'ผู้ทำรายการ' },
+];
+
 /* ประเภทออร์เดอร์ — ฐาน Aoringo เก็บเป็นข้อความใน SaleOrder.OrderType ซึ่งแต่ละที่เขียนไม่เหมือนกัน
    (DineIn / Dine-in / ทานที่ร้าน / TakeAway / กลับบ้าน / Delivery / Grab …)
    อะไรที่ไม่ใช่ "กลับบ้าน" หรือ "เดลิเวอรี" นับเป็นทานที่ร้าน — ตรงกับที่เมนู ACC ทำกับโต๊ะ 300/400/401 */
@@ -203,8 +213,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const [endDate, setEndDate] = useState(todayISO());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [data, setData] = useState(null);      // { bills, items, expenses, layout }
-  const [meta, setMeta] = useState(null);      // { source, expenseError }
+  const [data, setData] = useState(null);      // { bills, items, expenses, activities, layout }
+  const [meta, setMeta] = useState(null);      // { source, expenseError, activityError }
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
   const [detailMode, setDetailMode] = useState('summary'); // 'summary' = สรุปตามเมนู · 'line' = รายบรรทัด
@@ -212,7 +222,7 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const [drill, setDrill] = useState({ open: false, title: '', rows: [] });    // บิลเบื้องหลังตัวเลขที่กด
   const [reportSort, setReportSort] = useState({ col: 'date', asc: true });   // เรียงตารางรายงานยอดขาย
   const [billModal, setBillModal] = useState({ open: false, bill: null, lines: [] });  // ดูบิล (รายการในบิลนั้น)
-  const [tableModal, setTableModal] = useState({ open: false, tableId: '' });          // ประวัติโต๊ะ
+  const [activityModal, setActivityModal] = useState({ open: false, bill: null });     // ประวัติออเดอร์
 
   const load = useCallback(async () => {
     if (!startDate || !endDate) { setError('กรุณาเลือกวันที่เริ่มต้นและสิ้นสุด'); return; }
@@ -248,6 +258,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const bills = useMemo(() => (data?.bills || []).filter((b) => !isVoid(b)), [data]);
   const items = useMemo(() => (data?.items || []).filter((i) => !isVoid(i)), [data]);
   const expenses = useMemo(() => data?.expenses || [], [data]);
+  // ประวัติออเดอร์ไม่กรองบิลที่ยกเลิกออก — "ยกเลิกเมื่อไหร่ ใครยกเลิก" คือสิ่งที่คนเปิดหน้านี้มาหา
+  const activities = useMemo(() => data?.activities || [], [data]);
 
   const summary = useMemo(() => {
     const sales = bills.reduce((s, b) => s + billAmount(b), 0);
@@ -735,9 +747,10 @@ export default function Franchise({ view = 'fcDashboard' }) {
     </div>
   );
 
-  /* ── หน้าย่อย: รายงานยอดขาย (รายบิล + ดูบิล + ประวัติโต๊ะ) ──
+  /* ── หน้าย่อย: รายงานยอดขาย (รายบิล + ดูบิล + ประวัติออเดอร์) ──
      ทรงเดียวกับ "รายงานยอดการขาย" ของเมนู ACC ที่มีปุ่มดูบิลอยู่หน้าสุดของแต่ละแถว
-     ต่างกันตรงที่ฐานเฟรนไชส์มีเลขโต๊ะเป็นชื่อโต๊ะจริง จึงดู "ประวัติโต๊ะ" ต่อได้ในคลิกเดียว */
+     ต่างกันตรงที่ฐานเฟรนไชส์บันทึกความเคลื่อนไหวรายออเดอร์ไว้ที่ตาราง OrderActivity
+     (เปิดออร์เดอร์ / สั่งเพิ่ม / แก้ไข / ยกเลิก / ชำระเงิน) จึงกดดู "ประวัติออเดอร์" ต่อได้ในคลิกเดียว */
 
   /** รายการสินค้าของแต่ละบิล — จับคู่ด้วย วันที่+เลขที่บิล เพราะเลขบิลของ POS มักวนใหม่ทุกวัน */
   const itemsByBill = useMemo(() => {
@@ -753,15 +766,39 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const openBill = (b) => setBillModal({
     open: true, bill: b, lines: itemsByBill.get(`${dayOf(b.date)}|${str(b.checkId)}`) || [],
   });
-  const openTableHistory = (tableId) => setTableModal({ open: true, tableId: str(tableId) });
+  // ปิดหน้าต่างบิลก่อนเสมอ — สองหน้าต่างนี้ z-index เท่ากัน เปิดทับกันแล้วอันหลังจะโดนบัง
+  const openActivity = (b) => {
+    setBillModal({ open: false, bill: null, lines: [] });
+    setActivityModal({ open: true, bill: b });
+  };
+  const closeActivity = () => setActivityModal({ open: false, bill: null });
 
-  /** ทุกบิลของโต๊ะนั้นในช่วงวันที่ที่โหลดไว้ (ใหม่สุดอยู่บน) */
-  const tableHistory = useMemo(() => {
-    if (!tableModal.open) return [];
-    return bills
-      .filter((b) => str(b.tableId) === tableModal.tableId)
-      .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  }, [tableModal, bills]);
+  /** ประวัติของแต่ละบิล — จับคู่ด้วย วันที่+เลขที่บิล ชุดเดียวกับรายการสินค้า
+      (ฝั่ง API ส่ง orderDate ของบิลมาให้ในทุกแถว จึงจับคู่ได้ตรงแม้เลขบิลจะวนใหม่ทุกวัน) */
+  const activityByBill = useMemo(() => {
+    const map = new Map();
+    activities.forEach((a) => {
+      const k = `${dayOf(a.orderDate || a.date)}|${str(a.checkId)}`;
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(a);
+    });
+    // เรียงเป็นไทม์ไลน์ เก่า→ใหม่ ในแต่ละออเดอร์
+    map.forEach((rows) => rows.sort((x, y) => String(x.date).localeCompare(String(y.date))));
+    return map;
+  }, [activities]);
+
+  const activityOf = (b) => (b ? activityByBill.get(`${dayOf(b.date)}|${str(b.checkId)}`) || [] : []);
+
+  /** ความเคลื่อนไหวของออเดอร์ที่กำลังเปิดดู */
+  const orderHistory = useMemo(
+    () => (activityModal.open ? activityOf(activityModal.bill) : []),
+    [activityModal, activityByBill]           // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  const activityCols = useMemo(
+    () => ACTIVITY_OPTIONAL_COLS.filter((c) => orderHistory.some((a) => hasValue(a[c.key]))),
+    [orderHistory]                            // eslint-disable-line react-hooks/exhaustive-deps
+  );
 
   const reportRows = useMemo(() => {
     const { col, asc } = reportSort;
@@ -808,7 +845,7 @@ export default function Franchise({ view = 'fcDashboard' }) {
         <>
           <div className="px-5 py-2 text-[11px] text-slate-400 border-b border-slate-100">
             {int(reportRows.length)} บิล · รวม ฿{money(reportRows.reduce((t, b) => t + billAmount(b), 0))}
-            {' '}· กด <b>ดูบิล</b> เพื่อดูรายการในบิล · กด <b>ประวัติโต๊ะ</b> เพื่อดูทุกบิลของโต๊ะนั้น
+            {' '}· กด <b>ดูบิล</b> เพื่อดูรายการในบิล · กด <b>ประวัติออเดอร์</b> เพื่อดูความเคลื่อนไหวของออเดอร์นั้น
           </div>
           <div className="overflow-auto max-h-[70vh]">
             <table className="w-full text-left text-[11px] border-collapse">
@@ -839,11 +876,15 @@ export default function Franchise({ view = 'fcDashboard' }) {
                           className="flex items-center gap-1 px-2 py-1 border border-emerald-200 hover:bg-emerald-50 text-emerald-700 font-semibold rounded-lg text-[10px] transition-colors"
                         ><Eye size={12} /><span>ดูบิล</span></button>
                         <button
-                          onClick={() => openTableHistory(b.tableId)}
-                          disabled={!str(b.tableId)}
-                          title={str(b.tableId) ? `ดูทุกบิลของโต๊ะ ${str(b.tableId)}` : 'บิลนี้ไม่มีข้อมูลโต๊ะ'}
-                          className="flex items-center gap-1 px-2 py-1 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-lg text-[10px] transition-colors disabled:opacity-40"
-                        ><History size={12} /><span>ประวัติโต๊ะ</span></button>
+                          onClick={() => openActivity(b)}
+                          title={`ดูความเคลื่อนไหวของออเดอร์ ${str(b.checkId) || '-'} (${int(activityOf(b).length)} รายการ)`}
+                          className="flex items-center gap-1 px-2 py-1 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-lg text-[10px] transition-colors"
+                        >
+                          <History size={12} /><span>ประวัติออเดอร์</span>
+                          {activityOf(b).length > 0 && (
+                            <span className="px-1 rounded bg-slate-100 text-slate-500 font-mono">{int(activityOf(b).length)}</span>
+                          )}
+                        </button>
                       </div>
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">{dayOf(b.date)} <span className="text-slate-400">{timeOf(b.date)}</span></td>
@@ -1259,11 +1300,11 @@ export default function Franchise({ view = 'fcDashboard' }) {
         </div>
       )}
 
-      {/* ประวัติโต๊ะ — ทุกบิลของโต๊ะนั้นในช่วงวันที่ที่โหลดไว้ */}
-      {tableModal.open && (
+      {/* ประวัติออเดอร์ — ทุกความเคลื่อนไหวของออเดอร์นั้นจากตาราง OrderActivity */}
+      {activityModal.open && activityModal.bill && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
-          onClick={() => setTableModal({ open: false, tableId: '' })}
+          onClick={closeActivity}
         >
           <div
             className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden"
@@ -1272,54 +1313,81 @@ export default function Franchise({ view = 'fcDashboard' }) {
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
               <div>
                 <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
-                  <History size={16} className="text-emerald-600" /> ประวัติโต๊ะ {tableModal.tableId}
+                  <History size={16} className="text-emerald-600" />
+                  ประวัติออเดอร์ {str(activityModal.bill.checkId) || '-'}
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  {int(tableHistory.length)} บิล · รวม ฿{money(tableHistory.reduce((t, b) => t + billAmount(b), 0))}
-                  {' '}· ลูกค้า {int(tableHistory.reduce((t, b) => t + num(b.cover), 0))} คน
-                  {' '}· เฉลี่ย ฿{money(tableHistory.length ? tableHistory.reduce((t, b) => t + billAmount(b), 0) / tableHistory.length : 0)} / บิล
-                  {' '}· ช่วง {data?.range?.start} ถึง {data?.range?.end}
+                  {dayOf(activityModal.bill.date)} {timeOf(activityModal.bill.date)}
+                  {str(activityModal.bill.tableId) && <> · โต๊ะ {str(activityModal.bill.tableId)}</>}
+                  {str(activityModal.bill.orderType) && <> · {str(activityModal.bill.orderType)}</>}
+                  {str(activityModal.bill.status) && <> · {str(activityModal.bill.status)}</>}
+                  {' '}· ยอดบิล ฿{money(billAmount(activityModal.bill))}
+                  {' '}· {int(orderHistory.length)} ความเคลื่อนไหว
                 </p>
               </div>
               <button
-                onClick={() => setTableModal({ open: false, tableId: '' })}
+                onClick={closeActivity}
                 className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
               ><X size={18} /></button>
             </div>
             <div className="overflow-auto">
-              <table className="w-full text-[11px] whitespace-nowrap">
-                <thead className="bg-slate-50 text-slate-500 sticky top-0">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-semibold">ดูบิล</th>
-                    <th className="px-3 py-2 text-left font-semibold">วันที่</th>
-                    <th className="px-3 py-2 text-left font-semibold">เวลา</th>
-                    <th className="px-3 py-2 text-left font-semibold">เลขที่บิล</th>
-                    <th className="px-3 py-2 text-left font-semibold">ประเภท</th>
-                    <th className="px-3 py-2 text-left font-semibold">ชำระโดย</th>
-                    <th className="px-3 py-2 text-right font-semibold">ลูกค้า</th>
-                    <th className="px-3 py-2 text-right font-semibold">ยอดบิล</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {tableHistory.map((b, i) => (
-                    <tr key={`${str(b.checkId)}-${i}`} className="hover:bg-emerald-50/40">
-                      <td className="px-3 py-2">
-                        <button
-                          onClick={() => openBill(b)}
-                          className="flex items-center gap-1 px-2 py-1 border border-emerald-200 hover:bg-emerald-50 text-emerald-700 font-semibold rounded-lg text-[10px]"
-                        ><Eye size={12} /><span>ดูบิล</span></button>
-                      </td>
-                      <td className="px-3 py-2 text-slate-600">{dayOf(b.date)}</td>
-                      <td className="px-3 py-2 text-slate-500">{timeOf(b.date) || '-'}</td>
-                      <td className="px-3 py-2 font-mono font-semibold text-slate-700">{str(b.checkId) || '-'}</td>
-                      <td className="px-3 py-2 text-slate-500">{str(b.orderType) || '-'}</td>
-                      <td className="px-3 py-2 text-slate-600">{str(b.paidType) || '-'}</td>
-                      <td className="px-3 py-2 text-right font-mono">{b.cover === null ? '-' : int(b.cover)}</td>
-                      <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700">฿{money(billAmount(b))}</td>
+              {orderHistory.length ? (
+                <table className="w-full text-[11px] whitespace-nowrap">
+                  <thead className="bg-slate-50 text-slate-500 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">ลำดับ</th>
+                      <th className="px-3 py-2 text-left font-semibold">วันที่</th>
+                      <th className="px-3 py-2 text-left font-semibold">เวลา</th>
+                      <th className="px-3 py-2 text-left font-semibold">รายการ</th>
+                      <th className="px-3 py-2 text-left font-semibold">รายละเอียด</th>
+                      {activityCols.map((c) => (
+                        <th key={c.key} className={`px-3 py-2 font-semibold ${c.align === 'right' ? 'text-right' : 'text-left'}`}>{c.label}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {orderHistory.map((a, i) => (
+                      <tr key={`${str(a.activityId)}-${i}`} className="hover:bg-emerald-50/40">
+                        <td className="px-3 py-2 text-slate-400 font-mono">{i + 1}</td>
+                        <td className="px-3 py-2 text-slate-600">{dayOf(a.date) || '-'}</td>
+                        <td className="px-3 py-2 text-slate-500 font-mono">{timeOf(a.date) || '-'}</td>
+                        <td className="px-3 py-2">
+                          {str(a.activityType) ? (
+                            <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-bold text-[10px]">
+                              {str(a.activityType)}
+                            </span>
+                          ) : '-'}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600 whitespace-pre-wrap break-words max-w-md">{str(a.detail) || '-'}</td>
+                        {activityCols.map((c) => (
+                          <td
+                            key={c.key}
+                            className={`px-3 py-2 text-slate-600 ${c.align === 'right' ? 'text-right font-mono' : ''}`}
+                          >{hasValue(a[c.key]) ? (c.render ? c.render(a[c.key]) : str(a[c.key])) : '-'}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="px-5 py-10 text-center text-xs text-slate-400 space-y-2">
+                  {meta?.activityError ? (
+                    <>
+                      <p className="font-semibold text-amber-700">ยังอ่านประวัติออเดอร์จากฐาน Aoringo ไม่ได้</p>
+                      <p className="whitespace-pre-line text-amber-700/80 max-w-xl mx-auto">{meta.activityError}</p>
+                    </>
+                  ) : (
+                    <p>ไม่พบความเคลื่อนไหวของออเดอร์นี้ในตาราง OrderActivity</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="border-t border-slate-100 bg-slate-50 px-5 py-3 flex items-center justify-between text-[11px] text-slate-400">
+              <span>ข้อมูลจากตาราง OrderActivity · ช่วง {data?.range?.start} ถึง {data?.range?.end}</span>
+              <button
+                onClick={() => { closeActivity(); openBill(activityModal.bill); }}
+                className="flex items-center gap-1 px-2 py-1 border border-emerald-200 hover:bg-emerald-50 text-emerald-700 font-semibold rounded-lg text-[10px]"
+              ><Eye size={12} /><span>ดูบิล</span></button>
             </div>
           </div>
         </div>
@@ -1349,12 +1417,10 @@ export default function Franchise({ view = 'fcDashboard' }) {
                 </p>
               </div>
               <div className="flex items-center gap-1">
-                {str(billModal.bill.tableId) && (
-                  <button
-                    onClick={() => openTableHistory(billModal.bill.tableId)}
-                    className="flex items-center gap-1 px-2 py-1 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-lg text-[10px]"
-                  ><History size={12} /><span>ประวัติโต๊ะ</span></button>
-                )}
+                <button
+                  onClick={() => openActivity(billModal.bill)}
+                  className="flex items-center gap-1 px-2 py-1 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-lg text-[10px]"
+                ><History size={12} /><span>ประวัติออเดอร์</span></button>
                 <button
                   onClick={() => setBillModal({ open: false, bill: null, lines: [] })}
                   className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"

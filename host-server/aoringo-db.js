@@ -11,6 +11,7 @@
 //    GET /aoringo/sales?start=YYYY-MM-DD&end=YYYY-MM-DD   บิลขาย
 //    GET /aoringo/detail?start=…&end=…                    รายการสินค้าในบิล
 //    GET /aoringo/expense?start=…&end=…                   รายจ่าย
+//    GET /aoringo/activity?start=…&end=…                  ประวัติออเดอร์ (OrderActivity)
 //
 //  ตั้งค่าเชื่อมต่อ (ไม่ตั้ง = ใช้ค่าเดียวกับ QC/RD แต่เปลี่ยนฐานเป็น Aoringo):
 //    AORINGO_DB_SERVER · AORINGO_DB_NAME (ค่าเริ่มต้น Aoringo) · AORINGO_DB_USER/PASSWORD
@@ -103,6 +104,9 @@ function mountAoringo(app) {
 
   app.get('/aoringo/expense', (req, res) =>
     send(res, getCore().then(c => c.readExpenses(range(req))), 'expense'));
+
+  app.get('/aoringo/activity', (req, res) =>
+    send(res, getCore().then(c => c.readActivities(range(req))), 'activity'));
 }
 
 module.exports = { mountAoringo };

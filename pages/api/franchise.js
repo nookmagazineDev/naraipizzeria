@@ -3,15 +3,16 @@
 //   GET /api/franchise?view=sales&start=YYYY-MM-DD&end=YYYY-MM-DD    -> บิลขาย (ตารางแบบ Cpaid)
 //   GET /api/franchise?view=detail&start=…&end=…                     -> รายการสินค้าในบิล (แบบ Ctrans)
 //   GET /api/franchise?view=expense&start=…&end=…                    -> รายจ่าย
-//   GET /api/franchise?view=all&start=…&end=…                        -> ทั้งสามชุดในครั้งเดียว (หน้าเว็บใช้ตัวนี้)
+//   GET /api/franchise?view=activity&start=…&end=…                   -> ประวัติออเดอร์ (OrderActivity)
+//   GET /api/franchise?view=all&start=…&end=…                        -> ทั้งสี่ชุดในครั้งเดียว (หน้าเว็บใช้ตัวนี้)
 //   GET /api/franchise?view=schema                                   -> ตาราง/คอลัมน์ที่จับคู่ได้ในฐาน
 //   GET /api/franchise?view=diag                                     -> ต่อฐานได้ไหม ทางไหนพัง
 //
 // เพิ่ม &outlet=… กรองสาขาได้ถ้าตารางนั้นมีคอลัมน์สาขา · &limit=… ปรับเพดานแถวได้
 //
-// view=all ยอมให้ "รายจ่าย" พังเดี่ยว ๆ ได้ (บางฐานไม่มีตารางรายจ่ายเลย) โดยแนบ warning กลับไป
-// แทนที่จะล้มทั้งหน้า — ยอดขายเป็นข้อมูลหลักของเมนูนี้ ขาดรายจ่ายก็ยังดูได้
-import { readBills, readItems, readExpenses, readLayout, ping, hasDirectDb, describeTarget, AORINGO_API_BASE }
+// view=all ยอมให้ "รายจ่าย" กับ "ประวัติออเดอร์" พังเดี่ยว ๆ ได้ (บางฐานไม่มีตารางพวกนั้นเลย)
+// โดยแนบ warning กลับไปแทนที่จะล้มทั้งหน้า — ยอดขายเป็นข้อมูลหลักของเมนูนี้ ขาดสองอย่างนั้นก็ยังดูได้
+import { readBills, readItems, readExpenses, readActivities, readLayout, ping, hasDirectDb, describeTarget, AORINGO_API_BASE }
   from '../../lib/aoringoSource';
 
 // ดึงบิลทั้งเดือนผ่าน tunnel กินเวลามากกว่าเพดาน 10 วิของ Vercel ไปไกล
@@ -80,17 +81,21 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', data, meta: { source: route } });
     }
 
+    if (view === 'activity' || view === 'activities') {
+      const { data, route } = await readActivities(r);
+      return res.status(200).json({ status: 'success', data, meta: { source: route } });
+    }
+
     if (view === 'all') {
       // ยอดขาย (บิล+รายการ) ต้องได้ครบ ไม่งั้นแทบทุกหน้าย่อยว่างเปล่า → พังก็ให้พังทั้งคำขอ
       const [bills, items] = await Promise.all([readBills(r), readItems(r)]);
-      // รายจ่ายขาดได้ — บางฐานไม่มีตารางรายจ่ายเลย แนบ warning ให้หน้าเว็บขึ้นข้อความแทน
-      let expenses = null;
-      let expenseError = '';
-      try {
-        expenses = await readExpenses(r);
-      } catch (err) {
-        expenseError = err.message;
-      }
+      // รายจ่าย/ประวัติออเดอร์ขาดได้ — บางฐานไม่มีตารางพวกนี้เลย แนบ warning ให้หน้าเว็บขึ้นข้อความแทน
+      // (ยิงสองอันพร้อมกัน แล้วค่อยดูทีละอันว่าอันไหนพัง จะได้ไม่ต้องรอต่อคิวกันผ่าน tunnel)
+      const [expenseRes, activityRes] = await Promise.allSettled([readExpenses(r), readActivities(r)]);
+      const expenses = expenseRes.status === 'fulfilled' ? expenseRes.value : null;
+      const expenseError = expenseRes.status === 'rejected' ? expenseRes.reason.message : '';
+      const activities = activityRes.status === 'fulfilled' ? activityRes.value : null;
+      const activityError = activityRes.status === 'rejected' ? activityRes.reason.message : '';
       return res.status(200).json({
         status: 'success',
         data: {
@@ -98,19 +103,23 @@ export default async function handler(req, res) {
           bills: bills.data.rows,
           items: items.data.rows,
           expenses: expenses ? expenses.data.rows : [],
+          activities: activities ? activities.data.rows : [],
           layout: {
             bill: { table: bills.data.table, dateColumn: bills.data.dateColumn, missing: bills.data.missing },
             item: { table: items.data.table, dateColumn: items.data.dateColumn, missing: items.data.missing },
             expense: expenses
               ? { table: expenses.data.table, dateColumn: expenses.data.dateColumn, missing: expenses.data.missing }
               : null,
+            activity: activities
+              ? { table: activities.data.table, dateColumn: activities.data.dateColumn, missing: activities.data.missing }
+              : null,
           },
         },
-        meta: { source: bills.route, expenseError },
+        meta: { source: bills.route, expenseError, activityError },
       });
     }
 
-    return bad(res, `ไม่รู้จัก view=${view} (ใช้ได้: all | sales | detail | expense | schema | diag)`);
+    return bad(res, `ไม่รู้จัก view=${view} (ใช้ได้: all | sales | detail | expense | activity | schema | diag)`);
   } catch (err) {
     console.error('franchise API error:', err.message);
     return res.status(502).json({ status: 'error', message: err.message });

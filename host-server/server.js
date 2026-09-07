@@ -22,6 +22,7 @@
 //  endpoint ร้านเฟรนไชส์ (ฐาน Aoringo บนเครื่องเดียวกัน — ดู docs/franchise-aoringo.md):
 //    GET  /aoringo/ping | /aoringo/schema  → ต่อฐานได้ไหม + ตาราง/คอลัมน์ที่จับคู่ได้
 //    GET  /aoringo/sales | /aoringo/detail | /aoringo/expense?start=…&end=…  → บิล/รายการ/รายจ่าย
+//    GET  /aoringo/activity?start=…&end=…  → ประวัติออเดอร์ (OrderActivity)
 //  endpoint ช่วย debug:
 //    GET /tables                 → รายชื่อตารางทั้งหมด
 //    GET /columns?table=ชื่อ      → คอลัมน์ของตาราง (default = Ctrans)
