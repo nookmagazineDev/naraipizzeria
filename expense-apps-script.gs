@@ -187,6 +187,8 @@ function buildRow_(month, branch, it) {
     total = Number(it.total);                       // นำเข้ายอดเงินรวมโดยตรง
   } else if (qty !== '' && hasP) {
     total = qty * price;                            // คำนวณจากมิเตอร์×ราคา
+  } else if (!hasS && !hasE && hasP) {
+    total = price;                                  // ไม่มีเลขมิเตอร์เลย (ค่าเช่า/tel) — ราคาที่กรอกคือยอดของเดือนนั้น
   } else {
     total = '';
   }

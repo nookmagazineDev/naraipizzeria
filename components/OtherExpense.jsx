@@ -8,6 +8,7 @@ import { useBranches } from '../lib/useBranches';
  * NARAI OFFICE — ค่าใช้จ่ายอื่นๆ
  * เลือกสาขา + เดือน แล้วกรอกค่าใช้จ่ายแต่ละประเภท (เลขเริ่มต้น/สิ้นสุด + ราคา/หน่วย)
  * จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) · ผลรวม = จำนวน × ราคา/หน่วย
+ * แถวที่ไม่มีเลขมิเตอร์ (ค่าเช่าพื้นที่ · tel) ผลรวม = ราคา/หน่วย — กรอกยอดของเดือนนั้นช่องเดียวจบ
  * แถวที่เดือนนี้ยังไม่มีข้อมูล จะยกของเดือนก่อน (สาขา/ประเภท/มิเตอร์เดียวกัน) มาให้อัตโนมัติ
  * พร้อมป้ายบอกว่าเป็นค่าที่ยกมา: เลขสิ้นสุด -> เลขเริ่มต้น · ราคา/หน่วย -> ราคา/หน่วย
  * (ราคา/หน่วยส่วนใหญ่เท่าเดิมทุกเดือน กรอกซ้ำทุกครั้งเสียเวลาเปล่า — ถ้าเดือนนี้เปลี่ยนก็พิมพ์ทับได้)
@@ -215,12 +216,15 @@ export default function OtherExpense() {
     const mult = unitMultiplier(fr.type, branch);
     const qty = r.end === '' ? 0 : (end - start) * mult;
     const hasInput = r.start !== '' || r.end !== '' || r.price !== '';
-    let total = qty * price;
+    // แถวที่ไม่มีเลขมิเตอร์เลย (ค่าเช่าพื้นที่ · tel) ไม่มีจำนวนให้คูณ — เลขในช่องราคาคือยอดของเดือนนั้นเลย
+    // ต้องไม่มีทั้งเลขเริ่มต้นและสิ้นสุด แถวมิเตอร์ที่เพิ่งยกเลขเริ่มต้นมาจะได้ไม่ขึ้นยอดเป็นค่าราคา/หน่วย
+    const noMeter = r.start === '' && r.end === '';
+    let total = noMeter ? price : qty * price;
     // แถวที่บันทึกแบบยอดเงินอย่างเดียว (import ย้อนหลัง ไม่มีเลขมิเตอร์) — โชว์ยอดที่บันทึกไว้
     if (!hasInput && saved && saved.total !== '' && saved.total != null) total = parseFloat(saved.total) || 0;
     const c = saved ? null : carried[fr.rowKey];
     return {
-      ...fr, raw: r, saved, qty, total, hasInput, mult,
+      ...fr, raw: r, saved, qty, total, hasInput, mult, noMeter,
       carriedStart: !!c?.start, carriedPrice: !!c?.price,
     };
   }), [formRows, rows, savedMap, carried, branch]);
@@ -466,7 +470,8 @@ export default function OtherExpense() {
                           ×{r.mult}
                         </span>
                       )}
-                      {fmt(r.qty)}
+                      {/* ไม่มีเลขมิเตอร์ = ไม่มีจำนวนหน่วยให้บอก (ผลรวมมาจากช่องราคาตรง ๆ) ขึ้น 0.00 จะชวนสับสน */}
+                      {r.noMeter ? <span className="text-slate-300">—</span> : fmt(r.qty)}
                     </td>
                     <td className="px-2 py-2">
                       <input type="number" inputMode="decimal" value={r.raw.price} onChange={e => setCell(r.rowKey, 'price', e.target.value)} placeholder="0"
