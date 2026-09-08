@@ -5,11 +5,16 @@
 //   ชื่อ action และรูปแบบ body/ผลลัพธ์เหมือนเดิมทุกช่อง หน้าเว็บ (lib/expenseApi.js) จึงไม่ต้องแก้
 //
 // ฝั่งอ่าน (getExpenseRefs / getExpenses) ถ้า SQL ล่มจะถอยไปถาม Apps Script ให้
-// ฝั่งเขียนไม่ถอย — เขียนลงชีทบ้างลงฐานบ้าง แปลว่าข้อมูลสองที่จะไม่ตรงกันตั้งแต่นาทีนั้น
+// ฝั่งเขียนไม่ถอยไปชีท — เขียนลงชีทบ้างลงฐานบ้าง แปลว่าข้อมูลสองที่จะไม่ตรงกันตั้งแต่นาทีนั้น
+// (แต่ในโหมด sql ยังถอยจาก "ต่อ SQL ตรง" ไป host API ได้ ปลายทางเป็นฐานตัวเดียวกัน — ดู lib/sheetsSource.js)
 import {
   usingSql, sqlRoute,
   readExpenseRefs, readExpenses, saveOtherExpense, bulkImportExpenses, deleteExpenseByMonth,
 } from '../../lib/sheetsSource';
+
+// ทาง SQL อาจต้องลองต่อตรงก่อน (8 วิ) แล้วค่อยถอยไป host API ที่วิ่งผ่าน tunnel ของเครื่องออฟฟิศ
+// ค่าเริ่มต้นของ Vercel (10 วิ) ตัดกลางทางพอดี — ให้เท่ากับ API ตัวอื่นในโปรเจกต์
+export const config = { maxDuration: 60 };
 
 const SCRIPT_URL =
   process.env.EXPENSE_GAS_URL ||
@@ -59,7 +64,9 @@ export default async function handler(req, res) {
         // การเขียนห้ามถอยไปชีท — บอกไปตรง ๆ ว่าบันทึกไม่สำเร็จ ดีกว่าเขียนคนละที่กับที่หน้าเว็บอ่าน
         return res.status(502).json({
           status: 'error',
-          message: `บันทึกลง SQL ไม่สำเร็จ (${err.message}) — ยังไม่ได้บันทึกอะไรลงไป ลองใหม่อีกครั้ง`,
+          message:
+            `บันทึกลง SQL ไม่สำเร็จ (${err.message}) — ยังไม่ได้บันทึกอะไรลงไป ` +
+            'ตรวจว่าเครื่องออฟฟิศเปิด host-server อยู่ไหม (ทางสำรองตอนต่อ SQL ตรงไม่ติด) แล้วลองใหม่อีกครั้ง',
         });
       }
       // ฝั่งอ่านถอยไปถาม Apps Script ต่อได้ หน้าเว็บจะได้ไม่ค้าง
