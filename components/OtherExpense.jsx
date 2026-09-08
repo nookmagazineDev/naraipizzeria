@@ -8,8 +8,9 @@ import { useBranches } from '../lib/useBranches';
  * NARAI OFFICE — ค่าใช้จ่ายอื่นๆ
  * เลือกสาขา + เดือน แล้วกรอกค่าใช้จ่ายแต่ละประเภท (เลขเริ่มต้น/สิ้นสุด + ราคา/หน่วย)
  * จำนวน = สิ้นสุด − เริ่มต้น (หน่วยที่ใช้ไปตามมิเตอร์) · ผลรวม = จำนวน × ราคา/หน่วย
- * แถวที่เดือนนี้ยังไม่มีข้อมูล จะยกยอดเลขสิ้นสุดของเดือนก่อน (สาขา/ประเภท/มิเตอร์เดียวกัน)
- * มาเป็นเลขเริ่มต้นให้อัตโนมัติ พร้อมป้าย "ยกยอดจากเดือนก่อน"
+ * แถวที่เดือนนี้ยังไม่มีข้อมูล จะยกของเดือนก่อน (สาขา/ประเภท/มิเตอร์เดียวกัน) มาให้อัตโนมัติ
+ * พร้อมป้ายบอกว่าเป็นค่าที่ยกมา: เลขสิ้นสุด -> เลขเริ่มต้น · ราคา/หน่วย -> ราคา/หน่วย
+ * (ราคา/หน่วยส่วนใหญ่เท่าเดิมทุกเดือน กรอกซ้ำทุกครั้งเสียเวลาเปล่า — ถ้าเดือนนี้เปลี่ยนก็พิมพ์ทับได้)
  *
  * ข้อมูลผ่าน Google Apps Script (ผูกกับชีท 1YXOaA…) → proxy /api/expense-gas:
  *  - getExpenseRefs  : อ่านชีท "ข้อมูลค่าใช้อื่น" (A=ประเภท, B=สาขา, C=รหัส)
@@ -29,6 +30,14 @@ const unitMultiplier = (type, branch) =>
 const fmt = v => {
   const n = parseFloat(v);
   return isNaN(n) ? '0.00' : n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+// ป้าย/คำอธิบายของแถวที่ยกค่ามาจากเดือนก่อน — ยกมาช่องไหนบ้างก็บอกตามนั้น
+const carryLabel = (start, price) => {
+  if (start && price) return { text: 'ยกยอด+ราคาจากเดือนก่อน', title: 'เลขเริ่มต้นดึงมาจากเลขสิ้นสุด และราคา/หน่วยดึงมาจากราคาของเดือนก่อนอัตโนมัติ — เดือนนี้เปลี่ยนก็พิมพ์ทับได้' };
+  if (start) return { text: 'ยกยอดจากเดือนก่อน', title: 'เลขเริ่มต้นดึงมาจากเลขสิ้นสุดของเดือนก่อนอัตโนมัติ' };
+  if (price) return { text: 'ยกราคาจากเดือนก่อน', title: 'ราคา/หน่วยดึงมาจากราคาของเดือนก่อนอัตโนมัติ — เดือนนี้เปลี่ยนก็พิมพ์ทับได้' };
+  return null;
 };
 
 function thisMonth() {
@@ -53,7 +62,7 @@ export default function OtherExpense() {
   const [branch, setBranch] = useState('');
   // rows คีย์ด้วย rowKey (type||code) เพราะประเภทเดียวอาจมีหลายรหัส (หลายมิเตอร์)
   const [rows, setRows] = useState({});
-  // แถวที่เลขเริ่มต้นถูกยกยอดมาจากเลขสิ้นสุดของเดือนก่อนอัตโนมัติ (โชว์ป้ายบอกผู้ใช้)
+  // ช่องที่ถูกยกมาจากเดือนก่อนอัตโนมัติ (โชว์ป้ายบอกผู้ใช้) — rowKey -> { start, price }
   const [carried, setCarried] = useState({});
 
   // refs จากชีท: branches + codesMap (type||branch -> [รหัส...] เก็บครบทุกมิเตอร์ ไม่ทับกัน)
@@ -93,8 +102,10 @@ export default function OtherExpense() {
   const rowKeyOf = (type, code) => `${type}||${code}`;
   const setCell = (rowKey, field, value) => {
     setRows(prev => ({ ...prev, [rowKey]: { ...(prev[rowKey] || EMPTY), [field]: value } }));
-    // ผู้ใช้แก้เลขเริ่มต้นเอง = ไม่ใช่ค่ายกยอดจากเดือนก่อนแล้ว เอาป้ายออก
-    if (field === 'start') setCarried(prev => (prev[rowKey] ? { ...prev, [rowKey]: false } : prev));
+    // ผู้ใช้แก้ช่องที่ยกมาเอง = ไม่ใช่ค่าจากเดือนก่อนแล้ว เอาป้ายของช่องนั้นออก
+    setCarried(prev => (prev[rowKey]?.[field]
+      ? { ...prev, [rowKey]: { ...prev[rowKey], [field]: false } }
+      : prev));
   };
 
   // แตกแถวฟอร์มตามรหัส: ประเภทที่มีหลายรหัสจะได้หลายแถว (มิเตอร์ละแถว), ประเภทที่ไม่มีรหัสได้ 1 แถวว่าง
@@ -150,7 +161,7 @@ export default function OtherExpense() {
     return m;
   }, [history.rows, month, branch]);
 
-  // ข้อมูลที่บันทึกแล้วของเดือนก่อนหน้า (สาขาเดียวกัน) — ใช้ยกยอดเลขสิ้นสุด → เลขเริ่มต้นเดือนนี้
+  // ข้อมูลที่บันทึกแล้วของเดือนก่อนหน้า (สาขาเดียวกัน) — ใช้ยกเลขสิ้นสุด → เลขเริ่มต้น และราคา/หน่วยของเดือนนี้
   const prevSavedMap = useMemo(() => {
     const m = {};
     const pm = prevMonthOf(month);
@@ -167,7 +178,8 @@ export default function OtherExpense() {
   }, [savedMap]);
 
   // เลือกเดือน/สาขา → เติมตัวเลขที่เคยบันทึกลงฟอร์มให้แก้ไขต่อได้
-  // แถวที่เดือนนี้ยังไม่มีข้อมูล → ยกยอด: เลขเริ่มต้น = เลขสิ้นสุดของเดือนก่อน (ถ้ามี)
+  // แถวที่เดือนนี้ยังไม่มีข้อมูล → ยกของเดือนก่อนมา (เท่าที่เดือนก่อนมี):
+  //   เลขเริ่มต้น = เลขสิ้นสุดของเดือนก่อน · ราคา/หน่วย = ราคา/หน่วยของเดือนก่อน
   useEffect(() => {
     if (!branch) { setRows({}); setCarried({}); return; }
     const next = {};
@@ -181,9 +193,11 @@ export default function OtherExpense() {
     });
     Object.entries(prevSavedMap).forEach(([key, r]) => {
       if (next[key]) return; // เดือนนี้มีข้อมูลบันทึกแล้ว ไม่ทับ
-      if (r.end === '' || r.end == null) return; // เดือนก่อนไม่มีเลขสิ้นสุด ก็ไม่มีอะไรให้ยก
-      next[key] = { ...EMPTY, start: String(r.end) };
-      carry[key] = true;
+      const start = r.end !== '' && r.end != null ? String(r.end) : '';
+      const price = r.price !== '' && r.price != null ? String(r.price) : '';
+      if (!start && !price) return; // เดือนก่อนไม่มีอะไรให้ยกเลย
+      next[key] = { ...EMPTY, start, price };
+      carry[key] = { start: !!start, price: !!price };
     });
     setRows(next);
     setCarried(carry);
@@ -204,7 +218,11 @@ export default function OtherExpense() {
     let total = qty * price;
     // แถวที่บันทึกแบบยอดเงินอย่างเดียว (import ย้อนหลัง ไม่มีเลขมิเตอร์) — โชว์ยอดที่บันทึกไว้
     if (!hasInput && saved && saved.total !== '' && saved.total != null) total = parseFloat(saved.total) || 0;
-    return { ...fr, raw: r, saved, qty, total, hasInput, mult, carried: !saved && !!carried[fr.rowKey] };
+    const c = saved ? null : carried[fr.rowKey];
+    return {
+      ...fr, raw: r, saved, qty, total, hasInput, mult,
+      carriedStart: !!c?.start, carriedPrice: !!c?.price,
+    };
   }), [formRows, rows, savedMap, carried, branch]);
 
   const grandTotal = computed.reduce((s, r) => s + (r.total || 0), 0);
@@ -410,6 +428,10 @@ export default function OtherExpense() {
               {computed.map((r, i) => {
                 // แถวแรกของแต่ละประเภทแสดงชื่อประเภท (แถวมิเตอร์ถัด ๆ ไปเว้นว่างให้ดูเป็นกลุ่ม)
                 const firstOfType = r.codeIndex === 0;
+                const carry = carryLabel(r.carriedStart, r.carriedPrice);
+                // ช่องที่ยกมาให้เห็นชัดว่าเป็นค่าที่เติมให้ ไม่ใช่ที่พิมพ์เอง (ป้ายอยู่คอลัมน์แรก ไกลจากช่องกรอก)
+                const cellClass = (isCarried) => 'text-right border rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500 ' +
+                  (isCarried ? 'border-sky-200 bg-sky-50/60 text-sky-800' : 'border-slate-200');
                 return (
                   <tr key={r.rowKey} className={`hover:bg-slate-50/60 ${firstOfType && i !== 0 ? 'border-t-2 border-slate-100' : ''}`}>
                     <td className="px-4 py-2.5 font-semibold text-slate-800 whitespace-nowrap">
@@ -421,21 +443,21 @@ export default function OtherExpense() {
                           <CheckCircle size={8} /> บันทึกแล้ว
                         </span>
                       )}
-                      {r.carried && (
-                        <span title="เลขเริ่มต้นดึงมาจากเลขสิ้นสุดของเดือนก่อนอัตโนมัติ"
+                      {carry && (
+                        <span title={carry.title}
                           className="ml-1.5 inline-flex items-center px-1.5 py-0.5 bg-sky-50 text-sky-600 border border-sky-200 rounded-full text-[9px] font-bold align-middle">
-                          ยกยอดจากเดือนก่อน
+                          {carry.text}
                         </span>
                       )}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-xs text-slate-500 whitespace-nowrap">{r.code || '—'}</td>
                     <td className="px-2 py-2">
                       <input type="number" inputMode="decimal" value={r.raw.start} onChange={e => setCell(r.rowKey, 'start', e.target.value)} placeholder="0"
-                        className="w-28 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                        className={`w-28 ${cellClass(r.carriedStart)}`} />
                     </td>
                     <td className="px-2 py-2">
                       <input type="number" inputMode="decimal" value={r.raw.end} onChange={e => setCell(r.rowKey, 'end', e.target.value)} placeholder="0"
-                        className="w-28 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                        className={`w-28 ${cellClass(false)}`} />
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono text-slate-700 whitespace-nowrap">
                       {r.mult !== 1 && (
@@ -448,7 +470,7 @@ export default function OtherExpense() {
                     </td>
                     <td className="px-2 py-2">
                       <input type="number" inputMode="decimal" value={r.raw.price} onChange={e => setCell(r.rowKey, 'price', e.target.value)} placeholder="0"
-                        className="w-24 text-right border border-slate-200 rounded-lg px-2 py-1.5 font-mono focus:outline-none focus:ring-1 focus:ring-amber-500" />
+                        className={`w-24 ${cellClass(r.carriedPrice)}`} />
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono font-bold text-amber-700">฿{fmt(r.total)}</td>
                   </tr>
