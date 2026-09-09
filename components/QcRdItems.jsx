@@ -44,6 +44,7 @@ export default function QcRdItems() {
   const [statusFilter, setStatusFilter] = useState('');
   const [storeFilter, setStoreFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');   // '' = ทุกประเภท, MATERIAL, PACKAGING
+  const [branchFilter, setBranchFilter] = useState(''); // '' = ทุกสาขา, รหัสสาขา, NO_BRANCH
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null); // { ok, msg }
   const [editItem, setEditItem] = useState(null); // { code, name, status, subs[] }
@@ -91,6 +92,22 @@ export default function QcRdItems() {
   const noStoreCount = useMemo(() => items.filter(i => !i.storeCategory).length, [items]);
   const packagingCount = useMemo(() => items.filter(i => i.itemType === PACKAGING).length, [items]);
   const NO_STORE = '__none__'; // ค่าพิเศษของตัวกรอง = แสดงเฉพาะรายการที่ยังไม่ได้ระบุหมวดสโตร์
+  const NO_BRANCH = '__nobranch__'; // เช่นเดียวกัน = แสดงเฉพาะรายการที่ยังไม่ได้ระบุสาขา
+
+  // จำนวนไอเทมต่อสาขา — เอาไปโชว์ในตัวเลือกให้รู้ว่าสาขานั้นมีของกี่รายการก่อนกดเลือก
+  const branchCounts = useMemo(() => {
+    const c = {};
+    items.forEach(i => (i.usedBranches || []).forEach(b => { c[b] = (c[b] || 0) + 1; }));
+    return c;
+  }, [items]);
+  const noBranchCount = useMemo(() => items.filter(i => !(i.usedBranches || []).length).length, [items]);
+
+  // ตัวเลือกสาขา = ทะเบียนกลางก่อน แล้วต่อด้วยสาขาที่มีในข้อมูลแต่ไม่อยู่ในทะเบียนแล้ว
+  // (สาขาที่ถูกปิดการใช้งานยังมีไอเทมติ๊กค้างไว้ ถ้าไม่ใส่ไว้จะกรองหาของพวกนั้นไม่ได้เลย)
+  const branchOptions = useMemo(() => {
+    const extra = Object.keys(branchCounts).filter(b => !BRANCHES.includes(b)).sort();
+    return [...BRANCHES.map(b => ({ code: b, retired: false })), ...extra.map(b => ({ code: b, retired: true }))];
+  }, [BRANCHES, branchCounts]);
 
   // รหัสที่มีมากกว่า 1 แถวในชีท (กรอกซ้ำ) — เตือนไว้ เพราะฟีเจอร์แก้ไข/ลบด้วยรหัสอย่างเดียวจะโดนแค่แถวแรกเสมอ
   const duplicateCodes = useMemo(() => {
@@ -108,10 +125,13 @@ export default function QcRdItems() {
       else if (storeFilter && (i.storeCategory || '') !== storeFilter) return false;
       if (typeFilter === PACKAGING && i.itemType !== PACKAGING) return false;
       if (typeFilter === MATERIAL && i.itemType === PACKAGING) return false;
+      if (branchFilter === NO_BRANCH) { if ((i.usedBranches || []).length) return false; }
+      else if (branchFilter && !(i.usedBranches || []).includes(branchFilter)) return false;
       if (!q) return true;
       return codeMatch(i.code, q) || i.name.toLowerCase().includes(q);
     });
-  }, [items, search, unitFilter, statusFilter, storeFilter, typeFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, search, unitFilter, statusFilter, storeFilter, typeFilter, branchFilter]);
 
   // ติ๊กครบทุกสาขาแล้วหรือยัง — ต้องมีสาขาในทะเบียนอย่างน้อยหนึ่งตัวถึงจะนับว่า "ครบ"
   // (ช่วงที่ทะเบียนยังโหลดไม่เสร็จ รายการว่าง ถ้าไม่กันไว้ปุ่มจะขึ้นเป็นเลือกครบทั้งที่ยังไม่ได้เลือก)
@@ -312,6 +332,18 @@ export default function QcRdItems() {
             <option value={MATERIAL}>{MATERIAL}</option>
             <option value={PACKAGING}>{PACKAGING} ({packagingCount})</option>
           </select>
+          {/* กรองตามสาขาที่ใช้ไอเทม — จัดของทีละสาขาได้โดยไม่ต้องไล่หาในรายการรวมห้าพันกว่าแถว */}
+          <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)}
+            className={`border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 ${branchFilter
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-700 font-semibold' : 'border-slate-200 bg-white'}`}>
+            <option value="">ทุกสาขา</option>
+            {branchOptions.map(b => (
+              <option key={b.code} value={b.code}>
+                {b.code} ({(branchCounts[b.code] || 0).toLocaleString()}){b.retired ? ' — ปิดแล้ว' : ''}
+              </option>
+            ))}
+            {noBranchCount > 0 && <option value={NO_BRANCH}>— ยังไม่ได้ระบุสาขา ({noBranchCount.toLocaleString()})</option>}
+          </select>
         </div>
 
         {(error || (toast && !toast.ok)) && (
@@ -375,10 +407,15 @@ export default function QcRdItems() {
                     {i.converter != null && !isNaN(i.converter) ? Number(i.converter).toLocaleString() : <span className="text-slate-300">—</span>}
                   </td>
                   <td className="px-3 py-2">
+                    {/* กรองสาขาอยู่ = ดันสาขานั้นขึ้นมาไว้หน้าสุดแล้วเน้นสี ไม่งั้นอาจโดนตัดอยู่ใน "+n" */}
                     {(i.usedBranches || []).length === 0 ? <span className="text-slate-300 text-xs">—</span> : (
                       <div className="flex flex-wrap gap-1 max-w-[180px]" title={i.usedBranches.join(', ')}>
-                        {i.usedBranches.slice(0, 4).map(b => (
-                          <span key={b} className="inline-block px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-semibold">{b}</span>
+                        {(branchFilter && branchFilter !== NO_BRANCH
+                          ? [...i.usedBranches].sort((a, b) => (a === branchFilter ? -1 : b === branchFilter ? 1 : 0))
+                          : i.usedBranches
+                        ).slice(0, 4).map(b => (
+                          <span key={b} className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${b === branchFilter
+                            ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300' : 'bg-slate-100 text-slate-600'}`}>{b}</span>
                         ))}
                         {i.usedBranches.length > 4 && (
                           <span className="inline-block px-1.5 py-0.5 bg-slate-200 text-slate-500 rounded text-[10px] font-bold">+{i.usedBranches.length - 4}</span>
@@ -429,8 +466,14 @@ export default function QcRdItems() {
         {!loading && (
           <div className="px-4 py-3 border-t border-slate-100 text-xs text-slate-400 flex items-center gap-2">
             <Info size={13} />
-            แสดง {filtered.length.toLocaleString()} / {items.length.toLocaleString()} รายการ ·
-            หน่วยสีเหลือง = วิเคราะห์จากชื่อโดยระบบ (ยังไม่ได้เขียนลงชีท)
+            แสดง {filtered.length.toLocaleString()} / {items.length.toLocaleString()} รายการ
+            {branchFilter && (
+              <span className="text-emerald-600 font-semibold">
+                {' · เฉพาะ'}{branchFilter === NO_BRANCH ? 'รายการที่ยังไม่ได้ระบุสาขา' : `สาขา ${branchFilter}`}{' '}
+                <button onClick={() => setBranchFilter('')} className="ml-1 underline hover:text-emerald-800">ล้าง</button>
+              </span>
+            )}
+            {' · '}หน่วยสีเหลือง = วิเคราะห์จากชื่อโดยระบบ (ยังไม่ได้เขียนลงชีท)
           </div>
         )}
       </div>
