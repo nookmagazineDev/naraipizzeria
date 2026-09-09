@@ -14,6 +14,7 @@
 //    GET  /sheets/expense-ref              รหัสค่าใช้จ่าย (ประเภท/สาขา/รหัส)
 //    GET  /sheets/expense                  ค่าใช้จ่ายที่บันทึกแล้วทั้งหมด
 //    GET  /sheets/employee                 รายชื่อพนักงาน
+//    GET  /sheets/branch                   ทะเบียนสาขา (dbo.hr_branch)
 //    GET  /sheets/month-end-summary        สรุปรายสาขา: ปิดยอดรอบล่าสุดถึงวันไหน กี่รายการ มูลค่าเท่าไหร่
 //    GET  /sheets/month-end?month=&branch= แถวปิดรอบเดือนจาก dbo.stock_month_end (ไม่ระบุเดือน = เดือนล่าสุด)
 //    GET  /sheets/month-end-months         เดือนที่มีข้อมูลปิดรอบ ('YYYY-MM' ใหม่ก่อน)
@@ -21,7 +22,8 @@
 //    GET  /sheets/scan-edit-history?date=&emp=   ประวัติการแก้ของคนหนึ่งในวันหนึ่ง
 //    POST /sheets/save   { action, ... }   เขียน (ต้องมี header x-api-key)
 //                                          action: saveOtherExpense · bulkImport ·
-//                                          deleteExpenseByMonth · saveEmployee · saveScanEdit
+//                                          deleteExpenseByMonth · saveEmployee · saveScanEdit ·
+//                                          saveBranch · deleteBranch
 //
 //  ⚠️ เขียนได้ต้องตั้ง env SHEETS_WRITE_KEY (หรือใช้ QCRD_WRITE_KEY เดิมก็ได้) บนเครื่องโฮสต์
 //     แล้วตั้งค่าเดียวกันบน Vercel — ไม่ตั้ง = ปิดการเขียนไว้ (อ่านได้อย่างเดียว)
@@ -44,6 +46,18 @@ function getCore() {
       .catch(err => { corePromise = null; throw err; });
   }
   return corePromise;
+}
+
+// ทะเบียนสาขา (dbo.hr_branch) อยู่ฐานเดียวกัน — ตรรกะอยู่ใน lib/branchSql.mjs
+// หน้า HR > จัดการสาขา อ่าน/เขียนผ่านทางนี้เมื่อ Vercel ต่อ SQL ตรงไม่ติด (ซึ่งเป็นปกติที่ร้าน)
+let branchPromise = null;
+function getBranches() {
+  if (!branchPromise) {
+    branchPromise = import('../lib/branchSql.mjs')
+      .then(m => m.createBranches({ q }))
+      .catch(err => { branchPromise = null; throw err; });
+  }
+  return branchPromise;
 }
 
 // ข้อมูลปิดรอบเดือน (dbo.stock_month_end) อยู่ฐานเดียวกัน — ตรรกะอยู่ใน lib/monthEndSql.mjs
@@ -118,6 +132,10 @@ function mountSheets(app) {
   app.get('/sheets/expense', read('readExpenses'));
   app.get('/sheets/employee', read('readEmployees'));
 
+  // ทะเบียนสาขา — dropdown เลือกสาขาทุกหน้าและตารางแมป outletID ฝั่ง API กินข้อมูลชุดนี้
+  app.get('/sheets/branch', (req, res) =>
+    send(res, getBranches().then(c => c.readBranches()), 'readBranches'));
+
   // ข้อมูลปิดรอบเดือน — หน้า "ดูข้อมูลปิดรอบเดือน" (STOCK) ดูอย่างเดียว ไม่มีฝั่งเขียน
   app.get('/sheets/month-end-summary', (req, res) =>
     send(res, getMonthEnd().then(c => c.readMonthEndSummary()), 'readMonthEndSummary'));
@@ -151,8 +169,8 @@ function mountSheets(app) {
     }
     const body = req.body || {};
     const action = str(body.action);
-    return send(res, Promise.all([getCore(), getScanEdits()]).then(([core, scanEdits]) => {
-      const fn = core.actions[action] || scanEdits.actions[action];
+    return send(res, Promise.all([getCore(), getScanEdits(), getBranches()]).then(([core, scanEdits, branches]) => {
+      const fn = core.actions[action] || scanEdits.actions[action] || branches.actions[action];
       if (!fn) throw Object.assign(new Error(`unknown action: ${action}`), { badRequest: true });
       return fn(body);
     }), action);
