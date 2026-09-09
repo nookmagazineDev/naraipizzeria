@@ -27,7 +27,7 @@
       ส่ง area_alias มาเป็นตัวพิมพ์ใหญ่ ส่วนฐาน HR เก็บตัวพิมพ์เล็ก — ฝั่งโค้ดเทียบแบบ
       ไม่สนตัวพิมพ์อยู่แล้ว แต่ในทะเบียนต้องมีตัวสะกดเดียวไม่งั้นจะมีสาขาซ้ำสองแถว
    2) outlet_id = รหัสร้านฝั่ง POS ยอมให้ NULL ได้ เพราะสาขาที่เพิ่งเปิดอาจยังไม่ได้เลขมา
-      ตอนนี้เก็บไว้เป็นข้อมูลอ้างอิงของทะเบียน — ตารางแมป outlet ใน pages/api/*.js
+      ตอนนี้เก็บไว้เป็นข้อมูลอ้างอิงของทะเบียน — ตารางแมป outlet ในไฟล์ฝั่ง API
       (usage, orderd, withdrawals, extra-orders, usagebytable, usage-bom, ai-chat, index)
       ยังเป็นชุด hardcode ของตัวเองอยู่ ยังไม่ได้ต่อเข้ากับทะเบียนนี้
    3) status ใช้คำไทยชุดเดียวกับหน้าวัตถุดิบของ QC/RD ('ใช้งาน' / 'ปิดการใช้งาน')
@@ -43,6 +43,14 @@ IF DB_ID(N'InventoryNarai') IS NULL
 GO
 
 USE InventoryNarai;
+GO
+
+/* sqlcmd ตั้ง QUOTED_IDENTIFIER มาเป็น OFF (ต่างจาก SSMS ที่ ON ให้อยู่แล้ว) ซึ่งสร้าง
+   filtered index (index ที่มี WHERE) ไม่ได้ — จะขึ้น Msg 1934 แล้วข้าม index ไปเงียบ ๆ
+   ตั้งไว้ตรงนี้เป็น batch ของตัวเอง ค่าจะติดไปตลอดคอนเนกชัน ใช้ได้ทั้งสองทาง */
+SET ANSI_NULLS ON;
+GO
+SET QUOTED_IDENTIFIER ON;
 GO
 
 IF OBJECT_ID(N'dbo.hr_branch', N'U') IS NULL
