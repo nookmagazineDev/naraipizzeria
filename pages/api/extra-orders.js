@@ -1,3 +1,4 @@
+import { branchOutletMap } from '../../lib/branchRegistry';
 // ดึงออเดอร์เพิ่มเติมจาก Google Sheet (ระบบสั่งอาหารภายนอก) แล้วแปลงให้อยู่ในรูปแบบ
 // เดียวกับ API บิล (sales) และรายการ (details) เพื่อนำไปรวมในรายงาน โดยตั้งเป็นโต๊ะ 800
 // แยกสาขาตามคอลัมน์ L (RecordedBy) เช่น xum → 59, xcm → 19 (เดิม hardcode เป็น XUM หมด)
@@ -10,12 +11,8 @@ const DEFAULT_OUTLET = 59;   // ค่า fallback ถ้าคอลัมน�
 const TABLE_ID = 800;
 const CHECKID_BASE = 800000; // ฐานเลขบิลสังเคราะห์ กันชนกับ checkID จริง
 
-// รหัสสาขาในคอลัมน์ L (RecordedBy) → outletID (ชุดเดียวกับ branchMap ทั้งระบบ)
-const BRANCH_OUTLET = {
-  sjp: 7, crm: 12, xcm: 19, slr: 37, sum: 51, xum: 59, scs: 61, smp: 63,
-  xsb: 67, xhh: 72, hrs: 78, clk: 79, p90: 80, hps: 109, zbw: 400, zpt: 401,
-  npt: 500, wrm: 501, wmt: 503, ipr: 904,
-};
+// รหัสสาขา -> outletID อ่านจากทะเบียนสาขา (dbo.hr_branch) ผ่าน lib/branchRegistry.js
+// เพิ่มสาขาใหม่ที่หน้า HR > จัดการสาขา แล้วไฟล์นี้รู้จักเองทันที ไม่ต้องมาแก้โค้ด
 
 // แปลงช่องทางจ่ายจากชีต -> ช่องทางในระบบ (เติมยอดลงคอลัมน์ที่ตรง เพื่อให้ Total Sales นับถูก)
 // ถ้าไม่มีข้อมูลช่องทางจ่าย (ไม่อยู่ใน PaymentSummary) ให้ตั้งเป็น "เงินโอน (QR)" ไปก่อน
@@ -134,7 +131,8 @@ export default async function handler(req, res) {
 
     // สาขาจากคอลัมน์ L (RecordedBy) → outletID
     const branchOf = r => String(r[col.recordedBy] || '').trim().toLowerCase();
-    const outletOf = r => BRANCH_OUTLET[branchOf(r)] || DEFAULT_OUTLET;
+    const branchOutlet = await branchOutletMap();
+    const outletOf = r => branchOutlet[branchOf(r)] || DEFAULT_OUTLET;
 
     // จัดกลุ่มตาม สาขา + OrderNumber + วันที่เปิด
     // (ต้องมีสาขาในคีย์ ไม่งั้นเลขออเดอร์ซ้ำวันเดียวกันคนละสาขาจะรวมเป็นบิลเดียวผิด)

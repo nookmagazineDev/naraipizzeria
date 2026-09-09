@@ -22,15 +22,32 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 // (thoughtSignature ผูกกับโมเดล ใช้ข้ามรุ่นไม่ได้ จึงต้อง restart ไม่ใช่สลับกลางคัน)
 const MODEL_CHAIN = [...new Set([GEMINI_MODEL, 'gemini-flash-latest', 'gemini-flash-lite-latest'])];
 
-const OUTLETS = {
-  7: 'SJP', 12: 'CRM', 19: 'XCM', 37: 'SLR', 51: 'SUM',
-  59: 'XUM', 61: 'SCS', 63: 'SMP', 67: 'XSB', 72: 'XHH',
-  78: 'HRS', 79: 'CLK', 80: 'P90', 109: 'HPS', 400: 'ZBW',
-  401: 'ZPT', 500: 'NPT', 501: 'WRM', 503: 'WMT', 904: 'IPR',
-};
-const BRANCH_TO_OUTLET = Object.fromEntries(
+// outletID <-> รหัสสาขา — ตั้งต้นจากรายชื่อสำรองในโค้ด แล้วรีเฟรชจากทะเบียนสาขาจริง
+// (dbo.hr_branch) หนึ่งครั้งต่อคำขอ ตอนต้น handler เพิ่มสาขาใหม่ที่หน้า HR > จัดการสาขา
+// แล้วผู้ช่วยรู้จักทันที ไม่ต้องมาแก้ตารางนี้
+//
+// ประกาศเป็น let เพราะจุดที่เอาไปใช้เป็นฟังก์ชันธรรมดา (ไม่ใช่ async) หลายที่ — ให้อ่านค่า
+// ล่าสุดจากตัวแปรระดับโมดูลตอนถูกเรียก ง่ายกว่าไล่ส่งตารางเข้าไปทีละชั้น
+let OUTLETS = Object.fromEntries(
+  FALLBACK_BRANCHES.filter((b) => b.outletId).map((b) => [b.outletId, b.code])
+);
+let BRANCH_TO_OUTLET = Object.fromEntries(
   Object.entries(OUTLETS).map(([id, name]) => [name.toUpperCase(), parseInt(id)])
 );
+
+/** ดึงทะเบียนสาขาล่าสุดมาทับตารางข้างบน — branchOutletMap() แคชไว้ 5 นาทีอยู่แล้ว ไม่หนัก */
+async function refreshOutlets() {
+  try {
+    const m = await outletBranchMap();
+    if (!Object.keys(m).length) return;   // ทะเบียนว่าง = อย่าทับของสำรองจนไม่รู้จักสาขาเลย
+    OUTLETS = m;
+    BRANCH_TO_OUTLET = Object.fromEntries(
+      Object.entries(m).map(([id, name]) => [String(name).toUpperCase(), parseInt(id)])
+    );
+  } catch (err) {
+    console.error('ai-chat: อ่านทะเบียนสาขาไม่ได้ ใช้รายชื่อสำรองในโค้ดแทน:', err.message);
+  }
+}
 
 // กติกาเดียวกับหน้าเว็บ: ตัดโต๊ะ 600, ไอเทมเตรียมของ, บิลยอดเหมาข้าวกล่อง
 const EXCLUDE_TABLES = [600];
@@ -1298,6 +1315,9 @@ const TOOL_DECLARATIONS = [
 ];
 
 // ถามข้ามหลายเดือน = ยิง host API หลายก้อน — ต้องขอเวลาทำงานยาวกว่าค่า default ของ Vercel (10 วิ)
+import { outletBranchMap } from '../../lib/branchRegistry';
+import { FALLBACK_BRANCHES } from '../../lib/branches';
+
 export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
@@ -1309,6 +1329,7 @@ export default async function handler(req, res) {
   }
 
   try {
+    await refreshOutlets();   // ทะเบียนสาขาล่าสุด ก่อนเริ่มตอบคำถามที่อ้างชื่อสาขา
     const { messages } = req.body || {};
     if (!Array.isArray(messages) || !messages.length) {
       return res.status(400).json({ error: 'ต้องส่ง messages' });

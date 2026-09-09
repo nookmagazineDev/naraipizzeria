@@ -11,14 +11,12 @@ import { usingSql, fetchQcrdSql } from '../../lib/qcrdSource';
 // ยิง ctranbetweendate ตัวเดียวกับ /api/detail ซึ่งเป็นข้อมูลระดับไอเทม (หนักกว่ายอดบิลหลายเท่า)
 // ค่า default ของ Vercel คือ 10 วินาที ซึ่งไม่พอ — ตั้งเท่ากับ /api/detail และ /api/sales
 export const config = { maxDuration: 60 };
+import { branchOutletMap } from '../../lib/branchRegistry';
 
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 
-const BRANCH_OUTLET = {
-  sjp: 7, zjp: 7, crm: 12, xcm: 19, slr: 37, sum: 51, xum: 59, scs: 61,
-  smp: 63, xsb: 67, xhh: 72, hrs: 78, clk: 79, p90: 80, hps: 109, zbw: 400,
-  zpt: 401, npt: 500, wrm: 501, wmt: 503, ipr: 904,
-};
+// รหัสสาขา -> outletID อ่านจากทะเบียนสาขา (dbo.hr_branch) ผ่าน lib/branchRegistry.js
+// เพิ่มสาขาใหม่ที่หน้า HR > จัดการสาขา แล้วไฟล์นี้รู้จักเองทันที ไม่ต้องมาแก้โค้ด
 
 // โต๊ะ/ไอเทมที่ไม่นับ (กติกาเดียวกับหน้ารายงาน)
 const EXCLUDE_TABLES = [600];
@@ -106,7 +104,7 @@ export default async function handler(req, res) {
   }
 
   const key = String(branch).toLowerCase().trim();
-  const oid = outletId || BRANCH_OUTLET[key];
+  const oid = outletId || (await branchOutletMap())[key];
   if (!oid) return res.status(400).json({ status: 'error', message: `ไม่รู้จักสาขา ${branch}` });
 
   try {

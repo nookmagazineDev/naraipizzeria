@@ -1,14 +1,12 @@
+import { branchOutletMap } from '../../lib/branchRegistry';
 // "โต๊ะที่ขายเมนูนี้" — คำนวณจากบรรทัดขายจริงชุดเดียวกับ /api/usage-bom
 //   GET /usagebytable?branch&outletId&startDate&endDate&menuCode(&menu) -> { status, data:[{table, qty}] }
 // เดิม proxy ไปที่ Narai Usage API เครื่องเก่า (port 8787) ซึ่งใช้คนละฐานกับยอดใช้
 // ทำให้ "ขาย" ระดับเมนูกับผลรวมของโต๊ะไม่ตรงกัน (เคยเจอเมนู P20 ต่างกันเท่าตัว)
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 
-const BRANCH_OUTLET = {
-  sjp: 7, zjp: 7, crm: 12, xcm: 19, slr: 37, sum: 51, xum: 59, scs: 61,
-  smp: 63, xsb: 67, xhh: 72, hrs: 78, clk: 79, p90: 80, hps: 109, zbw: 400,
-  zpt: 401, npt: 500, wrm: 501, wmt: 503, ipr: 904,
-};
+// รหัสสาขา -> outletID อ่านจากทะเบียนสาขา (dbo.hr_branch) ผ่าน lib/branchRegistry.js
+// เพิ่มสาขาใหม่ที่หน้า HR > จัดการสาขา แล้วไฟล์นี้รู้จักเองทันที ไม่ต้องมาแก้โค้ด
 
 // โต๊ะ/ไอเทมที่ไม่นับ (กติกาเดียวกับ /api/usage-bom)
 const EXCLUDE_TABLES = [600];
@@ -36,7 +34,7 @@ export default async function handler(req, res) {
   if (!/^[a-z0-9]+$/.test(branchKey) || branchKey === 'all') {
     return res.status(200).json({ status: 'success', data: [] });
   }
-  const oid = outletId || BRANCH_OUTLET[branchKey];
+  const oid = outletId || (await branchOutletMap())[branchKey];
   if (!oid) return res.status(400).json({ status: 'error', message: `ไม่รู้จักสาขา ${branch}` });
 
   // จับคู่เมนูด้วยรหัส POS เป็นหลัก ถ้าไม่มีค่อยเทียบชื่อ (เผื่อของเก่าที่ส่งมาแต่ชื่อ)
