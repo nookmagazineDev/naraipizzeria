@@ -24,7 +24,7 @@
 // ⚠️ การลบไม่ตามขึ้นไป — ตัวดันใช้ MERGE (เพิ่ม/อัปเดต) ไม่ลบแถวที่หายไปจากชีท
 //    จะเอาวัตถุดิบออกจากหน้านับสต๊อก ให้ตั้งสถานะเป็น "ปิดการใช้งาน" ในชีทแทนการลบแถว
 //    (หน้านับสต๊อกกรองสถานะนี้ออกอยู่แล้ว) ใส่ &verify=1 เพื่อดูว่าชีทกับ SQL มีกี่แถวห่างกันแค่ไหน
-import { QCRD_API_BASE, sqlRoute, saveQcrdSql, viaDirectOrHost } from '../../lib/qcrdSource';
+import { QCRD_API_BASE, sqlRoute, saveQcrdSql, viaDirectOrHost, usingSql } from '../../lib/qcrdSource';
 import { explainHostError } from '../../lib/directRoute';
 import { runStep } from './qcrd-migrate';
 
@@ -177,6 +177,17 @@ export async function syncToSql(steps, { verify = false, budgetMs = 45000 } = {}
 }
 
 export default async function handler(req, res) {
+  // โหมด SQL แล้ว ห้ามดันชีทขึ้นฐาน — ชีทหยุดอัปเดตตั้งแต่วันที่พลิกสวิตช์ การดันคือเอาของเก่า
+  // MERGE ทับของจริงที่หน้าเว็บเพิ่งแก้ไป ซึ่งกู้คืนไม่ได้ ตัวดันมีไว้ตอนชีทเป็นต้นทางเท่านั้น
+  if (usingSql()) {
+    return res.status(200).json({
+      status: 'error',
+      message: 'ตอนนี้ QC/RD ใช้ SQL เป็นต้นทางแล้ว (QCRD_SOURCE=sql) — ' +
+        'การดันชีทขึ้น SQL จะเอาข้อมูลเก่าในชีททับของจริงที่แก้ไว้ จึงปิดไว้ ' +
+        '(ถ้าตั้งใจจะกลับไปใช้ชีท ให้เอา env QCRD_SOURCE ออกก่อน)',
+    });
+  }
+
   const q = { ...req.query, ...(typeof req.body === 'object' ? req.body : {}) };
   const steps = q.steps || q.step || 'item';
   const verify = String(q.verify || '') === '1' || q.verify === true;

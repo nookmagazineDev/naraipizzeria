@@ -258,12 +258,15 @@ export default function QcRdItems() {
                 <CheckCircle size={13} />{toast.msg}
               </span>
             )}
-            <button onClick={pushToSql} disabled={syncing}
-              title="ดันทะเบียนวัตถุดิบจากชีทขึ้น SQL (dbo.stock_item) เพื่อให้หน้านับสต๊อกของสาขาเห็นของที่แก้จากหน้านี้"
-              className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 disabled:text-slate-300 border border-slate-200 text-slate-600 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
-              {syncing ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
-              อัพขึ้น SQL
-            </button>
+            {/* โหมด SQL ไม่ต้องมีปุ่มนี้ — ข้อมูลอยู่ในฐานอยู่แล้ว และการดันชีททับจะเอาของเก่ามาลบของใหม่ */}
+            {source !== 'sql' && (
+              <button onClick={pushToSql} disabled={syncing}
+                title="ดันทะเบียนวัตถุดิบจากชีทขึ้น SQL (dbo.stock_item) เพื่อให้หน้านับสต๊อกของสาขาเห็นของที่แก้จากหน้านี้"
+                className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 disabled:text-slate-300 border border-slate-200 text-slate-600 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+                {syncing ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                อัพขึ้น SQL
+              </button>
+            )}
             <button onClick={openNew}
               title="เพิ่มวัตถุดิบใหม่ลงชีท item"
               className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
