@@ -46,8 +46,7 @@ export default async function handler(req, res) {
     'sjp': '7', 'crm': '12', 'xcm': '19', 'slr': '37', 'sum': '51',
     'xum': '59', 'scs': '61', 'smp': '63', 'xsb': '67', 'xhh': '72',
     'hrs': '78', 'clk': '79', 'p90': '80', 'hps': '109', 'zbw': '400',
-    'zpt': '401', 'npt': '500', 'wrm': '501', 'wmt': '503', 'ipr': '904',
-    'zk3': '906'
+    'zpt': '401', 'npt': '500', 'wrm': '501', 'wmt': '503', 'ipr': '904'
   };
 
   const branchKey = String(branch).toLowerCase().trim();

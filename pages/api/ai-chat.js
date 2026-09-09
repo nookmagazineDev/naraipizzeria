@@ -26,7 +26,7 @@ const OUTLETS = {
   7: 'SJP', 12: 'CRM', 19: 'XCM', 37: 'SLR', 51: 'SUM',
   59: 'XUM', 61: 'SCS', 63: 'SMP', 67: 'XSB', 72: 'XHH',
   78: 'HRS', 79: 'CLK', 80: 'P90', 109: 'HPS', 400: 'ZBW',
-  401: 'ZPT', 500: 'NPT', 501: 'WRM', 503: 'WMT', 904: 'IPR', 906: 'ZK3',
+  401: 'ZPT', 500: 'NPT', 501: 'WRM', 503: 'WMT', 904: 'IPR',
 };
 const BRANCH_TO_OUTLET = Object.fromEntries(
   Object.entries(OUTLETS).map(([id, name]) => [name.toUpperCase(), parseInt(id)])

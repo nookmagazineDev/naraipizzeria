@@ -47,7 +47,7 @@ GO
 
 IF OBJECT_ID(N'dbo.hr_branch', N'U') IS NULL
 CREATE TABLE dbo.hr_branch (
-    branch_code NVARCHAR(10)   NOT NULL,   -- รหัสสาขา ตัวพิมพ์ใหญ่ (SJP, P90, ZK3)
+    branch_code NVARCHAR(10)   NOT NULL,   -- รหัสสาขา ตัวพิมพ์ใหญ่ (SJP, P90, IPR)
     branch_name NVARCHAR(255)  NOT NULL CONSTRAINT DF_hr_branch_name    DEFAULT (N''),
     outlet_id   INT            NULL,       -- รหัสร้านฝั่ง POS (ว่างได้ถ้ายังไม่ได้เลขมา)
     status      NVARCHAR(30)   NOT NULL CONSTRAINT DF_hr_branch_status  DEFAULT (N'ใช้งาน'),
@@ -77,8 +77,7 @@ USING (VALUES
     (N'SUM',  51,  5), (N'XUM',  59,  6), (N'SCS',  61,  7), (N'SMP',  63,  8),
     (N'XSB',  67,  9), (N'XHH',  72, 10), (N'HRS',  78, 11), (N'CLK',  79, 12),
     (N'P90',  80, 13), (N'HPS', 109, 14), (N'ZBW', 400, 15), (N'ZPT', 401, 16),
-    (N'NPT', 500, 17), (N'WRM', 501, 18), (N'WMT', 503, 19), (N'IPR', 904, 20),
-    (N'ZK3', 906, 21)
+    (N'NPT', 500, 17), (N'WRM', 501, 18), (N'WMT', 503, 19), (N'IPR', 904, 20)
 ) AS s (branch_code, outlet_id, sort_order)
 ON t.branch_code = s.branch_code
 WHEN NOT MATCHED BY TARGET THEN
