@@ -24,6 +24,10 @@ const fmtQty = (v) => (v === null || v === undefined || v === '' || isNaN(v)) ? 
 
 const roundQty = (v) => Math.round((Number(v) || 0) * 10000) / 10000;
 
+// ข้อความอธิบายตอนหน้าถูกล็อกไม่ให้แก้ (โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท)
+const LOCK_HINT = 'ตอนนี้อ่านข้อมูลจาก SQL ไม่ได้ กำลังแสดงข้อมูลจากชีทแทน — ' +
+  'ถ้าบันทึกตอนนี้จะเขียนทับของจริงด้วยข้อมูลที่อาจเก่ากว่า จึงล็อกไว้ก่อน (กดรีเฟรชเมื่อ SQL กลับมา)';
+
 const PAGE_SIZE = 50;
 const NEW_GROUP = '__new__'; // ค่าใน dropdown หมวดหมู่ = สร้างหมวดใหม่
 // แท็กของวัตถุดิบในสูตร มีแค่ 2 อย่าง — ใช้คำเดียวกับ "ประเภท" ในหน้าวัตถุดิบ จะได้ไขว้ข้อมูลกันได้
@@ -57,6 +61,9 @@ export default function QcRdMenu() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
   const [formMsg, setFormMsg] = useState(null);     // ข้อความในฟอร์ม (ผลการดึงสูตร/รวมรายการซ้ำ)
+  // โหมด SQL ที่อ่าน SQL ไม่ได้แล้วถอยไปอ่านชีท — ที่เห็นบนจอไม่ใช่ข้อมูลที่ปุ่มบันทึกจะเขียนทับ
+  // ล็อกการแก้ไขทั้งหน้าไว้ก่อน ไม่งั้นจะเกิดอาการ "บันทึกสำเร็จแต่ข้อมูลไม่เปลี่ยน" เหมือนที่เคยเจอ
+  const [degraded, setDegraded] = useState(false);
 
   // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งหน้า (ใช้หลังกดบันทึก)
   // ของเดิมพอบันทึกเสร็จจะล้างตารางทิ้งแล้วโหลดใหม่ทั้งสี่ชุด (เมนูห้าพันกว่าแถว + สูตรทั้งชีท)
@@ -74,7 +81,8 @@ export default function QcRdMenu() {
       fetch(`/api/rcp${bust ? `?t=${Date.now()}` : ''}`).then(r => r.json()).catch(() => ({})),
     ]).then(([m, b, it, g, rc]) => {
       if (m.status === 'success') setMenus(m.data || []); else setError(m.message || 'โหลดรายการเมนูไม่สำเร็จ');
-      // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ขึ้นเตือนไว้ ไม่งั้นจะนึกว่าที่แก้ไปหายไป
+      // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ขึ้นแถบเตือนค้างไว้ + ล็อกการแก้ไข
+      setDegraded([m, b, it, g].some(r => r && r.degraded));
       if (m.warning) setToast({ ok: false, msg: m.warning });
       if (b.status === 'success') setBom(b.data || {});
       if (it.status === 'success') setItems(it.data || []);
@@ -299,6 +307,7 @@ export default function QcRdMenu() {
   }, 0);
 
   const handleSave = async () => {
+    if (degraded) { setFormMsg({ ok: false, msg: LOCK_HINT }); return; }
     if (!editMenu.code.trim() || !editMenu.name.trim()) {
       setFormMsg({ ok: false, msg: 'กรุณากรอกรหัสและชื่อเมนู' });
       return;
@@ -405,6 +414,24 @@ export default function QcRdMenu() {
   // การบีบไว้ที่ max-w-6xl ทำให้ต้องเลื่อนแนวนอนตลอดทั้งที่จอกว้างพอ
   return (
     <div className="w-full space-y-5">
+      {/* แถบค้าง (ไม่ใช่ toast ที่หายไปเอง) — สถานะนี้ห้ามแก้ข้อมูล คนใช้ต้องเห็นตลอดเวลาที่เปิดหน้าอยู่ */}
+      {degraded && (
+        <div className="flex items-start gap-2.5 p-4 bg-rose-50 border border-rose-200 rounded-2xl">
+          <AlertTriangle size={18} className="flex-shrink-0 text-rose-500 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-bold text-rose-700">อ่านข้อมูลจาก SQL ไม่ได้ — ล็อกการแก้ไขไว้ชั่วคราว</p>
+            <p className="text-rose-600 mt-0.5">
+              ที่แสดงอยู่เป็นข้อมูลจากชีท ซึ่งอาจไม่ตรงกับของจริงใน SQL — ถ้าบันทึกตอนนี้จะเขียนทับของจริงด้วยของเก่า
+              จึงปิดปุ่มบันทึกทั้งหมดไว้ก่อน ดูได้แต่แก้ไม่ได้
+            </p>
+            <button onClick={() => loadAll()}
+              className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-white border border-rose-200 rounded-lg hover:bg-rose-100">
+              ลองใหม่
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -431,8 +458,8 @@ export default function QcRdMenu() {
                 {toast.ok ? <CheckCircle size={13} /> : <AlertCircle size={13} />}{toast.msg}
               </span>
             )}
-            <button onClick={openAdd}
-              className="inline-flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+            <button onClick={openAdd} disabled={degraded} title={degraded ? LOCK_HINT : ''}
+              className="inline-flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
               <Plus size={14} /> เพิ่มเมนู
             </button>
           </div>
@@ -455,8 +482,8 @@ export default function QcRdMenu() {
             <option value="ใช้งาน">ใช้งาน</option>
             <option value="ปิดการใช้งาน">ปิดการใช้งาน</option>
           </select>
-          <button onClick={() => setGroupModal(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">
+          <button onClick={() => setGroupModal(true)} disabled={degraded} title={degraded ? LOCK_HINT : ''}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-50">
             <Pencil size={13} /> จัดการหมวดหมู่
           </button>
         </div>
@@ -524,9 +551,9 @@ export default function QcRdMenu() {
                       ) : <span className="text-slate-300 text-xs">ไม่มีสูตร</span>}
                     </td>
                     <td className="px-4 py-2 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                      <button onClick={() => toggleStatus(m)} disabled={togglingCode === m.code}
-                        title={off ? 'กดเพื่อเปิดใช้งาน' : 'กดเพื่อปิดใช้งาน'}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all ${off
+                      <button onClick={() => toggleStatus(m)} disabled={togglingCode === m.code || degraded}
+                        title={degraded ? LOCK_HINT : (off ? 'กดเพื่อเปิดใช้งาน' : 'กดเพื่อปิดใช้งาน')}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all disabled:opacity-60 ${off
                           ? 'bg-rose-100 text-rose-600 border-rose-200 hover:bg-rose-200'
                           : 'bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-100'}`}>
                         {togglingCode === m.code ? <Loader2 size={11} className="animate-spin" /> : <Power size={11} />}
@@ -534,8 +561,8 @@ export default function QcRdMenu() {
                       </button>
                     </td>
                     <td className="px-4 py-2 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                      <button onClick={() => openEdit(m)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50">
+                      <button onClick={() => openEdit(m)} disabled={degraded} title={degraded ? LOCK_HINT : ''}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">
                         <Pencil size={12} /> แก้ไข
                       </button>
                     </td>
@@ -583,9 +610,9 @@ export default function QcRdMenu() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => { openEdit(viewMenu); setViewCode(null); }}
-                  title={viewRcp ? 'เปิดฟอร์มสูตรของชีทต้นทุนเมนู (เริ่มจากว่าง) — สูตร POS ข้างล่างไม่ได้ถูกคัดลอกมาให้' : ''}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100">
+                <button onClick={() => { openEdit(viewMenu); setViewCode(null); }} disabled={degraded}
+                  title={degraded ? LOCK_HINT : (viewRcp ? 'เปิดฟอร์มสูตรของชีทต้นทุนเมนู (เริ่มจากว่าง) — สูตร POS ข้างล่างไม่ได้ถูกคัดลอกมาให้' : '')}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 disabled:opacity-50">
                   <Pencil size={12} /> {viewRcp ? 'สร้างสูตรในชีท' : 'แก้ไขสูตร'}
                 </button>
                 <button onClick={() => setViewCode(null)} className="text-slate-400 hover:text-slate-700"><X size={20} /></button>
@@ -907,7 +934,7 @@ export default function QcRdMenu() {
             <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-2">
               <button onClick={() => setEditMenu(null)} disabled={saving}
                 className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
-              <button onClick={handleSave} disabled={saving}
+              <button onClick={handleSave} disabled={saving || degraded} title={degraded ? LOCK_HINT : ''}
                 className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
                 {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />}
                 {saving ? 'กำลังบันทึก…' : 'บันทึกเมนู'}
