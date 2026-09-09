@@ -64,7 +64,7 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UQ_hr_branch_outlet' AND
     CREATE UNIQUE INDEX UQ_hr_branch_outlet ON dbo.hr_branch (outlet_id) WHERE outlet_id IS NOT NULL;
 GO
 
-/* ============================ ข้อมูลตั้งต้น 21 สาขา ============================
+/* ============================ ข้อมูลตั้งต้น 20 สาขา ============================
    ชุดเดียวกับที่เคย hardcode ไว้ใน components/Attendance.jsx, QcRdItems.jsx,
    OtherExpense.jsx และตาราง OUTLETS ใน pages/index.js
    ชื่อไทยยังว่าง — ไปกรอกที่หน้า HR → จัดการสาขา (หรือกดปุ่มดึงชื่อจากระบบตารางงาน)
@@ -113,5 +113,5 @@ BEGIN CATCH
 END CATCH
 GO
 
-PRINT N'สร้างตารางทะเบียนสาขา (InventoryNarai.dbo.hr_branch) + ข้อมูลตั้งต้น 21 สาขา เรียบร้อย';
+PRINT N'สร้างตารางทะเบียนสาขา (InventoryNarai.dbo.hr_branch) + ข้อมูลตั้งต้น 20 สาขา เรียบร้อย';
 GO
