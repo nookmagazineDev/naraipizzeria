@@ -15,6 +15,8 @@
 //    GET  /sheets/expense                  ค่าใช้จ่ายที่บันทึกแล้วทั้งหมด
 //    GET  /sheets/employee                 รายชื่อพนักงาน
 //    GET  /sheets/branch                   ทะเบียนสาขา (dbo.hr_branch)
+//    GET  /sheets/stock-items?branch=crm   หน้านับสต๊อก: ยอดนับ/ยอดยกมา/ใบเบิกล่าสุดของสาขานั้น
+//    GET  /sheets/stock-total?endDate=     ยอดคงเหลือรวมทุกสาขา (ไม่ระบุวัน = ล่าสุด)
 //    GET  /sheets/month-end-summary        สรุปรายสาขา: ปิดยอดรอบล่าสุดถึงวันไหน กี่รายการ มูลค่าเท่าไหร่
 //    GET  /sheets/month-end?month=&branch= แถวปิดรอบเดือนจาก dbo.stock_month_end (ไม่ระบุเดือน = เดือนล่าสุด)
 //    GET  /sheets/month-end-months         เดือนที่มีข้อมูลปิดรอบ ('YYYY-MM' ใหม่ก่อน)
@@ -58,6 +60,18 @@ function getBranches() {
       .catch(err => { branchPromise = null; throw err; });
   }
   return branchPromise;
+}
+
+// หน้านับสต๊อกและขอเบิก (dbo.stock_count/stock_balance/stock_request) — ตรรกะอยู่ใน lib/stockCountSql.mjs
+// ฝั่งสาขาย้ายไปอ่าน-เขียนบน SQL หมดแล้ว หน้าออฟฟิศจึงต้องอ่านที่เดียวกัน ไม่ใช่ชีทที่หยุดอัปเดตไปแล้ว
+let stockPromise = null;
+function getStockCount() {
+  if (!stockPromise) {
+    stockPromise = import('../lib/stockCountSql.mjs')
+      .then(m => m.createStockCount({ q }))
+      .catch(err => { stockPromise = null; throw err; });
+  }
+  return stockPromise;
 }
 
 // ข้อมูลปิดรอบเดือน (dbo.stock_month_end) อยู่ฐานเดียวกัน — ตรรกะอยู่ใน lib/monthEndSql.mjs
@@ -131,6 +145,14 @@ function mountSheets(app) {
   app.get('/sheets/expense-ref', read('readExpenseRefs'));
   app.get('/sheets/expense', read('readExpenses'));
   app.get('/sheets/employee', read('readEmployees'));
+
+  // หน้านับสต๊อกและขอเบิก — ยอดนับ/ยอดยกมา/ใบเบิกล่าสุดของสาขา (ชุดเดียวกับที่หน้าสาขาเห็น)
+  app.get('/sheets/stock-items', (req, res) =>
+    send(res, getStockCount().then(c => c.readStockItems(str(req.query.branch).toLowerCase())), 'readStockItems'));
+
+  // ยอดคงเหลือรวมทุกสาขา — หน้า "ดูยอดรวมทุกสาขา" (ไม่ระบุ endDate = ล่าสุด)
+  app.get('/sheets/stock-total', (req, res) =>
+    send(res, getStockCount().then(c => c.readStockTotal(str(req.query.endDate))), 'readStockTotal'));
 
   // ทะเบียนสาขา — dropdown เลือกสาขาทุกหน้าและตารางแมป outletID ฝั่ง API กินข้อมูลชุดนี้
   app.get('/sheets/branch', (req, res) =>

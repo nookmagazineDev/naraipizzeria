@@ -123,6 +123,8 @@ export default function StockList() {
     try {
       const itemsRes = await apiRead('getStockItems', { branch });
       if (branch !== branchRef.current) return;   // เปลี่ยนสาขาไปแล้ว ทิ้งผลเก่า
+      // อ่านยอดนับจากฐานไม่ได้แล้วถอยไปชีทเก่า — ต้องบอก ไม่งั้นคนอ่านเลขเดือนที่แล้วโดยไม่รู้ตัว
+      if (itemsRes.warning) toast.error(itemsRes.warning, { duration: 8000 });
 
       const merged = mergeEndding(
         itemsRes.data.map(item => ({ ...item, remaining: '', requested: '' })),

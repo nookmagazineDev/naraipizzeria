@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { PackageSearch, Search, Loader2, AlertCircle, Download } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
-import { apiCall } from '../lib/stockApi';
+import { apiCall, apiRead } from '../lib/stockApi';
 
 // ต้องตรงกับ normalizeId ใน /api/usage-bom เป๊ะ ไม่งั้นคีย์รหัสสินค้าจับคู่กันไม่ติด
 const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
@@ -58,9 +58,11 @@ export default function StockTotalList() {
       }
       
       // Load initial stock totals without end date (latest available)
-      const itemsRes = await apiCall('getStockTotal', { endDate: '' });
+      // apiRead = /api/stock-read ซึ่งอ่านยอดนับจาก SQL (ฐานเดียวกับที่สาขาบันทึก) ไม่ใช่ชีทที่หยุดอัปเดตแล้ว
+      const itemsRes = await apiRead('getStockTotal', { endDate: '' });
       if (itemsRes.status === 'success') {
         setItems(itemsRes.data);
+        if (itemsRes.warning) toast.error(itemsRes.warning, { duration: 8000 });
       }
     } catch (err) {
       toast.error('เกิดข้อผิดพลาดในการโหลดข้อมูลเริ่มต้น');
@@ -77,9 +79,10 @@ export default function StockTotalList() {
 
     setIsFetchingApi(true);
     try {
-      // ยอดนับล่าสุด — ส่ง endDate ว่างเสมอ เพราะชีทเก็บยอดนับครั้งล่าสุดของแต่ละสาขาไว้อยู่แล้ว
+      // ยอดนับล่าสุด — ส่ง endDate ว่างเสมอ เพราะฝั่งฐานคัดยอดนับครั้งล่าสุดของแต่ละสาขามาให้อยู่แล้ว
       // ช่วงวันที่ด้านบนมีผลกับ "ยอดใช้รวม" เท่านั้น
-      const stockRes = await apiCall('getStockTotal', { endDate: '' });
+      const stockRes = await apiRead('getStockTotal', { endDate: '' });
+      if (stockRes.warning) toast.error(stockRes.warning, { duration: 8000 });
       if (stockRes.status !== 'success') {
         toast.error('ไม่สามารถดึงยอดคงเหลือได้');
         return;

@@ -12,6 +12,14 @@
 //
 // เปิด GET /api/stock-gas จากเบราว์เซอร์ = health check ดูว่า deployment ยังตอบอยู่ไหม
 import { diagnoseGas } from '../../lib/gasDiagnose';
+import { usingStockSql } from '../../lib/sheetsSource';
+
+// การบันทึกของหน้านับสต๊อกที่ "ต้องไม่วิ่งลงชีทอีกแล้ว" เมื่ออ่านจาก SQL
+//
+// สาขาย้ายไปนับบน SQL หมดแล้ว ถ้าฝั่งนี้ยังเขียนลงชีท = บันทึกไปคนละที่กับที่หน้าตัวเองอ่าน
+// อาการที่จะเจอคือ "กดบันทึกขึ้นสำเร็จ แต่เลขไม่เปลี่ยน" แล้วยังทำให้ข้อมูลสองระบบแยกกันไปอีก
+// จึงกันไว้ตรงนี้ พร้อมบอกให้ไปบันทึกที่หน้าสาขาแทน (ฝั่งเขียนของหน้านี้ยังไม่ได้ย้ายตาม)
+const STOCK_WRITE_ACTIONS = new Set(['saveStock', 'updateStorageCategory']);
 
 // อ่านรายชื่อพนักงาน/รายการสต๊อกทั้งชีทนานเกินค่าเริ่มต้น 10 วินาทีของ Vercel ได้
 export const config = { maxDuration: 60 };
@@ -83,6 +91,19 @@ export default async function handler(req, res) {
 
   try {
     const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {});
+
+    const action = String((typeof req.body === 'string'
+      ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })()
+      : (req.body || {})).action || '').trim();
+    if (usingStockSql() && STOCK_WRITE_ACTIONS.has(action)) {
+      return res.status(409).json({
+        status: 'error',
+        message:
+          'ยอดนับสต๊อกย้ายไปเก็บบนฐานข้อมูลของสาขาแล้ว หน้านี้จึงบันทึกให้ไม่ได้ ' +
+          '(ถ้าบันทึกจากที่นี่จะลงชีทเก่าที่ไม่มีใครอ่านแล้ว) — ให้นับและกดบันทึกที่หน้าสาขา ' +
+          'narai-branch.vercel.app/stock/list แทน แล้วรีเฟรชหน้านี้จะเห็นตัวเลขทันที',
+      });
+    }
     let { status, finalUrl, text } = await callGas(body);
     let json;
     try { json = JSON.parse(text); }
