@@ -53,3 +53,33 @@ FROM dbo.Cpaid
 WHERE [Date] >= '2026-09-09 00:00:00' AND [Date] <= '2026-09-09 23:59:59';
 SET STATISTICS TIME OFF;
 GO
+
+/* ---- 5) สเปคเครื่อง + ข้อจำกัดของ SQL Server รุ่นที่ใช้ ----
+   Express จำกัดแคชไว้ 1 GB · CPU 4 คอร์ · ฐานโตได้สูงสุด 10 GB
+   ถ้าฐานใกล้ 10 GB ต้องวางแผนล่วงหน้า (เขียนไม่ได้เลยเมื่อเต็ม)                     */
+SELECT
+    SERVERPROPERTY('Edition')        AS edition,
+    SERVERPROPERTY('ProductVersion') AS product_version;
+
+SELECT cpu_count AS cpu_cores, physical_memory_kb / 1024 AS ram_mb
+FROM sys.dm_os_sys_info;
+
+/* ขนาดฐาน NaraiPos (data + log) — เทียบกับเพดาน 10 GB ของ Express ที่นับเฉพาะ data */
+SELECT
+    mf.name        AS file_name,
+    mf.type_desc   AS file_type,
+    mf.size * 8 / 1024 AS size_mb
+FROM sys.master_files mf
+WHERE mf.database_id = DB_ID('NaraiPos');
+
+/* ตารางไหนกินที่มากสุดในฐานนี้ */
+SELECT TOP 10
+    OBJECT_NAME(p.object_id)      AS tbl,
+    SUM(p.rows)                   AS n_rows,
+    SUM(a.total_pages) * 8 / 1024 AS size_mb
+FROM sys.partitions p
+JOIN sys.allocation_units a ON a.container_id = p.partition_id
+WHERE p.index_id IN (0, 1) AND OBJECTPROPERTY(p.object_id, 'IsUserTable') = 1
+GROUP BY p.object_id
+ORDER BY size_mb DESC;
+GO
