@@ -70,6 +70,15 @@ const dbConfig = {
     useUTC: true,              // คืน datetime ตรงตามค่าที่เก็บ (ไม่บวกลบ timezone)
   },
   pool: { max: 5, min: 0, idleTimeoutMillis: 30000 },
+  // ⚠️ ค่า default ของ mssql คือ 15 วินาที — สั้นเกินไปสำหรับเครื่องที่ร้าน
+  //    /cpaidbetweendate วันเดียวใช้เวลาถึง 125 วิ (ดู docs/fix-slow-sales-index.sql)
+  //    คำสั่งจึงถูกตัดทิ้งกลางทางแล้วตอบ HTTP 500 กลับไป ทั้งที่คำสั่งไม่ได้ผิดอะไร
+  //    ตั้งให้ยาวกว่าฝั่ง Vercel ที่รอ 55 วิ เพื่อให้ "ใครหมดเวลาก่อน" อ่านง่าย:
+  //    ถ้าหน้าเว็บขึ้นว่า host API ไม่ตอบ = ช้าจริง ไม่ใช่โดน SQL ตัดทิ้ง
+  //    แต่ไม่ตั้งยาวเว่อร์ — เกิน 55 วิไปแล้วไม่มีใครรออ่านผลอยู่ ปล่อยให้ query
+  //    วิ่งต่อมีแต่กินซีพียูของเครื่อง 2 คอร์ไปเปล่า ๆ
+  requestTimeout: Number(process.env.DB_REQUEST_TIMEOUT) || 90000,
+  connectionTimeout: Number(process.env.DB_CONNECT_TIMEOUT) || 15000,
 };
 
 // connection pool ใช้ซ้ำ ไม่ต้องต่อใหม่ทุก request
@@ -97,6 +106,9 @@ const zkConfig = {
     ...(zkInstance ? { instanceName: zkInstance } : {}),
   },
   pool: { max: 3, min: 0, idleTimeoutMillis: 30000 },
+  // เหตุผลเดียวกับ dbConfig — ดึง log สแกนนิ้วทุกสาขาทั้งเดือนใช้เวลาหลายสิบวินาที
+  requestTimeout: Number(process.env.ZK_REQUEST_TIMEOUT) || 90000,
+  connectionTimeout: Number(process.env.ZK_CONNECT_TIMEOUT) || 15000,
 };
 if (!zkInstance) zkConfig.port = Number(process.env.ZK_DB_PORT) || 1433;
 
