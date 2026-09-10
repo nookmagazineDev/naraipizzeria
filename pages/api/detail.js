@@ -5,6 +5,8 @@
 // ธรรมดา (เหมือน API อื่นในโปรเจกต์) เพื่อใช้ maxDuration ที่นานกว่า Edge ได้มาก
 export const config = { maxDuration: 60 };
 
+import { explainHostError } from '../../lib/directRoute';
+
 const STORE_API_BASE = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 
 export default async function handler(req, res) {
@@ -25,7 +27,10 @@ export default async function handler(req, res) {
     const data = await upstream.json();
     return res.status(200).json(data);
   } catch (err) {
-    console.error('Detail API proxy error:', err.message);
-    return res.status(502).json({ error: err.message });
+    // แปล error ให้บอกได้ว่าต้องไปดูตรงไหนต่อ — ของเดิมคืนข้อความดิบอย่าง
+    // "The operation was aborted due to timeout" ซึ่งอ่านแล้วเดาไม่ถูกว่าใครไม่ตอบ
+    const explained = explainHostError(err, { base: STORE_API_BASE, timeoutMs: 55000 });
+    console.error('Detail API proxy error:', explained.message);
+    return res.status(502).json({ error: explained.message });
   }
 }
