@@ -1,4 +1,7 @@
 import { branchOutletMap } from '../../lib/branchRegistry';
+// โต๊ะ/ไอเทมที่ไม่นับ ต้องเป็นชุดเดียวกับ /api/usage-bom เป๊ะ ๆ ไม่งั้นผลรวมรายโต๊ะ
+// จะไม่เท่ากับยอด "ขาย" ของเมนูนั้นอีก — กติกาอยู่ที่เดียวใน lib/usageRules.js
+import { normalizeId, countableSaleRow } from '../../lib/usageRules';
 // "โต๊ะที่ขายเมนูนี้" — คำนวณจากบรรทัดขายจริงชุดเดียวกับ /api/usage-bom
 //   GET /usagebytable?branch&outletId&startDate&endDate&menuCode(&menu) -> { status, data:[{table, qty}] }
 // เดิม proxy ไปที่ Narai Usage API เครื่องเก่า (port 8787) ซึ่งใช้คนละฐานกับยอดใช้
@@ -8,15 +11,6 @@ const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com'
 // รหัสสาขา -> outletID อ่านจากทะเบียนสาขา (dbo.hr_branch) ผ่าน lib/branchRegistry.js
 // เพิ่มสาขาใหม่ที่หน้า HR > จัดการสาขา แล้วไฟล์นี้รู้จักเองทันที ไม่ต้องมาแก้โค้ด
 
-// โต๊ะ/ไอเทมที่ไม่นับ (กติกาเดียวกับ /api/usage-bom)
-const EXCLUDE_TABLES = [600];
-const EXCLUDE_ITEMS = [206001, 290016];
-const isExcludedItem = c => {
-  const i = parseInt(c);
-  return EXCLUDE_ITEMS.includes(i) || (i >= 500002 && i <= 500026);
-};
-
-const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -49,9 +43,7 @@ export default async function handler(req, res) {
 
     const byTable = {};
     rows.forEach(row => {
-      if (row.void) return;
-      if (EXCLUDE_TABLES.includes(parseInt(row.tableID))) return;
-      if (isExcludedItem(row.itemCode)) return;
+      if (!countableSaleRow(row)) return;
 
       const code = String(row.itemCode ?? '').trim();
       const name = String(row.nameThai || row.nameEng || '').trim().toLowerCase();
