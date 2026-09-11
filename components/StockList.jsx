@@ -609,6 +609,12 @@ export default function StockList() {
                       <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา (Endding)</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
+                      <th
+                        className="px-4 py-3 text-center text-xs font-semibold text-fuchsia-600 uppercase w-32 bg-fuchsia-50/60"
+                        title={'ค่าตั้งเบิกที่สาขาตั้งไว้ในหน้านับสต๊อก (ระบบ Narai-branch) — หน้านี้ดูอย่างเดียว\n'
+                          + 'ค่าเฉลี่ยต่อหัว = ยอดเบิก คิดจาก ค่านี้ × จำนวนหัวลูกค้าคาดการณ์ - คงเหลือ\n'
+                          + 'เติมเต็ม = ยอดเบิก คิดจาก ค่านี้ - คงเหลือ (ของที่ยอดใช้ไม่ผูกกับจำนวนลูกค้า)'}
+                      >ค่าตั้งเบิก</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
                       <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับ</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-amber-700 uppercase w-36 bg-amber-50/80">ยอดคงเหลือจากระบบ</th>}
@@ -619,7 +625,7 @@ export default function StockList() {
                   <tbody className="bg-white divide-y divide-gray-100">
                     {sortedAndFilteredItems.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="px-6 py-12 text-center text-gray-400">
+                        <td colSpan={11} className="px-6 py-12 text-center text-gray-400">
                           <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                           ไม่พบรายการสินค้า
                         </td>
@@ -687,6 +693,44 @@ export default function StockList() {
                                 {item.lastRequester && <span className="ml-1 text-orange-400">· {item.lastRequester}</span>}
                               </div>
                             )}
+                          </td>
+
+                          {/* ค่าตั้งเบิก — ค่าที่สาขาตั้งไว้ในหน้านับสต๊อกของ Narai-branch (ตาราง stock_avg_per_head)
+                              สินค้าหนึ่งตัวใช้วิธีคิดได้แบบเดียว จึงแสดงเลขของโหมดที่เลือกอยู่เป็นตัวหลัก
+                              แล้วบอกใต้เลขว่าเป็นค่าเฉลี่ยต่อหัวหรือค่าเติมเต็ม ส่วนเลขของอีกโหมด
+                              (ที่ยังเก็บไว้ในฐาน) ต่อท้ายเป็นตัวจาง เผื่อคนดูอยากรู้ว่าสลับไปแล้วจะได้เท่าไหร่ */}
+                          <td className="px-4 py-3 text-center bg-fuchsia-50/30">
+                            {(() => {
+                              const isPar = item.calcMode === 'par';
+                              const active = isPar ? item.parQty : item.avgPerHead;
+                              const other = isPar ? item.avgPerHead : item.parQty;
+                              const has = active !== '' && active !== undefined && active !== null;
+                              const hasOther = other !== '' && other !== undefined && other !== null;
+                              // ยังไม่ได้ตั้งค่าเลยสักโหมด = ขึ้นขีดเปล่า ๆ ไม่ต้องบอกว่าโหมดไหน
+                              // (โหมดเป็น 'avg' เพราะเป็นค่าตั้งต้นของตาราง ไม่ใช่เพราะมีคนเลือกไว้)
+                              if (!has && !hasOther) return <div className="font-semibold text-sm text-gray-300">-</div>;
+                              return (
+                                <>
+                                  <div className={`font-semibold text-sm ${has ? 'text-fuchsia-700' : 'text-gray-300'}`}>
+                                    {has ? active : '-'}
+                                  </div>
+                                  {isPar ? (
+                                    <div className="mt-0.5 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5">
+                                      <span className="inline-block px-1.5 py-0.5 rounded bg-fuchsia-600 text-white text-[9px] font-semibold"
+                                        title="ยอดเบิก = ค่าเติมเต็มสตอค - ยอดคงเหลือ (ไม่ใช้จำนวนหัวลูกค้า)">
+                                        เติมเต็ม
+                                      </span>
+                                      {hasOther && <span className="text-[10px] text-gray-400" title="ค่าเฉลี่ยต่อหัวที่เคยตั้งไว้ (ตอนนี้ไม่ได้ใช้)">ต่อหัว {other}</span>}
+                                    </div>
+                                  ) : (
+                                    <div className="text-[10px] text-fuchsia-400 mt-0.5">
+                                      ต่อหัว
+                                      {hasOther && <span className="ml-1 text-gray-400" title="ค่าเติมเต็มสตอคที่เคยตั้งไว้ (ตอนนี้ไม่ได้ใช้)">· เติมเต็ม {other}</span>}
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </td>
 
                           {/* ยอดใช้จาก API — เฉพาะ isAll */}
