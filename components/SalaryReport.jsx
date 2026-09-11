@@ -8,7 +8,7 @@ import { summarizeDaily, attachSchedule, hhmm } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 import {
   summarizeSalary, payableTotal, payableUnitLabel, periodDays, plannedMinutes,
-  hhmmOfMinutes, hhmmOfHours, LEAVE_COLUMNS, loadHolidays, saveHolidays,
+  hhmmOfMinutes, hhmmOfHours, LEAVE_COLUMNS, loadHolidays, saveHolidays, round2,
 } from '../lib/payroll';
 
 /*
@@ -297,6 +297,10 @@ export default function SalaryReport() {
   const checkStats = useMemo(() => ({
     noScan: rows.reduce((n, r) => n + r.noScanDays, 0),
     noPlan: rows.reduce((n, r) => n + r.noPlanDays, 0),
+    // DAY9 ที่ถูกย้ายชั่วโมงไปเป็น OT — โชว์ไว้ให้เห็น ถ้าสะกดสถานะในตารางงานไม่ตรงจะได้รู้ว่าไม่โดนปรับ
+    day9People: rows.filter((r) => r.day9Days > 0).length,
+    day9Days: rows.reduce((n, r) => n + r.day9Days, 0),
+    day9Hours: rows.reduce((n, r) => n + r.day9OtHours, 0),
     dropped: unmatched.length,
     droppedDays: unmatched.reduce((n, r) => n + r.days, 0),
   }), [rows, unmatched]);
@@ -701,6 +705,13 @@ export default function SalaryReport() {
                   <span className="font-medium text-amber-700"> วันทำงาน</span> ช่องท้ายสุด = ยอดที่ใช้คิดค่าแรง —
                   F/T คิดเต็มงวด ({days} วัน) · P/T คิดเป็นชั่วโมงทำงานรวม · นอกนั้นคิดเป็นวันทำงาน + นข + วันลาที่ยังได้ค่าแรง
                 </p>
+                {checkStats.day9People > 0 && (
+                  <p className="text-emerald-700">
+                    <span className="font-medium">DAY9</span>: ย้ายเวลาทำงานวันละ 1 ชม. ไปเป็น OT ให้แล้ว —
+                    {` ${checkStats.day9People} คน · ${checkStats.day9Days} วัน · รวม ${round2(checkStats.day9Hours)} ชม.`}
+                    {' '}(เวลาทำงานลดลงเท่ากัน · จำนวนวันทำงานเท่าเดิม)
+                  </p>
+                )}
                 {(checkStats.noScan > 0 || checkStats.noPlan > 0) && (
                   <p className="text-amber-600">
                     ควรตรวจเพิ่ม:
