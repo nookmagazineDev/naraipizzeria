@@ -394,7 +394,7 @@ export default function Attendance() {
     const planHead = showPlan
       ? ['ลงไว้ เข้า', 'ลงไว้ ออกเบรค', 'ลงไว้ เข้าเบรค', 'ลงไว้ ออก']
       : [];
-    // สถานะ/ลา อยู่ถัดจากเวลาที่สแกนจริง ให้ลำดับคอลัมน์ในไฟล์ตรงกับที่เห็นบนหน้าเว็บ
+    // สถานะ/ลา อยู่ก่อนช่องเวลาทำงาน ให้ลำดับคอลัมน์ในไฟล์ตรงกับที่เห็นบนหน้าเว็บ
     const statusHead = showPlan ? ['สถานะ', 'หมายเหตุตารางงาน'] : [];
     const lateHead = showPlan ? ['เข้าสาย (นาที)', 'เบรคสาย (นาที)', 'ออกก่อน (นาที)'] : [];
     const planCells = (d) => (showPlan
@@ -412,13 +412,13 @@ export default function Attendance() {
 
     const aoa = view === 'daily'
       ? [
-          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...statusHead, ...lateHead, 'รวม (ชม.)', 'พัก (ชม.)', 'สุทธิ (ชม.)', 'จำนวนสแกน', 'แก้ไขเวลา'],
+          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...lateHead, ...statusHead, 'รวม (ชม.)', 'พัก (ชม.)', 'สุทธิ (ชม.)', 'จำนวนสแกน', 'แก้ไขเวลา'],
           ...daily.map((d) => [
             d.date, d.empCode, d.name, d.branch,
             ...planCells(d),
             hhmm(d.first), d.breakOut ? hhmm(d.breakOut) : '', d.breakIn ? hhmm(d.breakIn) : '', d.last ? hhmm(d.last) : '',
-            ...statusCells(d),
             ...lateCells(d),
+            ...statusCells(d),
             d.hours != null ? +d.hours.toFixed(2) : '',
             d.breakHours != null ? +d.breakHours.toFixed(2) : '',
             d.netHours != null ? +d.netHours.toFixed(2) : '',
@@ -677,10 +677,10 @@ export default function Attendance() {
                       ))}
                       <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
                       <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-emerald-100 text-emerald-800 border-b border-l border-slate-200 font-semibold">สแกนจริง</th>
-                      {/* สถานะ/ลา ไม่ได้เป็นของฝั่งไหนโดยเฉพาะ (มีทั้งเหตุผลการลาและธง "ไม่มีสแกน")
-                          จึงเป็นคอลัมน์เดี่ยวคั่นระหว่างเวลาที่สแกนจริงกับตัวเลขส่วนต่าง */}
-                      <th rowSpan={2} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200">สถานะ / ลา</th>
                       <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-slate-200 font-semibold">สาย (นาที)</th>
+                      {/* สถานะ/ลา ไม่ได้เป็นของฝั่งไหนโดยเฉพาะ (มีทั้งเหตุผลการลาและธง "ไม่มีสแกน")
+                          วางไว้ติดกับ "เวลาทำงาน" เพราะอ่านคู่กัน: ชั่วโมงที่ได้มาจากวันแบบไหน (มาทำงาน/หยุด/ลา) */}
+                      <th rowSpan={2} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200">สถานะ / ลา</th>
                       <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200 font-semibold">เวลาทำงาน (ชม.)</th>
                       <th rowSpan={2} className="h-8 px-3 text-right sticky top-0 bg-slate-50 border-b border-l border-slate-200">สแกน</th>
                     </tr>
@@ -747,6 +747,15 @@ export default function Attendance() {
                       <td className="px-3 py-2 text-center">{scanCell(d, 'breakIn', 'breakIn', 'text-amber-600')}</td>
                       <td className="px-3 py-2 text-center">{scanCell(d, 'out', 'last', 'font-semibold text-rose-700')}</td>
 
+                      {/* สรุปส่วนต่าง */}
+                      {showPlan && (
+                        <>
+                          <td className="px-3 py-2 text-center bg-rose-50/30 border-l border-slate-200">{lateCell(d.lateIn)}</td>
+                          <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.lateBreakIn)}</td>
+                          <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.earlyOut)}</td>
+                        </>
+                      )}
+
                       {/* สถานะ / เหตุผลการลา / หมายเหตุของวันนั้น */}
                       {showPlan && (
                         <td className={`px-3 py-2 text-center border-l border-slate-200 ${d.plan?.isOff ? (d.plan.offPaid ? 'bg-amber-50' : 'bg-rose-50/60') : 'bg-slate-50/60'}`}>
@@ -767,15 +776,6 @@ export default function Attendance() {
                             {d.plan && !d.plan.isOff && d.plan.reasons.length === 0 && d.plan.notes.length === 0 && !d.noScan && <Dash />}
                           </div>
                         </td>
-                      )}
-
-                      {/* สรุปส่วนต่าง */}
-                      {showPlan && (
-                        <>
-                          <td className="px-3 py-2 text-center bg-rose-50/30 border-l border-slate-200">{lateCell(d.lateIn)}</td>
-                          <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.lateBreakIn)}</td>
-                          <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.earlyOut)}</td>
-                        </>
                       )}
 
                       {/* เวลาทำงาน */}
