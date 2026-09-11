@@ -59,6 +59,7 @@ export default function StockList() {
   const [isLoadingWithdrawals, setIsLoadingWithdrawals] = useState(false);
   const [expandedDoc, setExpandedDoc] = useState(null);
   const [selectedStockHistory, setSelectedStockHistory] = useState(null);
+  const [selectedCalcBranches, setSelectedCalcBranches] = useState(null); // ค่าเฉลี่ย/เติมเต็มของไอเทมนั้นทุกสาขา
   const [pendingOrders, setPendingOrders] = useState([]);
   const [showPendingModal, setShowPendingModal] = useState(false);
   const [isLoadingPending, setIsLoadingPending] = useState(false);
@@ -606,15 +607,16 @@ export default function StockList() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-28">หมวดจัดเก็บ</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase w-16">หน่วย</th>
+                      <th
+                        className="px-4 py-3 text-center text-xs font-semibold text-fuchsia-600 uppercase w-32 bg-fuchsia-50/60"
+                        title={'ค่าที่สาขาตั้งไว้ในหน้านับสต๊อก (ระบบ Narai-branch) — หน้านี้ดูอย่างเดียว\n'
+                          + 'ค่าเฉลี่ยต่อหัว = ยอดเบิก คิดจาก ค่านี้ × จำนวนหัวลูกค้าคาดการณ์ - คงเหลือ\n'
+                          + 'เติมเต็ม = ยอดเบิก คิดจาก ค่านี้ - คงเหลือ (ของที่ยอดใช้ไม่ผูกกับจำนวนลูกค้า)\n'
+                          + 'คลิกที่ตัวเลขเพื่อเทียบกับสาขาอื่น'}
+                      >ค่าเฉลี่ย</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา (Endding)</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
-                      <th
-                        className="px-4 py-3 text-center text-xs font-semibold text-fuchsia-600 uppercase w-32 bg-fuchsia-50/60"
-                        title={'ค่าตั้งเบิกที่สาขาตั้งไว้ในหน้านับสต๊อก (ระบบ Narai-branch) — หน้านี้ดูอย่างเดียว\n'
-                          + 'ค่าเฉลี่ยต่อหัว = ยอดเบิก คิดจาก ค่านี้ × จำนวนหัวลูกค้าคาดการณ์ - คงเหลือ\n'
-                          + 'เติมเต็ม = ยอดเบิก คิดจาก ค่านี้ - คงเหลือ (ของที่ยอดใช้ไม่ผูกกับจำนวนลูกค้า)'}
-                      >ค่าตั้งเบิก</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
                       <th className="px-4 py-3 text-center text-xs font-semibold text-sky-600 uppercase w-32 bg-sky-50/60">ยอดรับ</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-amber-700 uppercase w-36 bg-amber-50/80">ยอดคงเหลือจากระบบ</th>}
@@ -650,6 +652,63 @@ export default function StockList() {
                             </div>
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap text-xs text-gray-500">{item.unit}</td>
+
+                          {/* ค่าเฉลี่ย — ค่าที่สาขาตั้งไว้ในหน้านับสต๊อกของ Narai-branch (ตาราง stock_avg_per_head)
+                              สินค้าหนึ่งตัวใช้วิธีคิดยอดเบิกได้แบบเดียว จึงแสดงเลขของโหมดที่เลือกอยู่เป็นตัวหลัก
+                              แล้วบอกใต้เลขว่าเป็นค่าเฉลี่ยต่อหัวหรือค่าเติมเต็ม ส่วนเลขของอีกโหมด
+                              (ที่ยังเก็บไว้ในฐาน) ต่อท้ายเป็นตัวจาง เผื่อคนดูอยากรู้ว่าสลับไปแล้วจะได้เท่าไหร่
+                              กดที่ตัวเลข = เปิดตารางเทียบกับสาขาอื่นที่ตั้งค่าไอเทมตัวเดียวกันไว้ */}
+                          <td className="px-4 py-3 text-center bg-fuchsia-50/30">
+                            {(() => {
+                              const isPar = item.calcMode === 'par';
+                              const active = isPar ? item.parQty : item.avgPerHead;
+                              const other = isPar ? item.avgPerHead : item.parQty;
+                              const has = active !== '' && active !== undefined && active !== null;
+                              const hasOther = other !== '' && other !== undefined && other !== null;
+                              const branches = item.calcBranches || [];
+                              const openCompare = () => branches.length > 0 && setSelectedCalcBranches({
+                                name: item.name, productId: item.productId, unit: item.unit,
+                                branch: effectiveBranch, rows: branches,
+                              });
+                              // ยังไม่ได้ตั้งค่าเลยสักโหมด = ขึ้นขีดเปล่า ๆ ไม่ต้องบอกว่าโหมดไหน
+                              // (โหมดเป็น 'avg' เพราะเป็นค่าตั้งต้นของตาราง ไม่ใช่เพราะมีคนเลือกไว้)
+                              // แต่ถ้าสาขาอื่นตั้งไว้ ยังกดดูเทียบได้ — เป็นวิธีรู้ว่าสาขานี้ตกหล่น
+                              if (!has && !hasOther) {
+                                return (
+                                  <div
+                                    className={`font-semibold text-sm ${branches.length ? 'text-gray-400 cursor-pointer hover:underline hover:text-fuchsia-700' : 'text-gray-300'}`}
+                                    onClick={openCompare}
+                                    title={branches.length ? `สาขานี้ยังไม่ได้ตั้ง — มี ${branches.length} สาขาที่ตั้งไว้ คลิกดู` : ''}
+                                  >-</div>
+                                );
+                              }
+                              return (
+                                <>
+                                  <div
+                                    className={`font-semibold text-sm ${has ? 'text-fuchsia-700' : 'text-gray-300'}${branches.length ? ' cursor-pointer hover:underline hover:text-fuchsia-900' : ''}`}
+                                    onClick={openCompare}
+                                    title={branches.length ? 'คลิกเพื่อเทียบกับสาขาอื่น' : ''}
+                                  >
+                                    {has ? active : '-'}
+                                  </div>
+                                  {isPar ? (
+                                    <div className="mt-0.5 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5">
+                                      <span className="inline-block px-1.5 py-0.5 rounded bg-fuchsia-600 text-white text-[9px] font-semibold"
+                                        title="ยอดเบิก = ค่าเติมเต็มสตอค - ยอดคงเหลือ (ไม่ใช้จำนวนหัวลูกค้า)">
+                                        เติมเต็ม
+                                      </span>
+                                      {hasOther && <span className="text-[10px] text-gray-400" title="ค่าเฉลี่ยต่อหัวที่เคยตั้งไว้ (ตอนนี้ไม่ได้ใช้)">ต่อหัว {other}</span>}
+                                    </div>
+                                  ) : (
+                                    <div className="text-[10px] text-fuchsia-400 mt-0.5">
+                                      ต่อหัว
+                                      {hasOther && <span className="ml-1 text-gray-400" title="ค่าเติมเต็มสตอคที่เคยตั้งไว้ (ตอนนี้ไม่ได้ใช้)">· เติมเต็ม {other}</span>}
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
+                          </td>
 
                           {/* ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ */}
                           <td className="px-4 py-3 text-center bg-purple-50/30">
@@ -693,44 +752,6 @@ export default function StockList() {
                                 {item.lastRequester && <span className="ml-1 text-orange-400">· {item.lastRequester}</span>}
                               </div>
                             )}
-                          </td>
-
-                          {/* ค่าตั้งเบิก — ค่าที่สาขาตั้งไว้ในหน้านับสต๊อกของ Narai-branch (ตาราง stock_avg_per_head)
-                              สินค้าหนึ่งตัวใช้วิธีคิดได้แบบเดียว จึงแสดงเลขของโหมดที่เลือกอยู่เป็นตัวหลัก
-                              แล้วบอกใต้เลขว่าเป็นค่าเฉลี่ยต่อหัวหรือค่าเติมเต็ม ส่วนเลขของอีกโหมด
-                              (ที่ยังเก็บไว้ในฐาน) ต่อท้ายเป็นตัวจาง เผื่อคนดูอยากรู้ว่าสลับไปแล้วจะได้เท่าไหร่ */}
-                          <td className="px-4 py-3 text-center bg-fuchsia-50/30">
-                            {(() => {
-                              const isPar = item.calcMode === 'par';
-                              const active = isPar ? item.parQty : item.avgPerHead;
-                              const other = isPar ? item.avgPerHead : item.parQty;
-                              const has = active !== '' && active !== undefined && active !== null;
-                              const hasOther = other !== '' && other !== undefined && other !== null;
-                              // ยังไม่ได้ตั้งค่าเลยสักโหมด = ขึ้นขีดเปล่า ๆ ไม่ต้องบอกว่าโหมดไหน
-                              // (โหมดเป็น 'avg' เพราะเป็นค่าตั้งต้นของตาราง ไม่ใช่เพราะมีคนเลือกไว้)
-                              if (!has && !hasOther) return <div className="font-semibold text-sm text-gray-300">-</div>;
-                              return (
-                                <>
-                                  <div className={`font-semibold text-sm ${has ? 'text-fuchsia-700' : 'text-gray-300'}`}>
-                                    {has ? active : '-'}
-                                  </div>
-                                  {isPar ? (
-                                    <div className="mt-0.5 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5">
-                                      <span className="inline-block px-1.5 py-0.5 rounded bg-fuchsia-600 text-white text-[9px] font-semibold"
-                                        title="ยอดเบิก = ค่าเติมเต็มสตอค - ยอดคงเหลือ (ไม่ใช้จำนวนหัวลูกค้า)">
-                                        เติมเต็ม
-                                      </span>
-                                      {hasOther && <span className="text-[10px] text-gray-400" title="ค่าเฉลี่ยต่อหัวที่เคยตั้งไว้ (ตอนนี้ไม่ได้ใช้)">ต่อหัว {other}</span>}
-                                    </div>
-                                  ) : (
-                                    <div className="text-[10px] text-fuchsia-400 mt-0.5">
-                                      ต่อหัว
-                                      {hasOther && <span className="ml-1 text-gray-400" title="ค่าเติมเต็มสตอคที่เคยตั้งไว้ (ตอนนี้ไม่ได้ใช้)">· เติมเต็ม {other}</span>}
-                                    </div>
-                                  )}
-                                </>
-                              );
-                            })()}
                           </td>
 
                           {/* ยอดใช้จาก API — เฉพาะ isAll */}
@@ -1031,6 +1052,100 @@ export default function StockList() {
       )}
 
       {/* Stock Count History Modal */}
+      {/* เทียบค่าเฉลี่ย/ค่าเติมเต็มของไอเทมเดียวกันทุกสาขา — ข้อมูลติดมากับรายการสินค้าแล้ว ไม่ต้องยิงเพิ่ม
+          ประโยชน์หลักคือเห็นว่าสาขาไหนตั้งไว้ต่างจากชาวบ้านมาก หรือสาขาไหนยังไม่ได้ตั้ง */}
+      {selectedCalcBranches && (() => {
+        const rows = selectedCalcBranches.rows || [];
+        const here = String(selectedCalcBranches.branch || '').toLowerCase();
+        // ค่าเฉลี่ยต่อหัวเท่านั้นที่เอามาหาค่ากลางได้ ของโหมดเติมเต็มเป็นคนละหน่วยความหมาย
+        const avgs = rows.filter(r => r.calcMode !== 'par' && r.avgPerHead !== '').map(r => r.avgPerHead);
+        const mean = avgs.length ? avgs.reduce((a, b) => a + b, 0) / avgs.length : null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedCalcBranches(null)}>
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-4 border-b border-fuchsia-100 bg-fuchsia-50/50">
+                <h3 className="font-bold text-fuchsia-800">ค่าเฉลี่ยของแต่ละสาขา</h3>
+                <button onClick={() => setSelectedCalcBranches(null)} className="text-fuchsia-400 hover:text-fuchsia-700 font-bold text-xl leading-none">&times;</button>
+              </div>
+              <div className="p-4 max-h-[65vh] overflow-y-auto">
+                <p className="text-sm text-gray-700 mb-1 font-semibold">{selectedCalcBranches.name}</p>
+                <p className="text-xs text-gray-400 mb-4 border-b pb-3">
+                  รหัส {selectedCalcBranches.productId}
+                  {selectedCalcBranches.unit && ` · หน่วย ${selectedCalcBranches.unit}`}
+                  {mean !== null && <span className="ml-2 text-fuchsia-500">· เฉลี่ยของ {avgs.length} สาขาที่คิดแบบต่อหัว = {Number(mean.toFixed(4))}</span>}
+                </p>
+
+                {rows.length === 0 ? (
+                  <div className="text-center py-8 text-gray-400 text-sm">ยังไม่มีสาขาไหนตั้งค่าไว้</div>
+                ) : (
+                  <div className="overflow-x-auto border border-fuchsia-100 rounded-xl">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="bg-fuchsia-50/70">
+                          <th className="px-3 py-2 text-left text-xs font-bold text-fuchsia-800 uppercase whitespace-nowrap">สาขา</th>
+                          <th className="px-3 py-2 text-center text-xs font-bold text-fuchsia-800 uppercase whitespace-nowrap">วิธีคิด</th>
+                          <th className="px-3 py-2 text-right text-xs font-bold text-fuchsia-800 uppercase whitespace-nowrap">ค่าเฉลี่ยต่อหัว</th>
+                          <th className="px-3 py-2 text-right text-xs font-bold text-fuchsia-800 uppercase whitespace-nowrap">ค่าเติมเต็ม</th>
+                          <th className="px-3 py-2 text-right text-xs font-bold text-fuchsia-800 uppercase whitespace-nowrap" title="ค่าเฉลี่ยต่อหัวของสาขานี้ ต่างจากค่าเฉลี่ยของทุกสาขากี่เปอร์เซ็นต์">ต่างจากค่ากลาง</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {rows.map((r, i) => {
+                          const isHere = String(r.branch).toLowerCase() === here;
+                          const isPar = r.calcMode === 'par';
+                          // เทียบเฉพาะสาขาที่คิดแบบต่อหัวเหมือนกัน ของโหมดเติมเต็มเทียบกันไม่ได้
+                          const diff = (!isPar && r.avgPerHead !== '' && mean) ? (r.avgPerHead - mean) / mean * 100 : null;
+                          return (
+                            <tr key={`${r.branch}-${i}`} className={isHere ? 'bg-fuchsia-50/60' : 'hover:bg-gray-50/50'}>
+                              <td className={`px-3 py-2.5 whitespace-nowrap ${isHere ? 'font-bold text-fuchsia-800' : 'text-gray-700'}`}>
+                                {String(r.branch).toUpperCase()}
+                                {isHere && <span className="ml-1.5 text-[10px] font-normal text-fuchsia-500">(สาขาที่ดูอยู่)</span>}
+                              </td>
+                              <td className="px-3 py-2.5 text-center">
+                                {isPar
+                                  ? <span className="inline-block px-1.5 py-0.5 rounded bg-fuchsia-600 text-white text-[10px] font-semibold">เติมเต็ม</span>
+                                  : <span className="text-[11px] text-gray-500">ต่อหัว</span>}
+                              </td>
+                              <td className={`px-3 py-2.5 text-right font-mono ${isPar ? 'text-gray-300' : 'font-semibold text-fuchsia-700'}`}
+                                title={isPar ? 'สาขานี้คิดแบบเติมเต็ม ค่านี้จึงไม่ได้ใช้' : ''}>
+                                {r.avgPerHead === '' ? '—' : r.avgPerHead}
+                              </td>
+                              <td className={`px-3 py-2.5 text-right font-mono ${isPar ? 'font-semibold text-fuchsia-700' : 'text-gray-300'}`}
+                                title={isPar ? '' : 'สาขานี้คิดแบบต่อหัว ค่านี้จึงไม่ได้ใช้'}>
+                                {r.parQty === '' ? '—' : r.parQty}
+                              </td>
+                              <td className={`px-3 py-2.5 text-right font-mono text-xs ${diff === null ? 'text-gray-300'
+                                : Math.abs(diff) >= 30 ? 'font-bold text-red-500' : 'text-gray-400'}`}>
+                                {diff === null ? '—' : `${diff > 0 ? '+' : ''}${diff.toFixed(0)}%`}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
+                  ค่าพวกนี้สาขาตั้งเองในหน้านับสต๊อก (ระบบ Narai-branch) หน้านี้ดูอย่างเดียว ·{' '}
+                  <span className="text-gray-500">ต่อหัว</span> = ยอดเบิก คิดจาก ค่านี้ × จำนวนหัวลูกค้าคาดการณ์ - คงเหลือ ·{' '}
+                  <span className="text-gray-500">เติมเต็ม</span> = ยอดเบิก คิดจาก ค่านี้ - คงเหลือ (ไม่ใช้จำนวนหัวลูกค้า) ·
+                  สาขาที่ไม่ได้อยู่ในตารางคือยังไม่เคยตั้งค่าไอเทมตัวนี้ · ช่องแดงคือต่างจากค่ากลางเกิน 30%
+                </p>
+              </div>
+              <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end">
+                <button
+                  className="px-4 py-2 bg-fuchsia-100 text-fuchsia-700 rounded-lg text-sm font-medium hover:bg-fuchsia-200 transition-colors"
+                  onClick={() => setSelectedCalcBranches(null)}
+                >
+                  ปิดหน้าต่าง
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {selectedStockHistory && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedStockHistory(null)}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e => e.stopPropagation()}>
