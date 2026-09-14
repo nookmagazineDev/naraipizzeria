@@ -12,6 +12,8 @@ import {
   normalizeId, countableSaleRow, usageDateKey, kgOnlyIngredients, skipReason,
   EXCLUDE_TABLES, EXCLUDE_ITEMCODES, EXCLUDE_PLATE_MENU_INGREDIENTS, EXCLUDE_PLATE_MENU_CODES,
 } from '../../lib/usageRules';
+// จำนวนหัวลูกค้า — กติกาเดียวกับแดชบอร์ดและรายงานยอดรายวัน (ดู lib/coverRules.js)
+import { usesCoverAll, coversFromDetailRows, coversFromBillRows } from '../../lib/coverRules';
 
 // ยิง ctranbetweendate ตัวเดียวกับ /api/detail ซึ่งเป็นข้อมูลระดับไอเทม (หนักกว่ายอดบิลหลายเท่า)
 // ค่า default ของ Vercel คือ 10 วินาที ซึ่งไม่พอ — ตั้งเท่ากับ /api/detail และ /api/sales
@@ -108,7 +110,10 @@ export default async function handler(req, res) {
   if (!oid) return res.status(400).json({ status: 'error', message: `ไม่รู้จักสาขา ${branch}` });
 
   try {
-    const [{ map: bom, names: bomNames, stats: bomStats }, detRes] = await Promise.all([
+    // สาขาที่นับหัวจาก Cover All ต้องใช้ "บิล" อีกชุด — ยิงคู่กันไปเลย ไม่ต่อคิวหลังรายการขาย
+    // สาขาอื่นนับหัวจากจานบุฟเฟต์ในรายการขายที่ดึงอยู่แล้ว จึงไม่ต้องยิงเพิ่ม
+    const needBills = usesCoverAll(oid);
+    const [{ map: bom, names: bomNames, stats: bomStats }, detRes, billRes] = await Promise.all([
       fetchBom(),
       // ตัดจบเองที่ 55 วิ ให้ทันคืน error ที่อ่านรู้เรื่องก่อน maxDuration 60 จะฆ่า function
       // header ngrok: ถ้า host API อยู่หลัง tunnel จะได้ JSON ไม่ใช่หน้าเตือนของ ngrok ที่เป็น HTML
@@ -117,10 +122,36 @@ export default async function handler(req, res) {
         signal: AbortSignal.timeout(55000),
         headers: { 'ngrok-skip-browser-warning': 'true' },
       }),
+      // จำนวนหัวขาดไปไม่ควรทำให้ยอดใช้พังทั้งก้อน — ล้มเมื่อไหร่ปล่อยเป็น null แล้วไปต่อ
+      needBills
+        ? fetch(`${STORE_API}/cpaidbetweendate?start=${startDate}&end=${endDate}&outlet=${oid}`, {
+            cache: 'no-store',
+            signal: AbortSignal.timeout(55000),
+            headers: { 'ngrok-skip-browser-warning': 'true' },
+          }).catch(() => null)
+        : Promise.resolve(null),
     ]);
     if (!detRes.ok) throw new Error(`host API HTTP ${detRes.status}`);
     const dj = await detRes.json();
     const rows = Array.isArray(dj) ? dj : dj.data || [];
+
+    // ── จำนวนหัวลูกค้าของสาขานี้ในช่วงเดียวกัน ──
+    // รายงาน "ใช้วัตถุดิบต่อหัว" เอาไปเป็นตัวหาร คิดที่นี่เพราะรายการขายอยู่ในมือแล้ว
+    // (แยกเป็น API ต่างหากแปลว่าต้องยิง ctranbetweendate ซ้ำอีกรอบต่อสาขา ซึ่งเป็นคำขอที่หนักที่สุด)
+    let covers = null;
+    const coversSource = needBills ? 'coverAll' : 'buffetItems';
+    try {
+      if (needBills) {
+        if (billRes && billRes.ok) {
+          const bj = await billRes.json();
+          covers = Number(coversFromBillRows(Array.isArray(bj) ? bj : bj.data || []).toFixed(2));
+        }
+      } else {
+        covers = Number(coversFromDetailRows(rows).toFixed(2));
+      }
+    } catch (err) {
+      console.error('usage-bom covers error:', err.message);
+    }
 
     const usageMap = {};
     // ยอดใช้แยกตามเมนู: { รหัสวัตถุดิบ: { เลขเมนู: { menu, menuCode, sold, qty } } }
@@ -217,6 +248,9 @@ export default async function handler(req, res) {
       byMenu: byMenuOut,
       meta: {
         source: 'bom',
+        // จำนวนหัวลูกค้าในช่วงนี้ (null = ดึงไม่ได้ ห้ามตีเป็น 0 — 0 จะทำให้ "ต่อหัว" กลายเป็นอนันต์)
+        covers,
+        coversSource,   // 'coverAll' (บิลของ WRM/WMT) หรือ 'buffetItems' (จานบุฟเฟต์ที่จ่ายจริง)
         bomSheet: 'BOM (ชีท QC/RD)',
         bomRows: bomStats.rows,
         bomRowsNoDeduct: bomStats.noDeduct,        // แถวที่ติ๊ก "ไม่ตัด BOM" — ไม่นับเป็นยอดใช้
