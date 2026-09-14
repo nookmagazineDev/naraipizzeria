@@ -1,0 +1,703 @@
+// STOCK › รายงานการใช้วัตถุดิบต่อหัว ของสาขา
+//
+// ตอบคำถามเดียว: "วัตถุดิบตัวนี้ แต่ละสาขาใช้ไปเท่าไหร่ และคิดเป็นเท่าไหร่ต่อลูกค้า 1 หัว"
+// เอาไว้จับสาขาที่ใช้เปลืองผิดปกติ โดยเทียบกันได้ตรง ๆ แม้สาขาจะขายไม่เท่ากัน
+//
+// ที่มาของตัวเลข (ไม่มีการคิดสูตรใหม่ในไฟล์นี้ — ใช้ของที่ระบบคิดอยู่แล้วทั้งคู่):
+//   ยอดใช้  = /api/usage-bom → ยอดขายจริง × สูตร BOM (ชุดเดียวกับคอลัมน์ "ยอดใช้จากระบบ"
+//             ของหน้านับสต๊อก รวมกฎกันนับซ้ำใน lib/usageRules.js ครบทุกข้อ)
+//   จำนวนหัว = meta.covers ของคำตอบเดียวกัน — จานบุฟเฟต์ที่จ่ายจริง (ไม่รวมเด็กฟรี)
+//             ยกเว้น WRM/WMT ที่ใช้ Cover All ของบิล (ดู lib/coverRules.js)
+// ยิงสาขาละคำขอเดียวได้ทั้งสองค่า เพราะ /api/usage-bom นับหัวจากรายการขายที่ดึงมาอยู่แล้ว
+import React, { useState, useEffect, useMemo } from 'react';
+import { BarChart3, Search, Loader2, AlertCircle, Download, Users, Package, AlertTriangle } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
+import { apiRead } from '../lib/stockApi';
+
+// ต้องตรงกับ normalizeId ใน /api/usage-bom เป๊ะ ไม่งั้นคีย์รหัสสินค้าจับคู่กันไม่ติด
+const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
+
+// ยิงทีละชุดแทนการยิงทุกสาขาพร้อมกัน — เหตุผลเดียวกับหน้า "ดูยอดรวมทุกสาขา"
+// (host API ช้าลงมากเมื่อโดนหลายสาขาพร้อมกัน และเบราว์เซอร์คิวเกิน ~6 คำขอต่อโดเมนอยู่แล้ว)
+const BRANCH_BATCH = 5;
+
+/** ต่างจากค่ากลางเกินกี่ % ถึงจะทาสีเตือน */
+const DEVIATION_PCT = 15;
+
+const fmtUsage = v => Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtPerHead = v => Number(v).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+const fmtInt = v => Number(v).toLocaleString();
+
+export default function StockUsagePerHead() {
+  const [items, setItems] = useState([]);          // ทะเบียนสินค้า (ชื่อ/หน่วย/หมวด) จากยอดรวมทุกสาขา
+  const [branches, setBranches] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
+  const [progress, setProgress] = useState(null);  // { done, total } ระหว่างไล่ยิงทีละชุด
+
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState('storageCat');
+  const [viewMode, setViewMode] = useState('both'); // 'both' | 'perHead' | 'usage'
+  const [onlyUsed, setOnlyUsed] = useState(true);   // ซ่อนไอเทมที่ช่วงนี้ไม่มีการใช้เลย
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  // ผลการคำนวณรอบล่าสุด — เก็บช่วงวันที่ที่ใช้คำนวณไว้ด้วย จะได้ไม่โชว์เลขเก่าคู่กับวันที่ใหม่
+  const [report, setReport] = useState(null); // { from, to, branches: [...], usage: {branch: {id: qty}} }
+  const [detailItem, setDetailItem] = useState(null);
+
+  // ค่าตั้งเบิกที่สาขาตั้งไว้ (ตาราง stock_avg_per_head) — โหลดตอนเปิดหน้าต่างรายละเอียดครั้งแรก
+  const [settings, setSettings] = useState(null);
+  const [loadingSettings, setLoadingSettings] = useState(false);
+
+  useEffect(() => {
+    const today = new Date();
+    const local = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+    const first = local.slice(0, 8) + '01';
+    setStartDate(first);
+    setEndDate(local);
+    loadInitial();
+  }, []);
+
+  const loadInitial = async () => {
+    setLoading(true);
+    try {
+      const [branchRes, itemRes] = await Promise.all([
+        apiRead('getBranches'),
+        apiRead('getStockTotal', { endDate: '' }),
+      ]);
+      if (branchRes.status === 'success') {
+        setBranches((branchRes.data || []).filter(b => String(b.name).toLowerCase() !== 'all'));
+      }
+      if (itemRes.status === 'success') {
+        setItems(itemRes.data || []);
+        if (itemRes.warning) toast.error(itemRes.warning, { duration: 8000 });
+      }
+    } catch (err) {
+      toast.error('โหลดทะเบียนสินค้า/สาขาไม่สำเร็จ: ' + err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchReport = async () => {
+    if (!startDate || !endDate) { toast.error('กรุณาระบุช่วงวันที่ให้ครบถ้วน'); return; }
+    if (startDate > endDate) { toast.error('วันที่เริ่มต้นอยู่หลังวันที่สิ้นสุด'); return; }
+    const targets = branches.filter(b => b.outletId);
+    if (targets.length === 0) { toast.error('ไม่พบสาขาที่มีรหัส outlet — ดึงยอดใช้ไม่ได้'); return; }
+
+    setIsFetching(true);
+    setProgress({ done: 0, total: targets.length });
+    try {
+      const stats = [];
+      const usage = {};
+      for (let i = 0; i < targets.length; i += BRANCH_BATCH) {
+        const chunk = targets.slice(i, i + BRANCH_BATCH);
+        const results = await Promise.all(chunk.map(b =>
+          fetch(`/api/usage-bom?branch=${encodeURIComponent(b.name)}&outletId=${encodeURIComponent(b.outletId)}`
+            + `&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`)
+            .then(r => r.json())
+            .catch(err => ({ status: 'error', message: err.message }))
+        ));
+        results.forEach((res, idx) => {
+          const b = chunk[idx];
+          const key = String(b.name).toLowerCase();
+          const ok = res.status === 'success';
+          const covers = ok && res.meta ? res.meta.covers : null;
+          stats.push({
+            name: String(b.name),
+            key,
+            outletId: b.outletId,
+            ok,
+            covers: covers === null || covers === undefined ? null : Number(covers),
+            coversSource: ok && res.meta ? res.meta.coversSource : '',
+            error: ok ? '' : (res.message || 'ดึงข้อมูลไม่สำเร็จ'),
+          });
+          const map = {};
+          if (ok) Object.entries(res.data || {}).forEach(([id, u]) => { map[id] = Number(u.total) || 0; });
+          usage[key] = map;
+        });
+        setProgress({ done: Math.min(i + BRANCH_BATCH, targets.length), total: targets.length });
+      }
+
+      stats.sort((a, b) => a.name.localeCompare(b.name));
+      setReport({ from: startDate, to: endDate, branches: stats, usage });
+
+      // บอกให้ชัดว่าสาขาไหนไม่ได้ข้อมูล — ค่ากลางที่คิดได้จะไม่รวมสาขาพวกนั้น
+      const failed = stats.filter(s => !s.ok).map(s => s.name.toUpperCase());
+      const noCovers = stats.filter(s => s.ok && !s.covers).map(s => s.name.toUpperCase());
+      if (failed.length === 0 && noCovers.length === 0) {
+        toast.success(`คำนวณครบ ${stats.length} สาขา`);
+      } else if (failed.length === stats.length) {
+        toast.error(`ดึงยอดใช้ไม่สำเร็จทั้ง ${stats.length} สาขา`, { duration: 7000 });
+      } else {
+        const parts = [];
+        if (failed.length) parts.push(`ดึงไม่สำเร็จ ${failed.length} สาขา (${failed.slice(0, 4).join(', ')}${failed.length > 4 ? '…' : ''})`);
+        if (noCovers.length) parts.push(`ไม่มีจำนวนหัว ${noCovers.length} สาขา (${noCovers.slice(0, 4).join(', ')}${noCovers.length > 4 ? '…' : ''}) — คิดต่อหัวไม่ได้`);
+        toast(parts.join(' · '), { icon: '⚠️', duration: 8000 });
+      }
+    } catch (err) {
+      toast.error('เกิดข้อผิดพลาดในการคำนวณ: ' + err.message);
+    } finally {
+      setIsFetching(false);
+      setProgress(null);
+    }
+  };
+
+  /** สาขาที่เอาไปคิดค่ากลางได้ = ดึงยอดใช้สำเร็จ และรู้จำนวนหัว */
+  const usableBranches = useMemo(
+    () => (report?.branches || []).filter(b => b.ok && b.covers > 0),
+    [report]
+  );
+
+  /** หัวใจของหน้า — 1 แถวต่อ 1 วัตถุดิบ พร้อมตัวเลขรายสาขาที่คิดต่อหัวแล้ว */
+  const rows = useMemo(() => {
+    if (!report) return [];
+    const cols = report.branches;
+
+    return items.map(item => {
+      const id = normalizeId(item.productId);
+      let totalUsage = 0;         // ยอดใช้รวมทุกสาขาที่ดึงได้
+      let usableUsage = 0;        // เฉพาะสาขาที่เข้าเกณฑ์ค่ากลาง
+      let usableCovers = 0;
+      const cells = cols.map(b => {
+        const qty = b.ok ? (report.usage[b.key]?.[id] || 0) : null;
+        if (qty) totalUsage += qty;
+        // นับเข้าค่ากลางเฉพาะสาขาที่ "ใช้ของตัวนี้จริง" — สาขาที่ไม่ได้สต๊อกไอเทมนี้เลย
+        // ถ้าเอาจำนวนหัวไปรวมในตัวหารด้วย ค่ากลางจะถูกเจือจางจนสาขาที่ใช้จริงขึ้นแดงกันหมด
+        if (b.covers > 0 && qty) { usableUsage += qty; usableCovers += b.covers; }
+        return { branch: b, usage: qty, perHead: b.covers > 0 && qty !== null ? qty / b.covers : null };
+      });
+
+      // ค่ากลาง = ยอดใช้รวม ÷ จำนวนหัวรวม (ถ่วงน้ำหนักตามขนาดสาขา)
+      // ไม่ใช่ค่าเฉลี่ยของ "ต่อหัวรายสาขา" ซึ่งสาขาเล็กจะมีน้ำหนักเท่าสาขาใหญ่ทั้งที่ขายต่างกันหลายเท่า
+      const mean = usableCovers > 0 ? usableUsage / usableCovers : null;
+      cells.forEach(c => {
+        c.diffPct = mean && c.perHead !== null ? (c.perHead - mean) / mean * 100 : null;
+      });
+      const overCount = cells.filter(c => c.diffPct !== null && c.diffPct > DEVIATION_PCT).length;
+
+      return { item, id, cells, totalUsage, mean, overCount };
+    });
+  }, [items, report]);
+
+  const visibleRows = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    let result = rows.filter(r => {
+      if (onlyUsed && !r.totalUsage) return false;
+      if (!term) return true;
+      return String(r.item.productId || '').toLowerCase().includes(term)
+        || String(r.item.name || '').toLowerCase().includes(term)
+        || String(r.item.storageCat || '').toLowerCase().includes(term);
+    });
+
+    result.sort((a, b) => {
+      if (sortBy === 'usage') return b.totalUsage - a.totalUsage;
+      if (sortBy === 'deviation') return b.overCount - a.overCount || b.totalUsage - a.totalUsage;
+      if (sortBy === 'productId') return String(a.item.productId || '').localeCompare(String(b.item.productId || ''));
+      if (sortBy === 'name') return String(a.item.name || '').localeCompare(String(b.item.name || ''), 'th');
+      return String(a.item.storageCat || '').localeCompare(String(b.item.storageCat || ''), 'th')
+        || String(a.item.productId || '').localeCompare(String(b.item.productId || ''));
+    });
+    return result;
+  }, [rows, searchTerm, sortBy, onlyUsed]);
+
+  const summary = useMemo(() => {
+    if (!report) return null;
+    const okCount = report.branches.filter(b => b.ok).length;
+    return {
+      okCount,
+      total: report.branches.length,
+      covers: usableBranches.reduce((s, b) => s + b.covers, 0),
+      usedItems: rows.filter(r => r.totalUsage > 0).length,
+      hotSpots: rows.reduce((s, r) => s + r.overCount, 0),
+    };
+  }, [report, rows, usableBranches]);
+
+  /** ค่าตั้งเบิกของทุกสาขา — ทะเบียนเดียวกับคอลัมน์ "ค่าเฉลี่ย" ของหน้านับสต๊อก
+      getStockItems ของสาขาไหนก็คืน calcBranches ของ "ทุกสาขา" มาให้ จึงยิงสาขาเดียวพอ */
+  const ensureSettings = async () => {
+    if (settings || loadingSettings) return;
+    const first = branches.find(b => b.outletId) || branches[0];
+    if (!first) return;
+    setLoadingSettings(true);
+    try {
+      const res = await apiRead('getStockItems', { branch: first.name });
+      const map = {};
+      (res.data || []).forEach(it => { map[normalizeId(it.productId)] = it.calcBranches || []; });
+      setSettings(map);
+    } catch {
+      setSettings({});   // อ่านไม่ได้ก็ไม่เป็นไร — คอลัมน์ "ค่าที่ตั้งไว้" จะขึ้นขีด
+    } finally {
+      setLoadingSettings(false);
+    }
+  };
+
+  const openDetail = (row) => {
+    setDetailItem(row);
+    ensureSettings();
+  };
+
+  // ── Export Excel: แถว = ไอเทม · สาขาละ 2 คอลัมน์ (ยอดใช้ / ต่อหัว) ──
+  const exportExcel = () => {
+    if (!report || visibleRows.length === 0) { toast.error('ไม่มีรายการให้ export'); return; }
+    const cols = report.branches;
+    const h1 = ['รหัส', 'ชื่อสินค้า', 'หมวดจัดเก็บ', 'หน่วย', 'ยอดใช้รวม', 'ต่อหัว (ค่ากลาง)'];
+    const h2 = ['', '', '', '', '', ''];
+    cols.forEach(b => {
+      h1.push(`${b.name.toUpperCase()} (${b.covers ? fmtInt(b.covers) : '-'} หัว)`, '');
+      h2.push('ยอดใช้', 'ต่อหัว');
+    });
+    const aoa = [h1, h2];
+    visibleRows.forEach(r => {
+      const line = [
+        String(r.item.productId), r.item.name, r.item.storageCat || '', r.item.unit || '',
+        Number(r.totalUsage.toFixed(2)), r.mean === null ? '' : Number(r.mean.toFixed(6)),
+      ];
+      r.cells.forEach(c => {
+        line.push(c.usage === null ? '' : Number(c.usage.toFixed(2)));
+        line.push(c.perHead === null ? '' : Number(c.perHead.toFixed(6)));
+      });
+      aoa.push(line);
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!merges'] = cols.map((_, i) => ({ s: { r: 0, c: 6 + i * 2 }, e: { r: 0, c: 7 + i * 2 } }));
+    ws['!cols'] = [{ wch: 12 }, { wch: 42 }, { wch: 16 }, { wch: 8 }, { wch: 12 }, { wch: 14 },
+      ...cols.flatMap(() => [{ wch: 11 }, { wch: 11 }])];
+    const header = {
+      font: { name: 'Tahoma', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
+      fill: { patternType: 'solid', fgColor: { rgb: '7E22CE' } },
+      alignment: { vertical: 'center', horizontal: 'center', wrapText: true },
+    };
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for (let r = 0; r <= 1; r++) {
+      for (let c = 0; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (cell) cell.s = header;
+      }
+    }
+    // ต่อหัวเป็นเลขหลักหมื่นส่วน ถ้าไม่ตั้ง format Excel จะตัดเหลือ 2 ตำแหน่งแล้วดูเหมือน 0.00 ทั้งคอลัมน์
+    for (let r = 2; r <= range.e.r; r++) {
+      for (let c = 4; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (!cell) continue;
+        const isPerHead = c === 5 || (c >= 6 && (c - 6) % 2 === 1);
+        cell.z = isPerHead ? '0.0000' : '0.00';
+      }
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'ใช้ต่อหัวรายสาขา');
+    XLSX.writeFile(wb, `usage_per_head_${report.from}_${report.to}.xlsx`);
+    toast.success('Export สำเร็จ');
+  };
+
+  const cellTone = (diffPct) => {
+    if (diffPct === null) return { text: 'text-gray-300', pill: '' };
+    if (diffPct > DEVIATION_PCT) return { text: 'text-red-600', pill: 'bg-red-100 text-red-700' };
+    if (diffPct < -DEVIATION_PCT) return { text: 'text-cyan-700', pill: 'bg-cyan-100 text-cyan-700' };
+    return { text: 'text-slate-700', pill: 'bg-slate-100 text-slate-500' };
+  };
+
+  const showUsage = viewMode !== 'perHead';
+  const showPerHead = viewMode !== 'usage';
+  const colSpanPerBranch = (showUsage ? 1 : 0) + (showPerHead ? 1 : 0);
+
+  return (
+    <div className="max-w-full mx-auto pb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
+          <div className="p-2 bg-fuchsia-100 text-fuchsia-600 rounded-xl">
+            <BarChart3 className="w-6 h-6" />
+          </div>
+          รายงานการใช้วัตถุดิบต่อหัว ของสาขา
+        </h1>
+        <p className="text-gray-500 mt-1 ml-11 text-sm">
+          ยอดใช้ = ยอดขายจริง × สูตร BOM (ชุดเดียวกับ “ยอดใช้จากระบบ”) · ต่อหัว = ยอดใช้ ÷ จำนวนหัวลูกค้าของสาขานั้นในช่วงที่เลือก
+        </p>
+      </div>
+
+      {/* แถบเครื่องมือ */}
+      <div className="flex flex-col xl:flex-row gap-3 mb-4">
+        <div className="relative flex-1 flex gap-2 min-w-0">
+          <div className="relative flex-1">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search className="h-5 w-5 text-gray-400" />
+            </div>
+            <input type="text"
+              className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-fuchsia-500 focus:border-fuchsia-500 sm:text-sm"
+              placeholder="ค้นหาด้วยรหัส / ชื่อสินค้า / หมวดจัดเก็บ..."
+              value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+          </div>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+            className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500 text-gray-700">
+            <option value="storageCat">เรียงตามหมวดจัดเก็บ</option>
+            <option value="productId">เรียงตามรหัสสินค้า</option>
+            <option value="name">เรียงตามชื่อสินค้า</option>
+            <option value="usage">เรียงตามยอดใช้รวม (มาก→น้อย)</option>
+            <option value="deviation">เรียงตามจำนวนสาขาที่ใช้เกินค่ากลาง</option>
+          </select>
+        </div>
+
+        <div className="flex bg-white border border-gray-200 rounded-xl overflow-hidden text-sm">
+          {[['both', 'ต่อหัว + ยอดใช้'], ['perHead', 'ต่อหัวอย่างเดียว'], ['usage', 'ยอดใช้อย่างเดียว']].map(([v, label]) => (
+            <button key={v} onClick={() => setViewMode(v)}
+              className={`px-3 py-3 whitespace-nowrap transition-colors ${viewMode === v ? 'bg-fuchsia-600 text-white font-semibold' : 'text-gray-600 hover:bg-gray-50'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2 bg-gradient-to-r from-fuchsia-50 to-pink-50 border border-fuchsia-100 p-2 rounded-xl">
+          <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap">วันที่ :</span>
+          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+            className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
+          <span className="text-gray-500 text-sm">-</span>
+          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+            className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
+          <button onClick={fetchReport} disabled={isFetching || loading}
+            className="px-4 py-1.5 bg-fuchsia-600 text-white text-sm rounded-lg hover:bg-fuchsia-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
+            {isFetching
+              ? <><Loader2 className="w-4 h-4 animate-spin" />{progress ? `${progress.done}/${progress.total} สาขา` : 'กำลังคำนวณ'}</>
+              : 'คำนวณรายงาน'}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 p-2 rounded-xl">
+          <button onClick={exportExcel} disabled={!report || visibleRows.length === 0}
+            className="px-4 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
+            <Download className="w-4 h-4" /> Export Excel
+          </button>
+        </div>
+      </div>
+
+      {/* การ์ดสรุป + จำนวนหัวรายสาขา */}
+      {summary && (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+            <div className="bg-white border border-fuchsia-100 rounded-2xl p-3">
+              <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Package className="w-3.5 h-3.5" /> สาขาที่ดึงข้อมูลได้</div>
+              <div className="text-xl font-bold text-fuchsia-600 mt-1">{summary.okCount} / {summary.total}</div>
+              <div className="text-[10px] text-gray-400 mt-0.5">{report.from} ถึง {report.to}</div>
+            </div>
+            <div className="bg-white border border-purple-100 rounded-2xl p-3">
+              <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Users className="w-3.5 h-3.5" /> จำนวนหัวลูกค้ารวม</div>
+              <div className="text-xl font-bold text-purple-700 mt-1">{fmtInt(summary.covers)}</div>
+              <div className="text-[10px] text-gray-400 mt-0.5">เฉพาะสาขาที่นับหัวได้ ({usableBranches.length} สาขา)</div>
+            </div>
+            <div className="bg-white border border-blue-100 rounded-2xl p-3">
+              <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Package className="w-3.5 h-3.5" /> วัตถุดิบที่มีการใช้</div>
+              <div className="text-xl font-bold text-blue-700 mt-1">{fmtInt(summary.usedItems)}</div>
+              <div className="text-[10px] text-gray-400 mt-0.5">จากทั้งหมด {fmtInt(items.length)} รายการ</div>
+            </div>
+            <div className="bg-white border border-red-100 rounded-2xl p-3">
+              <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" /> จุดที่ใช้เกินค่ากลาง &gt;{DEVIATION_PCT}%</div>
+              <div className="text-xl font-bold text-red-600 mt-1">{fmtInt(summary.hotSpots)} จุด</div>
+              <div className="text-[10px] text-gray-400 mt-0.5">1 จุด = 1 ไอเทมของ 1 สาขา</div>
+            </div>
+          </div>
+
+          <div className="bg-white border border-fuchsia-100 rounded-2xl px-3 py-2.5 mb-3 flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-semibold text-gray-500 mr-1">จำนวนหัวลูกค้าที่ใช้หาร :</span>
+            {report.branches.map(b => (
+              <span key={b.key}
+                title={b.ok
+                  ? (b.covers ? `นับจาก${b.coversSource === 'coverAll' ? ' Cover All ของบิล' : 'จานบุฟเฟต์ที่จ่ายจริง'}` : 'ดึงยอดใช้ได้ แต่ไม่มีจำนวนหัว — คิดต่อหัวไม่ได้')
+                  : b.error}
+                className={`rounded-full px-2.5 py-0.5 text-[11px] border ${
+                  !b.ok ? 'border-red-200 bg-red-50 text-red-700'
+                    : b.covers ? 'border-purple-200 bg-purple-50 text-purple-700'
+                    : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                {b.name.toUpperCase()}{' '}
+                <b>{!b.ok ? 'ดึงไม่ได้' : b.covers ? fmtInt(b.covers) : 'ไม่มีหัว'}</b>
+                {b.ok && b.covers ? ' หัว' : ''}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="bg-white rounded-2xl shadow-sm border border-fuchsia-100 overflow-hidden">
+        {loading ? (
+          <div className="py-20 flex flex-col items-center justify-center text-fuchsia-600">
+            <Loader2 className="w-10 h-10 animate-spin mb-4" />
+            <p className="font-medium text-sm">กำลังโหลดทะเบียนสินค้าและสาขา...</p>
+          </div>
+        ) : !report ? (
+          <div className="py-20 text-center text-gray-400">
+            <BarChart3 className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+            <p className="text-sm">เลือกช่วงวันที่แล้วกด “คำนวณรายงาน” เพื่อดึงยอดใช้ของทุกสาขา</p>
+            <p className="text-xs mt-1 text-gray-400">ยิงทีละ {BRANCH_BATCH} สาขา · ช่วงยาวหลายสัปดาห์จะใช้เวลาสักครู่</p>
+          </div>
+        ) : (
+          <>
+            <div className="px-3 py-2 bg-fuchsia-50/60 border-b border-fuchsia-100 text-[11px] text-fuchsia-700 flex items-center justify-between gap-3 flex-wrap">
+              <span>↔ เลื่อนตารางไปทางขวาเพื่อดูสาขาที่เหลือ ({report.branches.length} สาขา) · คลิกที่ชื่อสินค้าเพื่อเทียบทุกสาขาแบบเต็ม</span>
+              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                <input type="checkbox" checked={onlyUsed} onChange={e => setOnlyUsed(e.target.checked)}
+                  className="rounded border-fuchsia-300 text-fuchsia-600 focus:ring-fuchsia-500" />
+                แสดงเฉพาะไอเทมที่มีการใช้
+              </label>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50/50">
+                  <tr>
+                    <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase whitespace-nowrap">รหัส</th>
+                    <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
+                    <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase whitespace-nowrap">หมวดจัดเก็บ</th>
+                    <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase">หน่วย</th>
+                    <th colSpan={2} className="px-3 py-2 text-center text-[10px] font-semibold text-blue-700 uppercase bg-blue-50/60 whitespace-nowrap">รวมทุกสาขา</th>
+                    {report.branches.map(b => (
+                      <th key={b.key} colSpan={colSpanPerBranch}
+                        className="px-3 py-2 text-center text-[10px] font-semibold text-purple-700 uppercase bg-purple-50/50 border-l-2 border-purple-100 whitespace-nowrap">
+                        {b.name.toUpperCase()}
+                        <div className="font-normal text-[9px] text-purple-400 normal-case">
+                          {b.ok ? (b.covers ? `${fmtInt(b.covers)} หัว` : 'ไม่มีจำนวนหัว') : 'ดึงไม่ได้'}
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                  <tr>
+                    <th className="px-3 py-2 text-center text-[10px] font-semibold text-blue-700 uppercase bg-blue-50/60 whitespace-nowrap">ยอดใช้</th>
+                    <th className="px-3 py-2 text-center text-[10px] font-semibold text-violet-700 uppercase bg-violet-50/60 whitespace-nowrap">ต่อหัว (ค่ากลาง)</th>
+                    {report.branches.map(b => (
+                      <React.Fragment key={b.key}>
+                        {showUsage && <th className="px-3 py-2 text-center text-[10px] font-semibold text-purple-600 uppercase bg-purple-50/40 border-l-2 border-purple-100 whitespace-nowrap">ยอดใช้</th>}
+                        {showPerHead && <th className={`px-3 py-2 text-center text-[10px] font-semibold text-purple-600 uppercase bg-purple-50/40 whitespace-nowrap ${showUsage ? '' : 'border-l-2 border-purple-100'}`}>ต่อหัว</th>}
+                      </React.Fragment>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-100">
+                  {visibleRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6 + report.branches.length * colSpanPerBranch} className="px-6 py-12 text-center text-gray-400">
+                        <AlertCircle className="w-8 h-8 mx-auto mb-2" />
+                        ไม่พบรายการสินค้าที่ตรงเงื่อนไข
+                      </td>
+                    </tr>
+                  ) : visibleRows.map(r => (
+                    <tr key={r.item.productId} className="hover:bg-gray-50/50 transition-colors">
+                      <td className="px-3 py-2 whitespace-nowrap text-[11px] font-mono text-gray-600">{r.item.productId}</td>
+                      <td className="px-3 py-2 text-sm text-gray-800 font-medium cursor-pointer hover:text-fuchsia-700 hover:underline"
+                        onClick={() => openDetail(r)} title="คลิกเพื่อเทียบทุกสาขา">
+                        {r.item.name}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap text-[11px] text-fuchsia-600 font-medium">{r.item.storageCat || '-'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap text-[11px] text-gray-500">{r.item.unit}</td>
+                      <td className="px-3 py-2 text-center text-sm font-bold text-blue-700 bg-blue-50/40 whitespace-nowrap">
+                        {r.totalUsage ? fmtUsage(r.totalUsage) : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-center text-sm font-bold text-violet-700 bg-violet-50/40 whitespace-nowrap">
+                        {r.mean ? fmtPerHead(r.mean) : '-'}
+                      </td>
+                      {r.cells.map((c, i) => {
+                        const tone = cellTone(c.diffPct);
+                        return (
+                          <React.Fragment key={i}>
+                            {showUsage && (
+                              <td className="px-3 py-2 text-center text-[12px] text-slate-600 border-l-2 border-purple-100 whitespace-nowrap">
+                                {c.usage === null ? <span className="text-gray-300">-</span> : c.usage ? fmtUsage(c.usage) : '0'}
+                              </td>
+                            )}
+                            {showPerHead && (
+                              <td className={`px-3 py-2 text-center whitespace-nowrap ${showUsage ? '' : 'border-l-2 border-purple-100'}`}>
+                                {c.perHead === null ? <span className="text-gray-300 text-sm">-</span>
+                                  : !c.usage ? <span className="text-gray-300 text-sm" title="ช่วงนี้สาขานี้ไม่ได้ใช้ไอเทมนี้เลย — ไม่นำไปคิดค่ากลาง">0</span> : (
+                                  <>
+                                    <div className={`text-[12px] font-bold ${tone.text}`}>{fmtPerHead(c.perHead)}</div>
+                                    {c.diffPct !== null && (
+                                      <span className={`inline-block mt-0.5 px-1.5 rounded-full text-[9px] font-semibold ${tone.pill}`}>
+                                        {c.diffPct > 0 ? '+' : ''}{c.diffPct.toFixed(1)}%
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                              </td>
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="px-3 py-2.5 border-t border-gray-100 bg-gray-50/50 flex flex-wrap items-center gap-4 text-[11px] text-gray-500">
+              <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded bg-red-100 inline-block" /> ใช้ต่อหัวสูงกว่าค่ากลาง &gt; {DEVIATION_PCT}%</span>
+              <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded bg-cyan-100 inline-block" /> ต่ำกว่าค่ากลาง &gt; {DEVIATION_PCT}%</span>
+              <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded bg-slate-100 inline-block" /> ใกล้เคียงค่ากลาง</span>
+              <span className="ml-auto">ค่ากลาง = ยอดใช้รวม ÷ จำนวนหัวรวม ของสาขาที่ใช้ไอเทมนั้น (ถ่วงน้ำหนักตามขนาดสาขา)</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {detailItem && (
+        <DetailModal
+          row={detailItem}
+          report={report}
+          settings={settings}
+          loadingSettings={loadingSettings}
+          onClose={() => setDetailItem(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** หน้าต่างเทียบทุกสาขาของไอเทมเดียว — เรียงจากใช้ต่อหัวมากสุด + แท่งเทียบค่ากลาง */
+function DetailModal({ row, report, settings, loadingSettings, onClose }) {
+  const mean = row.mean;
+  // เอาเฉพาะสาขาที่ใช้ไอเทมนี้จริง — สาขาที่ไม่ได้ใช้เลยไม่ได้เข้าค่ากลาง จะโชว์ -100% ให้ตกใจเล่น ๆ
+  const lines = row.cells
+    .filter(c => c.perHead !== null && c.usage > 0)
+    .sort((a, b) => b.perHead - a.perHead);
+  const idleBranches = row.cells.filter(c => c.branch.ok && !c.usage).map(c => c.branch.name.toUpperCase());
+  const max = lines.length ? Math.max(...lines.map(l => l.perHead), mean || 0) : 1;
+  const settingRows = settings ? (settings[row.id] || []) : null;
+  const settingOf = (branchName) => {
+    if (!settingRows) return null;
+    return settingRows.find(s => String(s.branch).toLowerCase() === String(branchName).toLowerCase()) || null;
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-fuchsia-100 bg-fuchsia-50/50">
+          <h3 className="font-bold text-fuchsia-900">
+            {row.item.name}
+            <span className="ml-2 font-mono text-[11px] font-normal text-fuchsia-500">
+              {row.item.productId} · {row.item.unit} · {row.item.storageCat || 'ไม่ระบุหมวด'}
+            </span>
+          </h3>
+          <button onClick={onClose} className="text-fuchsia-400 hover:text-fuchsia-700 font-bold text-xl leading-none">&times;</button>
+        </div>
+
+        <div className="p-4 max-h-[72vh] overflow-y-auto">
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="border border-purple-100 bg-purple-50/50 rounded-xl p-3">
+              <div className="text-[10px] text-purple-600">ค่ากลางต่อหัว (ทุกสาขา)</div>
+              <div className="text-lg font-bold text-purple-900">{mean ? fmtPerHead(mean) : '-'}</div>
+              <div className="text-[10px] text-purple-400">{row.item.unit || 'หน่วย'}/หัว</div>
+            </div>
+            <div className="border border-blue-100 bg-blue-50/50 rounded-xl p-3">
+              <div className="text-[10px] text-blue-600">ยอดใช้รวม</div>
+              <div className="text-lg font-bold text-blue-900">{fmtUsage(row.totalUsage)}</div>
+              <div className="text-[10px] text-blue-400">{report.from} ถึง {report.to}</div>
+            </div>
+            <div className="border border-red-100 bg-red-50/50 rounded-xl p-3">
+              <div className="text-[10px] text-red-600">สาขาที่เกินค่ากลาง &gt;{DEVIATION_PCT}%</div>
+              <div className="text-lg font-bold text-red-700">{row.overCount}</div>
+              <div className="text-[10px] text-red-400">
+                {lines.filter(l => l.diffPct > DEVIATION_PCT).map(l => l.branch.name.toUpperCase()).join(', ') || '—'}
+              </div>
+            </div>
+          </div>
+
+          {lines.length === 0 ? (
+            <div className="text-center py-10 text-gray-400 text-sm">ช่วงนี้ไม่มีสาขาไหนคิดต่อหัวได้ (ไม่มียอดใช้ หรือไม่มีจำนวนหัว)</div>
+          ) : (
+            <div className="grid lg:grid-cols-2 gap-5">
+              <div>
+                <h4 className="text-xs font-bold text-slate-600 mb-2">เทียบทุกสาขา (เรียงจากใช้ต่อหัวมากสุด)</h4>
+                <div className="border border-gray-100 rounded-xl overflow-hidden">
+                  <table className="min-w-full text-[11.5px]">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-2.5 py-2 text-left font-bold text-gray-500 uppercase text-[9.5px]">สาขา</th>
+                        <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]">จำนวนหัว</th>
+                        <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]">ยอดใช้</th>
+                        <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]">ใช้ต่อหัว</th>
+                        <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]">ต่างจากค่ากลาง</th>
+                        <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]" title="ค่าเฉลี่ยต่อหัวที่สาขาตั้งไว้ในหน้านับสต๊อก">ค่าที่ตั้งไว้</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {lines.map((l, i) => {
+                        const over = l.diffPct > DEVIATION_PCT;
+                        const under = l.diffPct < -DEVIATION_PCT;
+                        const set = settingOf(l.branch.name);
+                        // เทียบกับค่าที่ตั้งไว้เฉพาะสาขาที่ใช้โหมด "ต่อหัว" — โหมดเติมเต็มเป็นคนละหน่วยความหมาย
+                        const setVal = set && set.calcMode !== 'par' && set.avgPerHead !== '' ? Number(set.avgPerHead) : null;
+                        const setOff = setVal ? Math.abs(l.perHead - setVal) / setVal * 100 > DEVIATION_PCT : false;
+                        return (
+                          <tr key={i}>
+                            <td className="px-2.5 py-1.5 font-bold font-mono text-slate-700">{l.branch.name.toUpperCase()}</td>
+                            <td className="px-2.5 py-1.5 text-right text-slate-500">{fmtInt(l.branch.covers)}</td>
+                            <td className="px-2.5 py-1.5 text-right text-slate-600">{fmtUsage(l.usage)}</td>
+                            <td className={`px-2.5 py-1.5 text-right font-bold ${over ? 'text-red-600' : under ? 'text-cyan-700' : 'text-slate-700'}`}>
+                              {fmtPerHead(l.perHead)}
+                            </td>
+                            <td className="px-2.5 py-1.5 text-right">
+                              <span className={`inline-block px-1.5 rounded-full text-[9.5px] font-semibold ${
+                                over ? 'bg-red-100 text-red-700' : under ? 'bg-cyan-100 text-cyan-700' : 'bg-slate-100 text-slate-500'}`}>
+                                {l.diffPct > 0 ? '+' : ''}{l.diffPct.toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="px-2.5 py-1.5 text-right text-fuchsia-700">
+                              {loadingSettings ? <Loader2 className="w-3 h-3 animate-spin inline text-fuchsia-300" />
+                                : setVal ? <>{setVal}{setOff && <span title="ใช้จริงต่างจากค่าที่ตั้งไว้เกินเกณฑ์"> ⚠️</span>}</>
+                                : set ? <span className="text-gray-400" title="สาขานี้ตั้งเป็นโหมดเติมเต็มสตอค ไม่ได้คิดต่อหัว">เติมเต็ม</span>
+                                : <span className="text-gray-300">-</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {idleBranches.length > 0 && (
+                  <div className="mt-2 text-[10.5px] text-gray-400">
+                    ไม่ได้ใช้ไอเทมนี้เลยในช่วงนี้ ({idleBranches.length} สาขา) : {idleBranches.join(', ')}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <h4 className="text-xs font-bold text-slate-600 mb-2">ใช้ต่อหัวรายสาขา เทียบค่ากลาง</h4>
+                <div className="space-y-1.5">
+                  {lines.map((l, i) => {
+                    const over = l.diffPct > DEVIATION_PCT;
+                    const under = l.diffPct < -DEVIATION_PCT;
+                    return (
+                      <div key={i} className="flex items-center gap-2">
+                        <span className="w-11 text-[11px] font-bold font-mono text-slate-600">{l.branch.name.toUpperCase()}</span>
+                        <span className="flex-1 relative h-4 bg-slate-50 rounded-full">
+                          <span className={`absolute left-0 top-0 h-4 rounded-full ${over ? 'bg-red-400' : under ? 'bg-cyan-300' : 'bg-purple-300'}`}
+                            style={{ width: `${Math.min(100, l.perHead / max * 100)}%` }} />
+                          {mean && (
+                            <span className="absolute -top-0.5 -bottom-0.5 border-l-2 border-dashed border-slate-400"
+                              style={{ left: `${Math.min(100, mean / max * 100)}%` }} />
+                          )}
+                        </span>
+                        <span className="w-16 text-right text-[11px] text-slate-600">{fmtPerHead(l.perHead)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 text-[10.5px] text-gray-400 leading-relaxed">
+                  • เส้นประ = ค่ากลางต่อหัวของทุกสาขา{mean ? ` (${fmtPerHead(mean)})` : ''}<br />
+                  • แท่งแดง = สูงกว่าค่ากลางเกิน {DEVIATION_PCT}% (เสี่ยงตักเกินสูตร / ของหาย / ตัดสต๊อกไม่ครบ)<br />
+                  • แท่งฟ้า = ต่ำกว่าค่ากลางเกิน {DEVIATION_PCT}% (อาจขายส่วนผสมอื่นแทน หรือสูตร BOM ไม่ตรงของจริง)
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
+          <span className="text-[10.5px] text-gray-400">
+            ยอดใช้ = ยอดขายจริง × สูตร BOM · จำนวนหัว = จานบุฟเฟต์ที่จ่ายจริง (WRM/WMT ใช้ Cover All)
+          </span>
+          <button className="px-4 py-2 bg-fuchsia-100 text-fuchsia-700 rounded-lg text-sm font-medium hover:bg-fuchsia-200 transition-colors"
+            onClick={onClose}>ปิดหน้าต่าง</button>
+        </div>
+      </div>
+    </div>
+  );
+}

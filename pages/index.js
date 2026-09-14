@@ -26,6 +26,7 @@ import {
   HelpCircle,
   Filter,
   PackageSearch,
+  BarChart3,
   AlertTriangle,
   ClipboardList,
   FileText,
@@ -42,6 +43,7 @@ import {
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
+import StockUsagePerHead from '../components/StockUsagePerHead';
 import MonthEndList from '../components/MonthEndList';
 import EmployeeList from '../components/EmployeeList';
 import Attendance from '../components/Attendance';
@@ -658,7 +660,7 @@ const FRANCHISE_TITLES = {
 const MENU_ICONS = {
   dashboard: LayoutDashboard, sales: TrendingUp, dailySale: Receipt, details: Layers,
   itemSearch: Search, otherExpense: DollarSign,
-  stockList: PackageSearch, stockTotal: Eye, monthEnd: Calendar,
+  stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar,
   employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, branchList: Building2,
   qcrdMenu: FileText, qcrdItems: PackageSearch,
   planList: ClipboardList, branchRequisition: PackageOpen,
@@ -2537,6 +2539,7 @@ export default function App() {
                 {activeTab === 'details' && <Layers size={20} className="text-amber-600" />}
                 {activeTab === 'itemSearch' && <Search size={20} className="text-amber-600" />}
                 {(activeTab === 'stockList' || activeTab === 'stockTotal') && <PackageSearch size={20} className="text-amber-600" />}
+                {activeTab === 'stockUsagePerHead' && <BarChart3 size={20} className="text-amber-600" />}
                 {activeTab === 'monthEnd' && <Calendar size={20} className="text-amber-600" />}
                 {activeTab === 'employeeList' && <Users size={20} className="text-amber-600" />}
                 {activeTab === 'attendance' && <Fingerprint size={20} className="text-amber-600" />}
@@ -2560,6 +2563,7 @@ export default function App() {
                   : activeTab === 'itemSearch' ? 'ค้นหารายไอเทม'
                   : activeTab === 'stockList' ? 'นับสต๊อกและขอเบิก'
                   : activeTab === 'stockTotal' ? 'ดูยอดรวมทุกสาขา'
+                  : activeTab === 'stockUsagePerHead' ? 'รายงานการใช้วัตถุดิบต่อหัว ของสาขา'
                   : activeTab === 'monthEnd' ? 'ดูข้อมูลปิดรอบเดือน'
                   : activeTab === 'employeeList' ? 'รายชื่อพนักงาน'
                   : activeTab === 'attendance' ? 'ดูสแกนหน้า (เข้า-ออกงาน)'
@@ -2621,6 +2625,10 @@ export default function App() {
             {/* STOCK VIEWS (จาก Narai-branch — โหมดดูอย่างเดียว) */}
             {activeTab === 'stockList' && <StockList />}
             {activeTab === 'stockTotal' && <StockTotalList />}
+
+            {/* STOCK: รายงานการใช้วัตถุดิบต่อหัว — ยอดใช้ (BOM) ของแต่ละสาขา หารด้วยจำนวนหัวลูกค้า
+                ใช้ /api/usage-bom สาขาละคำขอเดียว (คำตอบมีทั้งยอดใช้และจำนวนหัวในตัว) */}
+            {activeTab === 'stockUsagePerHead' && <StockUsagePerHead />}
 
             {/* STOCK: ดูข้อมูลปิดรอบเดือน — จากตาราง dbo.stock_month_end ผ่าน /api/stock-month-end */}
             {activeTab === 'monthEnd' && <MonthEndList />}
