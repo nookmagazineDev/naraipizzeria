@@ -10,7 +10,7 @@
 //             ยกเว้น WRM/WMT ที่ใช้ Cover All ของบิล (ดู lib/coverRules.js)
 // ยิงสาขาละคำขอเดียวได้ทั้งสองค่า เพราะ /api/usage-bom นับหัวจากรายการขายที่ดึงมาอยู่แล้ว
 import React, { useState, useEffect, useMemo } from 'react';
-import { BarChart3, Search, Loader2, AlertCircle, Download, Users, Package, AlertTriangle } from 'lucide-react';
+import { BarChart3, Search, Loader2, AlertCircle, Download, Users, Package, AlertTriangle, Store, ChevronDown } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
 import { apiRead } from '../lib/stockApi';
@@ -38,6 +38,9 @@ export default function StockUsagePerHead() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('storageCat');
+  // สาขาที่เอามาเทียบกัน — ค่าเริ่มต้นคือทุกสาขาที่มี outletId (ติ๊กออกได้ทีละสาขา)
+  const [selectedKeys, setSelectedKeys] = useState([]);
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const [viewMode, setViewMode] = useState('both'); // 'both' | 'perHead' | 'usage'
   const [onlyUsed, setOnlyUsed] = useState(true);   // ซ่อนไอเทมที่ช่วงนี้ไม่มีการใช้เลย
   const [startDate, setStartDate] = useState('');
@@ -68,7 +71,9 @@ export default function StockUsagePerHead() {
         apiRead('getStockTotal', { endDate: '' }),
       ]);
       if (branchRes.status === 'success') {
-        setBranches((branchRes.data || []).filter(b => String(b.name).toLowerCase() !== 'all'));
+        const list = (branchRes.data || []).filter(b => String(b.name).toLowerCase() !== 'all');
+        setBranches(list);
+        setSelectedKeys(list.filter(b => b.outletId).map(b => String(b.name).toLowerCase()));
       }
       if (itemRes.status === 'success') {
         setItems(itemRes.data || []);
@@ -84,8 +89,14 @@ export default function StockUsagePerHead() {
   const fetchReport = async () => {
     if (!startDate || !endDate) { toast.error('กรุณาระบุช่วงวันที่ให้ครบถ้วน'); return; }
     if (startDate > endDate) { toast.error('วันที่เริ่มต้นอยู่หลังวันที่สิ้นสุด'); return; }
-    const targets = branches.filter(b => b.outletId);
-    if (targets.length === 0) { toast.error('ไม่พบสาขาที่มีรหัส outlet — ดึงยอดใช้ไม่ได้'); return; }
+    // ดึงเฉพาะสาขาที่ติ๊กไว้ — เลือกน้อยลงก็รอสั้นลงจริง ไม่ใช่ดึงหมดแล้วมาซ่อนทีหลัง
+    const targets = branches.filter(b => b.outletId && selectedKeys.includes(String(b.name).toLowerCase()));
+    if (targets.length === 0) {
+      toast.error(branches.some(b => b.outletId)
+        ? 'ยังไม่ได้เลือกสาขาที่จะเทียบ — กดปุ่ม “สาขาที่เทียบ” แล้วติ๊กอย่างน้อย 1 สาขา'
+        : 'ไม่พบสาขาที่มีรหัส outlet — ดึงยอดใช้ไม่ได้');
+      return;
+    }
 
     setIsFetching(true);
     setProgress({ done: 0, total: targets.length });
@@ -145,16 +156,29 @@ export default function StockUsagePerHead() {
     }
   };
 
+  /** สาขาที่อยู่ในผลคำนวณ และยังติ๊กอยู่ — ติ๊กออกทีหลังจะซ่อนคอลัมน์และคิดค่ากลางใหม่ทันที
+      โดยไม่ต้องยิงข้อมูลซ้ำ (ของที่ดึงมาแล้วยังอยู่ครบ) */
+  const activeBranches = useMemo(
+    () => (report?.branches || []).filter(b => selectedKeys.includes(b.key)),
+    [report, selectedKeys]
+  );
+
+  /** สาขาที่ติ๊กไว้แต่ยังไม่มีข้อมูลในผลรอบนี้ — ต้องกดคำนวณใหม่ถึงจะเห็น */
+  const pendingKeys = useMemo(() => {
+    if (!report) return [];
+    return selectedKeys.filter(k => !report.branches.some(b => b.key === k));
+  }, [report, selectedKeys]);
+
   /** สาขาที่เอาไปคิดค่ากลางได้ = ดึงยอดใช้สำเร็จ และรู้จำนวนหัว */
   const usableBranches = useMemo(
-    () => (report?.branches || []).filter(b => b.ok && b.covers > 0),
-    [report]
+    () => activeBranches.filter(b => b.ok && b.covers > 0),
+    [activeBranches]
   );
 
   /** หัวใจของหน้า — 1 แถวต่อ 1 วัตถุดิบ พร้อมตัวเลขรายสาขาที่คิดต่อหัวแล้ว */
   const rows = useMemo(() => {
     if (!report) return [];
-    const cols = report.branches;
+    const cols = activeBranches;
 
     return items.map(item => {
       const id = normalizeId(item.productId);
@@ -180,7 +204,7 @@ export default function StockUsagePerHead() {
 
       return { item, id, cells, totalUsage, mean, overCount };
     });
-  }, [items, report]);
+  }, [items, report, activeBranches]);
 
   const visibleRows = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -205,15 +229,15 @@ export default function StockUsagePerHead() {
 
   const summary = useMemo(() => {
     if (!report) return null;
-    const okCount = report.branches.filter(b => b.ok).length;
+    const okCount = activeBranches.filter(b => b.ok).length;
     return {
       okCount,
-      total: report.branches.length,
+      total: activeBranches.length,
       covers: usableBranches.reduce((s, b) => s + b.covers, 0),
       usedItems: rows.filter(r => r.totalUsage > 0).length,
       hotSpots: rows.reduce((s, r) => s + r.overCount, 0),
     };
-  }, [report, rows, usableBranches]);
+  }, [report, rows, usableBranches, activeBranches]);
 
   /** ค่าตั้งเบิกของทุกสาขา — ทะเบียนเดียวกับคอลัมน์ "ค่าเฉลี่ย" ของหน้านับสต๊อก
       getStockItems ของสาขาไหนก็คืน calcBranches ของ "ทุกสาขา" มาให้ จึงยิงสาขาเดียวพอ */
@@ -239,10 +263,17 @@ export default function StockUsagePerHead() {
     ensureSettings();
   };
 
+  /** สาขาที่เลือกได้จริง = ต้องมี outletId ไม่งั้นยิงยอดขายไม่ได้ */
+  const selectableBranches = useMemo(() => branches.filter(b => b.outletId), [branches]);
+
+  const toggleBranch = (key) => {
+    setSelectedKeys(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  };
+
   // ── Export Excel: แถว = ไอเทม · สาขาละ 2 คอลัมน์ (ยอดใช้ / ต่อหัว) ──
   const exportExcel = () => {
     if (!report || visibleRows.length === 0) { toast.error('ไม่มีรายการให้ export'); return; }
-    const cols = report.branches;
+    const cols = activeBranches;
     const h1 = ['รหัส', 'ชื่อสินค้า', 'หมวดจัดเก็บ', 'หน่วย', 'ยอดใช้รวม', 'ต่อหัว (ค่ากลาง)'];
     const h2 = ['', '', '', '', '', ''];
     cols.forEach(b => {
@@ -349,6 +380,66 @@ export default function StockUsagePerHead() {
           ))}
         </div>
 
+        {/* เลือกสาขาที่จะเทียบ — ติ๊กได้หลายสาขา มีผลทั้งตอนดึงข้อมูลและตอนคิดค่ากลาง */}
+        <div className="relative">
+          <button onClick={() => setBranchPickerOpen(o => !o)}
+            className={`h-full w-full xl:w-auto px-3 py-3 border rounded-xl bg-white text-sm flex items-center gap-2 whitespace-nowrap transition-colors ${
+              branchPickerOpen ? 'border-fuchsia-400 ring-1 ring-fuchsia-300' : 'border-gray-200 hover:border-fuchsia-300'}`}>
+            <Store className="w-4 h-4 text-fuchsia-500" />
+            <span className="text-gray-700">
+              สาขาที่เทียบ :{' '}
+              <b className="text-fuchsia-700">
+                {selectedKeys.length === selectableBranches.length ? `ทุกสาขา (${selectedKeys.length})` : `${selectedKeys.length} สาขา`}
+              </b>
+            </span>
+            <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${branchPickerOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {branchPickerOpen && (
+            <>
+              {/* ฉากหลังใส ๆ ไว้กดปิด — ไม่งั้นต้องกดปุ่มเดิมซ้ำถึงจะปิดได้ */}
+              <div className="fixed inset-0 z-30" onClick={() => setBranchPickerOpen(false)} />
+              <div className="absolute z-40 mt-2 w-72 bg-white border border-fuchsia-100 rounded-xl shadow-xl overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 bg-fuchsia-50/70 border-b border-fuchsia-100">
+                  <span className="text-[11px] font-semibold text-fuchsia-800">เลือกสาขาที่จะเทียบกัน</span>
+                  <div className="flex gap-1.5 text-[11px]">
+                    <button onClick={() => setSelectedKeys(selectableBranches.map(b => String(b.name).toLowerCase()))}
+                      className="px-2 py-0.5 rounded bg-fuchsia-600 text-white hover:bg-fuchsia-700">ทั้งหมด</button>
+                    <button onClick={() => setSelectedKeys([])}
+                      className="px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-600 hover:bg-gray-50">ล้าง</button>
+                  </div>
+                </div>
+                <div className="max-h-72 overflow-y-auto p-1">
+                  {selectableBranches.length === 0 ? (
+                    <div className="px-3 py-6 text-center text-xs text-gray-400">ยังไม่มีสาขาที่มีรหัส outlet</div>
+                  ) : selectableBranches.map(b => {
+                    const key = String(b.name).toLowerCase();
+                    const checked = selectedKeys.includes(key);
+                    const fetched = report?.branches.some(x => x.key === key);
+                    return (
+                      <label key={key}
+                        className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer text-sm ${checked ? 'bg-fuchsia-50/60' : 'hover:bg-gray-50'}`}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleBranch(key)}
+                          className="rounded border-gray-300 text-fuchsia-600 focus:ring-fuchsia-500" />
+                        <span className={`font-mono font-semibold ${checked ? 'text-fuchsia-800' : 'text-gray-600'}`}>
+                          {String(b.name).toUpperCase()}
+                        </span>
+                        {report && checked && !fetched && (
+                          <span className="ml-auto text-[9.5px] text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-1.5">ยังไม่ได้ดึง</span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="px-3 py-2 bg-gray-50 border-t border-gray-100 text-[10.5px] text-gray-400 leading-relaxed">
+                  ติ๊กออกหลังคำนวณแล้ว = ซ่อนคอลัมน์และคิดค่ากลางใหม่ทันที ไม่ต้องดึงซ้ำ ·
+                  ติ๊กสาขาที่ยังไม่เคยดึงเข้ามา ต้องกด “คำนวณรายงาน” อีกครั้ง
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
         <div className="flex items-center gap-2 bg-gradient-to-r from-fuchsia-50 to-pink-50 border border-fuchsia-100 p-2 rounded-xl">
           <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap">วันที่ :</span>
           <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
@@ -371,6 +462,20 @@ export default function StockUsagePerHead() {
           </button>
         </div>
       </div>
+
+      {/* ติ๊กสาขาเพิ่มหลังคำนวณไปแล้ว — บอกให้ชัดว่าคอลัมน์ยังไม่โผล่เพราะยังไม่ได้ดึง ไม่ใช่เพราะไม่มีข้อมูล */}
+      {report && pendingKeys.length > 0 && (
+        <div className="mb-3 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>
+            ติ๊กเพิ่มไว้ {pendingKeys.length} สาขา ({pendingKeys.map(k => k.toUpperCase()).join(', ')}) แต่ยังไม่ได้ดึงข้อมูลของรอบนี้
+          </span>
+          <button onClick={fetchReport} disabled={isFetching}
+            className="ml-auto px-3 py-1 rounded-lg bg-amber-600 text-white text-[11px] font-semibold hover:bg-amber-700 disabled:opacity-50 whitespace-nowrap">
+            คำนวณรายงานใหม่
+          </button>
+        </div>
+      )}
 
       {/* การ์ดสรุป + จำนวนหัวรายสาขา */}
       {summary && (
@@ -400,7 +505,7 @@ export default function StockUsagePerHead() {
 
           <div className="bg-white border border-fuchsia-100 rounded-2xl px-3 py-2.5 mb-3 flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-semibold text-gray-500 mr-1">จำนวนหัวลูกค้าที่ใช้หาร :</span>
-            {report.branches.map(b => (
+            {activeBranches.map(b => (
               <span key={b.key}
                 title={b.ok
                   ? (b.covers ? `นับจาก${b.coversSource === 'coverAll' ? ' Cover All ของบิล' : 'จานบุฟเฟต์ที่จ่ายจริง'}` : 'ดึงยอดใช้ได้ แต่ไม่มีจำนวนหัว — คิดต่อหัวไม่ได้')
@@ -427,13 +532,19 @@ export default function StockUsagePerHead() {
         ) : !report ? (
           <div className="py-20 text-center text-gray-400">
             <BarChart3 className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-            <p className="text-sm">เลือกช่วงวันที่แล้วกด “คำนวณรายงาน” เพื่อดึงยอดใช้ของทุกสาขา</p>
-            <p className="text-xs mt-1 text-gray-400">ยิงทีละ {BRANCH_BATCH} สาขา · ช่วงยาวหลายสัปดาห์จะใช้เวลาสักครู่</p>
+            <p className="text-sm">เลือกสาขาที่จะเทียบ ตั้งช่วงวันที่ แล้วกด “คำนวณรายงาน”</p>
+            <p className="text-xs mt-1 text-gray-400">ยิงทีละ {BRANCH_BATCH} สาขา · เลือกสาขาน้อยลงจะเร็วขึ้นตามจำนวนที่เลือก</p>
+          </div>
+        ) : activeBranches.length === 0 ? (
+          <div className="py-20 text-center text-gray-400">
+            <Store className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+            <p className="text-sm">ยังไม่ได้เลือกสาขาที่จะเทียบ</p>
+            <p className="text-xs mt-1">กดปุ่ม “สาขาที่เทียบ” ด้านบนแล้วติ๊กอย่างน้อย 1 สาขา</p>
           </div>
         ) : (
           <>
             <div className="px-3 py-2 bg-fuchsia-50/60 border-b border-fuchsia-100 text-[11px] text-fuchsia-700 flex items-center justify-between gap-3 flex-wrap">
-              <span>↔ เลื่อนตารางไปทางขวาเพื่อดูสาขาที่เหลือ ({report.branches.length} สาขา) · คลิกที่ชื่อสินค้าเพื่อเทียบทุกสาขาแบบเต็ม</span>
+              <span>↔ เลื่อนตารางไปทางขวาเพื่อดูสาขาที่เหลือ ({activeBranches.length} สาขา) · คลิกที่ชื่อสินค้าเพื่อเทียบทุกสาขาแบบเต็ม</span>
               <label className="flex items-center gap-1.5 cursor-pointer select-none">
                 <input type="checkbox" checked={onlyUsed} onChange={e => setOnlyUsed(e.target.checked)}
                   className="rounded border-fuchsia-300 text-fuchsia-600 focus:ring-fuchsia-500" />
@@ -450,7 +561,7 @@ export default function StockUsagePerHead() {
                     <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase whitespace-nowrap">หมวดจัดเก็บ</th>
                     <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase">หน่วย</th>
                     <th colSpan={2} className="px-3 py-2 text-center text-[10px] font-semibold text-blue-700 uppercase bg-blue-50/60 whitespace-nowrap">รวมทุกสาขา</th>
-                    {report.branches.map(b => (
+                    {activeBranches.map(b => (
                       <th key={b.key} colSpan={colSpanPerBranch}
                         className="px-3 py-2 text-center text-[10px] font-semibold text-purple-700 uppercase bg-purple-50/50 border-l-2 border-purple-100 whitespace-nowrap">
                         {b.name.toUpperCase()}
@@ -463,7 +574,7 @@ export default function StockUsagePerHead() {
                   <tr>
                     <th className="px-3 py-2 text-center text-[10px] font-semibold text-blue-700 uppercase bg-blue-50/60 whitespace-nowrap">ยอดใช้</th>
                     <th className="px-3 py-2 text-center text-[10px] font-semibold text-violet-700 uppercase bg-violet-50/60 whitespace-nowrap">ต่อหัว (ค่ากลาง)</th>
-                    {report.branches.map(b => (
+                    {activeBranches.map(b => (
                       <React.Fragment key={b.key}>
                         {showUsage && <th className="px-3 py-2 text-center text-[10px] font-semibold text-purple-600 uppercase bg-purple-50/40 border-l-2 border-purple-100 whitespace-nowrap">ยอดใช้</th>}
                         {showPerHead && <th className={`px-3 py-2 text-center text-[10px] font-semibold text-purple-600 uppercase bg-purple-50/40 whitespace-nowrap ${showUsage ? '' : 'border-l-2 border-purple-100'}`}>ต่อหัว</th>}
@@ -474,7 +585,7 @@ export default function StockUsagePerHead() {
                 <tbody className="bg-white divide-y divide-gray-100">
                   {visibleRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6 + report.branches.length * colSpanPerBranch} className="px-6 py-12 text-center text-gray-400">
+                      <td colSpan={6 + activeBranches.length * colSpanPerBranch} className="px-6 py-12 text-center text-gray-400">
                         <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                         ไม่พบรายการสินค้าที่ตรงเงื่อนไข
                       </td>
