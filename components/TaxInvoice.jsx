@@ -6,8 +6,9 @@
 // ชุดเดียวกับหน้า "รายงานยอดการขาย" — บิลไหนไม่มีเลขในคอลัมน์นี้แปลว่าไม่ได้ออก
 // ใบกำกับเต็มรูป จึงไม่ขึ้นในหน้านี้ (บิลปกติออกแค่ใบเสร็จ/ใบกำกับอย่างย่อ = TaxInvNo)
 //
-// เรียง "ใบล่าสุดขึ้นก่อน" เป็นค่าตั้งต้น: ดูวันที่ออกใบเป็นหลัก ถ้าออกวันเดียวกัน
-// ค่อยดูเลขวิ่งใน FullTaxInvNo (เทียบแบบ natural ไม่งั้น 1000 จะน้อยกว่า 999)
+// เรียง "ใบล่าสุดขึ้นก่อน" เป็นค่าตั้งต้น: ดูเลขวิ่งใน FullTaxInvNo ล้วน ๆ เลขมากสุดอยู่บนสุด
+// ไม่สนว่าเป็นใบของสาขาไหน (ตัดอักษรนำหน้าทิ้งก่อนเทียบ ไม่งั้นจะกลายเป็นเรียงตามรหัสสาขาก่อน)
+// และเทียบแบบตัวเลข ไม่ใช่ตัวอักษร ไม่งั้น 1000 จะน้อยกว่า 999
 // กดหัวคอลัมน์เพื่อเรียงแบบอื่นได้ แต่เปิดหน้ามาจะเจอใบล่าสุดอยู่บนสุดเสมอ
 //
 // หมายเหตุ: หน้านี้ไม่ตัดโต๊ะ/ไอเทมที่ยอดขายไม่นับ (เช่นโต๊ะ 600) ออก — ใบกำกับที่ออกไปแล้ว
@@ -39,31 +40,29 @@ const hasInvNo = v => {
   return s !== '' && s !== '-' && !/^0+$/.test(s);
 };
 
-// หั่นเลขที่ใบเป็นท่อนตัวเลข/ไม่ใช่ตัวเลข เพื่อเทียบแบบ natural
-// (เลขที่ใบของ POS = อักษรนำหน้าของสาขา + เลขวิ่ง เช่น SJP-0001234)
-const invChunks = s => String(s ?? '').trim().match(/\d+|\D+/g) || [];
+/**
+ * เลขวิ่งของใบกำกับ — ตัดรหัสสาขาที่นำหน้าอยู่ทิ้งก่อน แล้วค่อยเหลือไว้แต่ตัวเลข
+ * (ถ้าเอารหัสสาขามาเทียบด้วยจะกลายเป็นเรียงตามสาขาก่อน ไม่ใช่เรียงใบล่าสุดก่อน)
+ *
+ * ต้องตัดด้วย "รหัสสาขาของแถวนั้น" ไม่ใช่ลบตัวอักษรทิ้งเฉย ๆ เพราะรหัสสาขาบางอันมีตัวเลขปนอยู่
+ * (P90 → ถ้าลบแค่ตัวอักษร เลข 90 จะติดมาเป็นหลักหน้า ทำให้ใบของ P90 ลอยขึ้นบนสุดทุกที)
+ * รหัสที่เป็นตัวเลขล้วน (สาขาที่ยังไม่ได้ลงทะเบียน เลยใช้เลข outlet แทนชื่อ) ไม่ตัด — เดี๋ยวจะไปกินเลขจริง
+ */
+const invSeqOf = (invNo, branchCode) => {
+  let s = String(invNo ?? '').trim();
+  const code = String(branchCode ?? '').trim();
+  if (code && /[A-Za-z]/.test(code) && s.toUpperCase().startsWith(code.toUpperCase())) s = s.slice(code.length);
+  return s.replace(/\D+/g, '');
+};
 
-/** เทียบเลขที่ใบกำกับ: คืนค่าบวกเมื่อ a เป็นใบที่ออกทีหลัง b */
-function compareInvNo(a, b) {
-  const A = invChunks(a);
-  const B = invChunks(b);
-  for (let i = 0; i < Math.max(A.length, B.length); i++) {
-    const x = A[i];
-    const y = B[i];
-    if (x === undefined) return -1;
-    if (y === undefined) return 1;
-    if (/^\d/.test(x) && /^\d/.test(y)) {
-      const d = Number(x) - Number(y);
-      if (d) return d;
-    } else {
-      const d = x.localeCompare(y, 'th');
-      if (d) return d;
-    }
-  }
-  return 0;
-}
+/**
+ * เทียบเลขวิ่ง: คืนค่าบวกเมื่อ a เป็นเลขที่มากกว่า (= ใบใหม่กว่า)
+ * เทียบความยาวก่อนแล้วค่อยเทียบทีละตัวอักษร — ได้ผลเหมือนเทียบค่าตัวเลข
+ * แต่ไม่ตกขอบเมื่อเลขยาวเกินที่ Number เก็บได้ และเลข 0 นำหน้าก็ไม่กวน
+ */
+const compareSeq = (a, b) => (a.length - b.length) || a.localeCompare(b);
 
-/* คอลัมน์ในตาราง — sortVal คืนค่าที่เอาไปเรียง (undefined = ใช้ตัวเทียบพิเศษของคอลัมน์นั้น) */
+/* คอลัมน์ในตาราง — sortVal คืนค่าที่เอาไปเรียง (ไม่มี sortVal = เรียงด้วยเลขวิ่งของใบ) */
 const COLUMNS = [
   { key: 'invNo', label: 'เลขที่ใบกำกับภาษี', align: 'left' },
   { key: 'billDate', label: 'วันที่บิล', align: 'left', sortVal: r => r.billDate },
@@ -81,7 +80,7 @@ export default function TaxInvoice() {
   const [endDate, setEndDate] = useState(todayStr());
   const [outlet, setOutlet] = useState('');            // '' = ทุกสาขา
 
-  const [rawRows, setRawRows] = useState([]);          // ใบกำกับที่ดึงมารอบล่าสุด (เรียงใบล่าสุดไว้บนสุดแล้ว)
+  const [rawRows, setRawRows] = useState([]);          // ใบกำกับที่ดึงมารอบล่าสุด (ยังไม่เรียง — ไปเรียงที่ rows)
   const [range, setRange] = useState(null);            // ช่วง/สาขาของข้อมูลที่แสดงอยู่จริง
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(null);      // { current, total } ระหว่างไล่ดึงทีละก้อน
@@ -131,12 +130,6 @@ export default function TaxInvoice() {
         };
       });
 
-      // ใบล่าสุดก่อน: วันที่ออกใบใหม่สุดขึ้นบน วันเดียวกันดูเลขวิ่งใน FullTaxInvNo แล้วค่อยดูเวลาปิดบิล
-      list.sort((a, b) =>
-        b.issuedDay.localeCompare(a.issuedDay)
-        || compareInvNo(b.invNo, a.invNo)
-        || b.billTime.localeCompare(a.billTime));
-
       setRawRows(list);
       setRange({ start: startDate, end: endDate, outlet });
       setSort({ col: null, asc: false });
@@ -151,10 +144,21 @@ export default function TaxInvoice() {
     }
   }
 
-  const rows = useMemo(
-    () => rawRows.map(r => ({ ...r, branch: branchByOutlet[String(r.outletID)] || String(r.outletID ?? '-') })),
-    [rawRows, branchByOutlet],
-  );
+  // ใส่ชื่อสาขาและคิดเลขวิ่งตอนนี้ (ไม่ใช่ตอนโหลด) เพราะทั้งคู่ต้องใช้ทะเบียนสาขา
+  // ซึ่งโหลดเสร็จช้ากว่าปุ่มค้นหาได้ — ถ้าผูกไว้ตอนโหลดจะค้างเป็นเลข outlet ดิบไปทั้งรอบ
+  const rows = useMemo(() => {
+    const list = rawRows.map(r => {
+      const branch = branchByOutlet[String(r.outletID)] || String(r.outletID ?? '-');
+      return { ...r, branch, seq: invSeqOf(r.invNo, branch) };
+    });
+    // ใบล่าสุดก่อน = เลขวิ่งใน FullTaxInvNo มากสุดขึ้นบน ไม่สนว่าเป็นใบของสาขาไหน
+    // (เลขวิ่งซ้ำกันข้ามสาขาได้ ถ้าซ้ำค่อยดูวันที่ออกใบแล้วเวลาปิดบิลเป็นตัวตัดสิน)
+    list.sort((a, b) =>
+      compareSeq(b.seq, a.seq)
+      || b.issuedDay.localeCompare(a.issuedDay)
+      || b.billTime.localeCompare(a.billTime));
+    return list;
+  }, [rawRows, branchByOutlet]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -168,7 +172,7 @@ export default function TaxInvoice() {
       const dir = sort.asc ? 1 : -1;
       // เรียงจากสำเนา — rows ต้องคงลำดับ "ใบล่าสุดก่อน" ไว้เผื่อผู้ใช้กดกลับ
       list = [...list].sort((a, b) => {
-        if (!col?.sortVal) return dir * compareInvNo(a.invNo, b.invNo);
+        if (!col?.sortVal) return dir * compareSeq(a.seq, b.seq);
         const x = col.sortVal(a);
         const y = col.sortVal(b);
         if (typeof x === 'number' && typeof y === 'number') return dir * (x - y);
@@ -235,7 +239,7 @@ export default function TaxInvoice() {
           ใบกำกับภาษี (เต็มรูป)
         </h1>
         <p className="text-gray-500 mt-1 ml-11">
-          บิลที่ออกใบกำกับภาษีเต็มรูป (มีเลขในคอลัมน์ FullTaxInvNo) — เรียงใบล่าสุดขึ้นก่อน
+          บิลที่ออกใบกำกับภาษีเต็มรูป (มีเลขในคอลัมน์ FullTaxInvNo) — เรียงเลขที่ใบล่าสุดขึ้นก่อน ไม่แยกสาขา
         </p>
       </div>
 
