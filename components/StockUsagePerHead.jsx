@@ -37,7 +37,9 @@ export default function StockUsagePerHead() {
   const [progress, setProgress] = useState(null);  // { done, total } ระหว่างไล่ยิงทีละชุด
 
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState('storageCat');
+  // ตั้งต้นเรียงตามยอดใช้รวม — ตัวที่ใช้เยอะสุดคือตัวที่คุ้มกับการไล่ดูก่อน
+  // (เรียงตามหมวดจัดเก็บยังเลือกได้ แต่ไม่เอาเป็นค่าเริ่มต้น เพราะคอลัมน์หมวดไม่ได้แสดงในตารางแล้ว)
+  const [sortBy, setSortBy] = useState('usage');
   // สาขาที่เอามาเทียบกัน — ค่าเริ่มต้นคือทุกสาขาที่มี outletId (ติ๊กออกได้ทีละสาขา)
   const [selectedKeys, setSelectedKeys] = useState([]);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
@@ -363,11 +365,11 @@ export default function StockUsagePerHead() {
           </div>
           <select value={sortBy} onChange={e => setSortBy(e.target.value)}
             className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500 text-gray-700">
+            <option value="usage">เรียงตามยอดใช้รวม (มาก→น้อย)</option>
+            <option value="deviation">เรียงตามจำนวนสาขาที่ใช้เกินค่ากลาง</option>
             <option value="storageCat">เรียงตามหมวดจัดเก็บ</option>
             <option value="productId">เรียงตามรหัสสินค้า</option>
             <option value="name">เรียงตามชื่อสินค้า</option>
-            <option value="usage">เรียงตามยอดใช้รวม (มาก→น้อย)</option>
-            <option value="deviation">เรียงตามจำนวนสาขาที่ใช้เกินค่ากลาง</option>
           </select>
         </div>
 
@@ -558,7 +560,6 @@ export default function StockUsagePerHead() {
                   <tr>
                     <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase whitespace-nowrap">รหัส</th>
                     <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase">ชื่อสินค้า</th>
-                    <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase whitespace-nowrap">หมวดจัดเก็บ</th>
                     <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase">หน่วย</th>
                     <th colSpan={2} className="px-3 py-2 text-center text-[10px] font-semibold text-blue-700 uppercase bg-blue-50/60 whitespace-nowrap">รวมทุกสาขา</th>
                     {activeBranches.map(b => (
@@ -585,7 +586,7 @@ export default function StockUsagePerHead() {
                 <tbody className="bg-white divide-y divide-gray-100">
                   {visibleRows.length === 0 ? (
                     <tr>
-                      <td colSpan={6 + activeBranches.length * colSpanPerBranch} className="px-6 py-12 text-center text-gray-400">
+                      <td colSpan={5 + activeBranches.length * colSpanPerBranch} className="px-6 py-12 text-center text-gray-400">
                         <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                         ไม่พบรายการสินค้าที่ตรงเงื่อนไข
                       </td>
@@ -597,7 +598,6 @@ export default function StockUsagePerHead() {
                         onClick={() => openDetail(r)} title="คลิกเพื่อเทียบทุกสาขา">
                         {r.item.name}
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap text-[11px] text-fuchsia-600 font-medium">{r.item.storageCat || '-'}</td>
                       <td className="px-3 py-2 whitespace-nowrap text-[11px] text-gray-500">{r.item.unit}</td>
                       <td className="px-3 py-2 text-center text-sm font-bold text-blue-700 bg-blue-50/40 whitespace-nowrap">
                         {r.totalUsage ? fmtUsage(r.totalUsage) : '-'}
