@@ -1,7 +1,8 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   TrendingUp, Receipt, Layers, DollarSign, Search, Download, X, Eye, History, FileText,
   Loader2, AlertCircle, RefreshCw, Store, Users, CreditCard, Wallet, ChevronLeft, ChevronRight,
+  Printer, ScrollText, Settings2,
 } from 'lucide-react';
 import {
   ResponsiveContainer, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -133,6 +134,263 @@ const FC_DAILY_FIXED_TAIL = [
   { key: 'expense', label: 'รายจ่าย', type: 'money', tone: 'rose' },
 ];
 
+/* ════════ ใบกำกับภาษี (อย่างย่อ / เต็มรูปแบบ) ════════
+   ร้านอาหารจดทะเบียน VAT ออก "ใบกำกับภาษีอย่างย่อ" ให้ลูกค้าทุกบิลอยู่แล้ว
+   ส่วน "เต็มรูปแบบ" ออกเมื่อลูกค้าขอ และต้องมีชื่อ/ที่อยู่/เลขประจำตัวผู้เสียภาษีของผู้ซื้อด้วย */
+
+/** อัตราภาษี — ฐานเก็บได้ทั้งแบบ 7 และ 0.07 ไม่ได้เก็บไว้เลยก็ใช้ 7% ตามอัตรามาตรฐาน */
+const vatRateOf = (b) => {
+  const r = num(b?.vatRate);
+  // ปัดทศนิยมทิ้ง ไม่งั้นอัตราที่เก็บเป็น 0.07 จะขึ้นบนใบกำกับภาษีว่า 7.000000000000001%
+  if (r > 1) return Math.round(r * 100) / 100;
+  if (r > 0) return Math.round(r * 10000) / 100;
+  return 7;
+};
+
+/** ภาษีของบิล — ไม่มีค่าที่ฐานก็ถอดออกจากยอดรวม (ราคาขายในร้านอาหารรวม VAT ไว้แล้ว) */
+const vatOf = (b) => {
+  const v = num(b?.vat);
+  if (v) return v;
+  const total = billAmount(b);
+  const rate = vatRateOf(b);
+  return total - (total * 100) / (100 + rate);
+};
+const beforeVatOf = (b) => billAmount(b) - vatOf(b);
+
+const TH_DIGIT = ['ศูนย์', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า'];
+const TH_PLACE = ['', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน'];
+
+/** อ่านจำนวนเต็มเป็นภาษาไทย (ใบกำกับภาษีต้องมีจำนวนเงินเป็นตัวอักษร) */
+function thaiReadInt(n) {
+  if (n === 0) return 'ศูนย์';
+  let out = '';
+  if (n >= 1e6) {
+    out += `${thaiReadInt(Math.floor(n / 1e6))}ล้าน`;
+    n %= 1e6;
+    if (n === 0) return out;
+  }
+  const s = String(n);
+  for (let i = 0; i < s.length; i++) {
+    const d = Number(s[i]);
+    const pos = s.length - i - 1;
+    if (d === 0) continue;
+    if (pos === 0 && d === 1 && s.length > 1) out += 'เอ็ด';
+    else if (pos === 1 && d === 1) out += 'สิบ';
+    else if (pos === 1 && d === 2) out += 'ยี่สิบ';
+    else out += TH_DIGIT[d] + TH_PLACE[pos];
+  }
+  return out;
+}
+
+/** 1234.50 -> 'หนึ่งพันสองร้อยสามสิบสี่บาทห้าสิบสตางค์' */
+function bahtText(v) {
+  const x = Math.round(Math.abs(num(v)) * 100);
+  const baht = Math.floor(x / 100);
+  const satang = x % 100;
+  const head = `${thaiReadInt(baht)}บาท`;
+  return (num(v) < 0 ? 'ลบ' : '') + head + (satang ? `${thaiReadInt(satang)}สตางค์` : 'ถ้วน');
+}
+
+/** วันที่แบบไทยบนเอกสาร: '2026-09-14 13:05:00' -> '14/09/2569 13:05' */
+const docDate = (v, withTime = true) => {
+  const m = str(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return str(v);
+  const d = `${m[3]}/${m[2]}/${Number(m[1]) + 543}`;
+  return withTime && timeOf(v) ? `${d} ${timeOf(v)}` : d;
+};
+
+/* ข้อมูลร้านที่ต้องขึ้นหัวใบกำกับภาษี — ฐาน Aoringo เก็บไว้ที่ตาราง Setting ซึ่งยังไม่ได้จับคู่
+   จึงให้กรอกเองครั้งเดียวแล้วจำไว้ในเครื่อง (ไม่ได้ส่งขึ้นฐาน) แก้ได้ตลอดจากปุ่ม "ข้อมูลร้าน" */
+const SHOP_KEY = 'fc_shop_info_v1';
+const EMPTY_SHOP = { name: '', branch: 'สำนักงานใหญ่', taxId: '', address: '', phone: '' };
+
+/** หัวกระดาษ: ชื่อร้าน/ที่อยู่/เลขผู้เสียภาษี — ยังไม่ได้กรอกจะขึ้นเตือนให้ไปกรอกก่อนพิมพ์ */
+function ShopHead({ shop, title }) {
+  return (
+    <div className="text-center border-b border-slate-300 pb-2 mb-2">
+      <div className="text-[13px] font-bold text-slate-900">{shop.name || '— ยังไม่ได้ตั้งชื่อร้าน —'}</div>
+      {shop.address && <div className="text-[10px] text-slate-600 whitespace-pre-line">{shop.address}</div>}
+      <div className="text-[10px] text-slate-600">
+        {shop.taxId && <>เลขประจำตัวผู้เสียภาษี {shop.taxId}</>}
+        {shop.branch && <> · {shop.branch}</>}
+        {shop.phone && <> · โทร. {shop.phone}</>}
+      </div>
+      <div className="mt-1 text-[11px] font-bold text-slate-900">{title}</div>
+    </div>
+  );
+}
+
+/** ใบกำกับภาษีอย่างย่อ 1 ใบ (ทรงสลิปจากเครื่องพิมพ์ใบเสร็จ) */
+function AbbSlip({ shop, bill, lines }) {
+  const vat = vatOf(bill);
+  const paid = CHANNELS.filter((c) => num(bill[c.key]) > 0);
+  return (
+    <div className="fc-slip border border-slate-300 rounded-lg p-3 bg-white text-[11px] leading-snug">
+      <ShopHead shop={shop} title="ใบกำกับภาษีอย่างย่อ (ABB)" />
+      <div className="flex justify-between text-[10px] text-slate-600">
+        <span>เลขที่ {str(bill.checkId) || '-'}</span>
+        <span>{docDate(bill.date)}</span>
+      </div>
+      <div className="flex justify-between text-[10px] text-slate-600">
+        <span>
+          {str(bill.tableId) ? `โต๊ะ ${str(bill.tableId)}` : ''}
+          {bill.cover !== null && num(bill.cover) > 0 ? ` · ${int(bill.cover)} คน` : ''}
+        </span>
+        <span>{str(bill.cashier) || str(bill.orderType)}</span>
+      </div>
+
+      <table className="w-full mt-2 border-t border-dashed border-slate-300">
+        <tbody>
+          {lines.length ? lines.map((i, idx) => (
+            <tr key={idx} className="align-top">
+              <td className="py-0.5 pr-1">
+                {str(i.itemName) || '-'}
+                <span className="text-slate-400"> x{qtyFmt(i.quantity)}</span>
+              </td>
+              <td className="py-0.5 text-right font-mono whitespace-nowrap">{money(lineAmount(i))}</td>
+            </tr>
+          )) : (
+            <tr><td className="py-1 text-slate-400" colSpan={2}>— ไม่พบรายการสินค้าของบิลนี้ —</td></tr>
+          )}
+        </tbody>
+      </table>
+
+      <div className="mt-1 pt-1 border-t border-dashed border-slate-300 space-y-0.5">
+        <div className="flex justify-between text-slate-600">
+          <span>มูลค่าก่อนภาษี</span><span className="font-mono">{money(beforeVatOf(bill))}</span>
+        </div>
+        {num(bill.discount) > 0 && (
+          <div className="flex justify-between text-slate-600">
+            <span>ส่วนลด</span><span className="font-mono">-{money(bill.discount)}</span>
+          </div>
+        )}
+        {num(bill.serviceChg) > 0 && (
+          <div className="flex justify-between text-slate-600">
+            <span>ค่าบริการ</span><span className="font-mono">{money(bill.serviceChg)}</span>
+          </div>
+        )}
+        <div className="flex justify-between text-slate-600">
+          <span>ภาษีมูลค่าเพิ่ม {vatRateOf(bill)}%</span><span className="font-mono">{money(vat)}</span>
+        </div>
+        <div className="flex justify-between font-bold text-slate-900 text-[12px] border-t border-slate-300 pt-1">
+          <span>รวมทั้งสิ้น</span><span className="font-mono">{money(billAmount(bill))}</span>
+        </div>
+        <div className="text-[10px] text-slate-500">
+          {paid.length ? paid.map((c) => `${c.label} ${money(bill[c.key])}`).join(' · ') : str(bill.paidType)}
+          {num(bill.received) > 0 && ` · รับเงิน ${money(bill.received)} · ทอน ${money(bill.changeAmount)}`}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** ใบกำกับภาษีเต็มรูปแบบ 1 ใบ (A4 — มีข้อมูลผู้ซื้อและจำนวนเงินเป็นตัวอักษร) */
+function FullTaxDoc({ shop, buyer, bill, lines }) {
+  const vat = vatOf(bill);
+  const before = beforeVatOf(bill);
+  return (
+    <div className="fc-slip bg-white text-[11px] text-slate-800 p-5 border border-slate-300 rounded-lg">
+      <div className="flex justify-between items-start gap-4 border-b-2 border-slate-800 pb-3">
+        <div className="min-w-0">
+          <div className="text-base font-bold text-slate-900">{shop.name || '— ยังไม่ได้ตั้งชื่อร้าน —'}</div>
+          {shop.address && <div className="text-[10px] text-slate-600 whitespace-pre-line mt-0.5">{shop.address}</div>}
+          <div className="text-[10px] text-slate-600 mt-0.5">
+            {shop.taxId && <>เลขประจำตัวผู้เสียภาษี {shop.taxId}</>}
+            {shop.branch && <> · {shop.branch}</>}
+            {shop.phone && <> · โทร. {shop.phone}</>}
+          </div>
+        </div>
+        <div className="text-right flex-shrink-0">
+          <div className="text-sm font-bold text-slate-900">ใบกำกับภาษี / ใบเสร็จรับเงิน</div>
+          <div className="text-[10px] text-slate-500">TAX INVOICE / RECEIPT</div>
+          <div className="text-[10px] text-slate-700 mt-1">เลขที่ {str(bill.checkId) || '-'}</div>
+          <div className="text-[10px] text-slate-700">วันที่ {docDate(bill.date, false)}</div>
+        </div>
+      </div>
+
+      <div className="border border-slate-300 rounded mt-3 p-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]">
+        <div className="col-span-2 font-bold text-slate-700">ข้อมูลผู้ซื้อ</div>
+        <div><span className="text-slate-500">ชื่อ: </span>{buyer.name || '—'}</div>
+        <div><span className="text-slate-500">เลขประจำตัวผู้เสียภาษี: </span>{buyer.taxId || '—'}</div>
+        <div className="col-span-2"><span className="text-slate-500">ที่อยู่: </span>{buyer.address || '—'}</div>
+        <div><span className="text-slate-500">สาขา: </span>{buyer.branch || 'สำนักงานใหญ่'}</div>
+        <div>
+          <span className="text-slate-500">โต๊ะ/ประเภท: </span>
+          {str(bill.tableId) || '-'}{str(bill.orderType) ? ` · ${str(bill.orderType)}` : ''}
+        </div>
+      </div>
+
+      <table className="w-full mt-3 border border-slate-300">
+        <thead>
+          <tr className="bg-slate-100 text-slate-700">
+            <th className="border border-slate-300 px-2 py-1 text-center w-10">ลำดับ</th>
+            <th className="border border-slate-300 px-2 py-1 text-left">รายการ</th>
+            <th className="border border-slate-300 px-2 py-1 text-right w-16">จำนวน</th>
+            <th className="border border-slate-300 px-2 py-1 text-right w-24">ราคา/หน่วย</th>
+            <th className="border border-slate-300 px-2 py-1 text-right w-28">จำนวนเงิน</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.length ? lines.map((i, idx) => (
+            <tr key={idx}>
+              <td className="border border-slate-300 px-2 py-1 text-center">{idx + 1}</td>
+              <td className="border border-slate-300 px-2 py-1">
+                {str(i.itemName) || '-'}
+                {str(i.itemCode) && <span className="text-slate-400"> ({str(i.itemCode)})</span>}
+              </td>
+              <td className="border border-slate-300 px-2 py-1 text-right font-mono">{qtyFmt(i.quantity)}</td>
+              <td className="border border-slate-300 px-2 py-1 text-right font-mono">{money(i.unitPrice)}</td>
+              <td className="border border-slate-300 px-2 py-1 text-right font-mono">{money(lineAmount(i))}</td>
+            </tr>
+          )) : (
+            <tr><td className="border border-slate-300 px-2 py-4 text-center text-slate-400" colSpan={5}>
+              ไม่พบรายการสินค้าของบิลนี้ในช่วงวันที่ที่โหลดไว้
+            </td></tr>
+          )}
+        </tbody>
+      </table>
+
+      <div className="flex justify-between items-start gap-4 mt-2">
+        <div className="flex-1 border border-slate-300 rounded p-2 text-[10px]">
+          <div className="text-slate-500">จำนวนเงินรวมทั้งสิ้น (ตัวอักษร)</div>
+          <div className="font-bold text-slate-900 mt-0.5">({bahtText(billAmount(bill))})</div>
+          <div className="text-slate-500 mt-2">ชำระโดย</div>
+          <div className="text-slate-700">
+            {CHANNELS.filter((c) => num(bill[c.key]) > 0).map((c) => `${c.label} ${money(bill[c.key])}`).join(' · ')
+              || str(bill.paidType) || '-'}
+          </div>
+        </div>
+        <table className="w-64 flex-shrink-0 text-[11px]">
+          <tbody>
+            <tr><td className="py-0.5 text-slate-600">มูลค่าสินค้า/บริการ</td>
+              <td className="py-0.5 text-right font-mono">{money(before + num(bill.discount))}</td></tr>
+            {num(bill.discount) > 0 && (
+              <tr><td className="py-0.5 text-slate-600">ส่วนลด</td>
+                <td className="py-0.5 text-right font-mono">-{money(bill.discount)}</td></tr>
+            )}
+            {num(bill.serviceChg) > 0 && (
+              <tr><td className="py-0.5 text-slate-600">ค่าบริการ</td>
+                <td className="py-0.5 text-right font-mono">{money(bill.serviceChg)}</td></tr>
+            )}
+            <tr><td className="py-0.5 text-slate-600">มูลค่าที่ต้องเสียภาษี</td>
+              <td className="py-0.5 text-right font-mono">{money(before)}</td></tr>
+            <tr><td className="py-0.5 text-slate-600">ภาษีมูลค่าเพิ่ม {vatRateOf(bill)}%</td>
+              <td className="py-0.5 text-right font-mono">{money(vat)}</td></tr>
+            <tr className="border-t-2 border-slate-800 font-bold text-slate-900">
+              <td className="py-1">จำนวนเงินรวมทั้งสิ้น</td>
+              <td className="py-1 text-right font-mono">{money(billAmount(bill))}</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid grid-cols-2 gap-8 mt-8 text-[10px] text-center text-slate-500">
+        <div><div className="border-t border-slate-400 pt-1 mx-4">ผู้รับเงิน</div></div>
+        <div><div className="border-t border-slate-400 pt-1 mx-4">ผู้รับสินค้า/บริการ</div></div>
+      </div>
+    </div>
+  );
+}
+
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const firstOfMonthISO = () => {
   const d = new Date();
@@ -223,6 +481,38 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const [reportSort, setReportSort] = useState({ col: 'date', asc: true });   // เรียงตารางรายงานยอดขาย
   const [billModal, setBillModal] = useState({ open: false, bill: null, lines: [] });  // ดูบิล (รายการในบิลนั้น)
   const [activityModal, setActivityModal] = useState({ open: false, bill: null });     // ประวัติออเดอร์
+  const [abbModal, setAbbModal] = useState({ open: false, one: null });               // ใบกำกับภาษีอย่างย่อ
+  const [taxModal, setTaxModal] = useState({ open: false, bill: null });              // ใบกำกับภาษีเต็มรูปแบบ
+  const [shop, setShop] = useState(EMPTY_SHOP);          // ข้อมูลร้านบนหัวเอกสาร (จำไว้ในเครื่อง)
+  const [shopEdit, setShopEdit] = useState(false);
+  const [buyer, setBuyer] = useState({ name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '' });
+
+  // ข้อมูลร้านจำไว้ในเครื่องที่ใช้งาน ไม่ได้ส่งขึ้นฐาน — กรอกครั้งเดียวใช้ได้ทุกใบ
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SHOP_KEY);
+      if (raw) setShop({ ...EMPTY_SHOP, ...JSON.parse(raw) });
+    } catch { /* เบราว์เซอร์ปิด localStorage ไว้ก็แค่ต้องกรอกใหม่ทุกครั้ง */ }
+  }, []);
+
+  const saveShop = (next) => {
+    setShop(next);
+    try { window.localStorage.setItem(SHOP_KEY, JSON.stringify(next)); } catch { /* ไม่ซีเรียส */ }
+  };
+
+  /** สั่งพิมพ์เฉพาะกล่องเอกสาร (ดู .fc-print-mode ใน styles/globals.css) */
+  const printDoc = () => {
+    const body = document.body;
+    body.classList.add('fc-print-mode');
+    const done = () => {
+      body.classList.remove('fc-print-mode');
+      window.removeEventListener('afterprint', done);
+    };
+    window.addEventListener('afterprint', done);
+    window.print();
+    // เบราว์เซอร์บางตัวไม่ยิง afterprint — กันคลาสค้างไว้จนหน้าจอเพี้ยน
+    setTimeout(done, 1000);
+  };
 
   const load = useCallback(async () => {
     if (!startDate || !endDate) { setError('กรุณาเลือกวันที่เริ่มต้นและสิ้นสุด'); return; }
@@ -800,6 +1090,17 @@ export default function Franchise({ view = 'fcDashboard' }) {
     [orderHistory]                            // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  /** ใบกำกับภาษีอย่างย่อ: ทุกบิลในช่วงที่โหลดไว้ เรียงตามเวลาจากเก่าไปใหม่
+   *  (สั่งจากปุ่มในหน้าดูบิลจะได้ใบเดียว) · บิลที่ยกเลิกไม่ออกใบให้อยู่แล้วเพราะถูกกรองไปตั้งแต่ต้น */
+  const ABB_LIMIT = 500;
+  const abbBills = useMemo(() => {
+    if (!abbModal.open) return [];
+    if (abbModal.one) return [abbModal.one];
+    return [...bills].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  }, [abbModal, bills]);
+
+  const linesOf = (b) => itemsByBill.get(`${dayOf(b.date)}|${str(b.checkId)}`) || [];
+
   const reportRows = useMemo(() => {
     const { col, asc } = reportSort;
     const val = (b) => (col === 'billTotal' ? billAmount(b)
@@ -839,7 +1140,25 @@ export default function Franchise({ view = 'fcDashboard' }) {
       {sectionHead(
         <FileText size={16} className="text-emerald-600" />,
         'รายงานยอดขาย',
-        <>{searchBox('ค้นหาเลขที่บิล / โต๊ะ / ผู้ทำรายการ')}{exportBtn(reportExport, !reportRows.length)}</>
+        <>
+          <button
+            onClick={() => setAbbModal({ open: true, one: null })}
+            disabled={!bills.length}
+            className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 transition-colors"
+          ><ScrollText size={14} /> ใบกำกับภาษีอย่างย่อ (ABB)</button>
+          <button
+            onClick={() => setTaxModal({ open: true, bill: null })}
+            disabled={!bills.length}
+            className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg border border-emerald-300 text-emerald-700 bg-white hover:bg-emerald-50 disabled:opacity-40 transition-colors"
+          ><FileText size={14} /> ใบกำกับภาษีเต็มรูปแบบ</button>
+          <button
+            onClick={() => { setShopEdit(true); setAbbModal({ open: true, one: null }); }}
+            title="ตั้งชื่อร้าน/ที่อยู่/เลขประจำตัวผู้เสียภาษี ที่จะขึ้นหัวใบกำกับภาษี"
+            className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
+          ><Settings2 size={14} /> ข้อมูลร้าน</button>
+          {searchBox('ค้นหาเลขที่บิล / โต๊ะ / ผู้ทำรายการ')}
+          {exportBtn(reportExport, !reportRows.length)}
+        </>
       )}
       {reportRows.length ? (
         <>
@@ -1421,6 +1740,14 @@ export default function Franchise({ view = 'fcDashboard' }) {
               </div>
               <div className="flex items-center gap-1">
                 <button
+                  onClick={() => setAbbModal({ open: true, one: billModal.bill })}
+                  className="flex items-center gap-1 px-2 py-1 border border-emerald-200 hover:bg-emerald-50 text-emerald-700 font-semibold rounded-lg text-[10px]"
+                ><ScrollText size={12} /><span>ABB</span></button>
+                <button
+                  onClick={() => setTaxModal({ open: true, bill: billModal.bill })}
+                  className="flex items-center gap-1 px-2 py-1 border border-emerald-200 hover:bg-emerald-50 text-emerald-700 font-semibold rounded-lg text-[10px]"
+                ><FileText size={12} /><span>เต็มรูป</span></button>
+                <button
                   onClick={() => openActivity(billModal.bill)}
                   className="flex items-center gap-1 px-2 py-1 border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold rounded-lg text-[10px]"
                 ><History size={12} /><span>ประวัติออเดอร์</span></button>
@@ -1502,6 +1829,223 @@ export default function Franchise({ view = 'fcDashboard' }) {
                 })()}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ใบกำกับภาษีอย่างย่อ (ABB) — ทุกบิลเรียงตามเวลา ── */}
+      {abbModal.open && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/50 p-4 overflow-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl my-4 flex flex-col overflow-hidden">
+            <div className="fc-no-print flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                  <ScrollText size={16} className="text-emerald-600" /> ใบกำกับภาษีอย่างย่อ (ABB)
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {abbModal.one
+                    ? `บิลเลขที่ ${str(abbModal.one.checkId)}`
+                    : `${int(abbBills.length)} ใบ · เรียงตามเวลา · ช่วง ${data?.range?.start} ถึง ${data?.range?.end}`}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShopEdit((v) => !v)}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                ><Settings2 size={14} /> ข้อมูลร้าน</button>
+                <button
+                  onClick={printDoc}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                ><Printer size={14} /> พิมพ์</button>
+                <button
+                  onClick={() => setAbbModal({ open: false, one: null })}
+                  className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                ><X size={18} /></button>
+              </div>
+            </div>
+
+            {shopEdit && (
+              <div className="fc-no-print px-5 py-4 bg-slate-50 border-b border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <p className="sm:col-span-2 text-[11px] text-slate-500">
+                  ข้อมูลนี้ขึ้นหัวใบกำกับภาษีทุกใบ · กรอกครั้งเดียว เครื่องนี้จำไว้ให้ (ไม่ได้บันทึกลงฐานข้อมูล)
+                </p>
+                {[
+                  ['name', 'ชื่อร้าน / ชื่อนิติบุคคล'],
+                  ['taxId', 'เลขประจำตัวผู้เสียภาษี'],
+                  ['branch', 'สาขา (เช่น สำนักงานใหญ่)'],
+                  ['phone', 'โทรศัพท์'],
+                ].map(([k, label]) => (
+                  <label key={k} className="text-[11px] text-slate-500">
+                    {label}
+                    <input
+                      value={shop[k]}
+                      onChange={(e) => saveShop({ ...shop, [k]: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                    />
+                  </label>
+                ))}
+                <label className="sm:col-span-2 text-[11px] text-slate-500">
+                  ที่อยู่
+                  <textarea
+                    rows={2}
+                    value={shop.address}
+                    onChange={(e) => saveShop({ ...shop, address: e.target.value })}
+                    className="mt-1 w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                  />
+                </label>
+              </div>
+            )}
+
+            {!abbModal.one && abbBills.length > ABB_LIMIT && (
+              <div className="fc-no-print px-5 py-3 bg-amber-50 border-b border-amber-200 text-[11px] text-amber-800">
+                ช่วงวันที่ที่เลือกมี {int(abbBills.length)} บิล — แสดงและพิมพ์ให้ {int(ABB_LIMIT)} ใบแรกเท่านั้น
+                (มากกว่านี้เบราว์เซอร์จะอืด) ถ้าต้องการครบให้แคบช่วงวันที่ลงแล้วพิมพ์ทีละช่วง
+              </div>
+            )}
+
+            <div className="fc-print-root p-5 bg-slate-100 max-h-[75vh] overflow-auto">
+              {abbBills.length ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {abbBills.slice(0, ABB_LIMIT).map((b, i) => (
+                    <AbbSlip key={`${str(b.checkId)}-${i}`} shop={shop} bill={b} lines={linesOf(b)} />
+                  ))}
+                </div>
+              ) : (
+                <div className="py-10 text-center text-xs text-slate-400">ไม่มีบิลในช่วงวันที่ที่เลือก</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ใบกำกับภาษีเต็มรูปแบบ — เลือกบิล แล้วกรอกข้อมูลผู้ซื้อ ── */}
+      {taxModal.open && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/50 p-4 overflow-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl my-4 flex flex-col overflow-hidden">
+            <div className="fc-no-print flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">
+                  <FileText size={16} className="text-emerald-600" /> ใบกำกับภาษีเต็มรูปแบบ
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {taxModal.bill
+                    ? `บิลเลขที่ ${str(taxModal.bill.checkId)} · ${docDate(taxModal.bill.date)}`
+                    : 'เลือกบิลที่ลูกค้าขอใบกำกับภาษีเต็มรูปแบบ'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {taxModal.bill && (
+                  <>
+                    <button
+                      onClick={() => setTaxModal({ open: true, bill: null })}
+                      className="px-3 py-2 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                    >เลือกบิลอื่น</button>
+                    <button
+                      onClick={printDoc}
+                      className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                    ><Printer size={14} /> พิมพ์</button>
+                  </>
+                )}
+                <button
+                  onClick={() => setTaxModal({ open: false, bill: null })}
+                  className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                ><X size={18} /></button>
+              </div>
+            </div>
+
+            {!taxModal.bill ? (
+              <div className="max-h-[70vh] overflow-auto">
+                <table className="w-full text-[11px] whitespace-nowrap">
+                  <thead className="bg-slate-50 text-slate-500 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">เลือก</th>
+                      <th className="px-3 py-2 text-left font-semibold">วันที่/เวลา</th>
+                      <th className="px-3 py-2 text-left font-semibold">เลขที่บิล</th>
+                      <th className="px-3 py-2 text-left font-semibold">โต๊ะ</th>
+                      <th className="px-3 py-2 text-left font-semibold">ชำระโดย</th>
+                      <th className="px-3 py-2 text-right font-semibold">ยอดบิล</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {reportRows.map((b, i) => (
+                      <tr key={`${str(b.checkId)}-${i}`} className="hover:bg-emerald-50/40">
+                        <td className="px-3 py-2">
+                          <button
+                            onClick={() => setTaxModal({ open: true, bill: b })}
+                            className="px-2 py-1 border border-emerald-200 hover:bg-emerald-50 text-emerald-700 font-semibold rounded-lg text-[10px]"
+                          >ออกใบนี้</button>
+                        </td>
+                        <td className="px-3 py-2 text-slate-600">{dayOf(b.date)} <span className="text-slate-400">{timeOf(b.date)}</span></td>
+                        <td className="px-3 py-2 font-mono font-semibold text-slate-700">{str(b.checkId) || '-'}</td>
+                        <td className="px-3 py-2 text-slate-600">{str(b.tableId) || '-'}</td>
+                        <td className="px-3 py-2 text-slate-600">{str(b.paidType) || '-'}</td>
+                        <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700">฿{money(billAmount(b))}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <>
+                <div className="fc-no-print px-5 py-4 bg-slate-50 border-b border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <p className="sm:col-span-2 text-[11px] text-slate-500">
+                    กรอกข้อมูลผู้ซื้อตามที่ลูกค้าแจ้ง (ต้องมีบนใบกำกับภาษีเต็มรูปแบบ) แล้วกดพิมพ์
+                  </p>
+                  {[
+                    ['name', 'ชื่อผู้ซื้อ / นิติบุคคล'],
+                    ['taxId', 'เลขประจำตัวผู้เสียภาษีผู้ซื้อ'],
+                    ['branch', 'สาขา (เช่น สำนักงานใหญ่)'],
+                  ].map(([k, label]) => (
+                    <label key={k} className="text-[11px] text-slate-500">
+                      {label}
+                      <input
+                        value={buyer[k]}
+                        onChange={(e) => setBuyer({ ...buyer, [k]: e.target.value })}
+                        className="mt-1 w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                      />
+                    </label>
+                  ))}
+                  <label className="text-[11px] text-slate-500">
+                    ที่อยู่ผู้ซื้อ
+                    <input
+                      value={buyer.address}
+                      onChange={(e) => setBuyer({ ...buyer, address: e.target.value })}
+                      className="mt-1 w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                    />
+                  </label>
+                  <button
+                    onClick={() => setShopEdit((v) => !v)}
+                    className="sm:col-span-2 justify-self-start flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-white"
+                  ><Settings2 size={14} /> แก้ข้อมูลร้าน (หัวเอกสาร)</button>
+                  {shopEdit && (
+                    <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3 border-t border-slate-200 pt-3">
+                      {[['name', 'ชื่อร้าน'], ['taxId', 'เลขประจำตัวผู้เสียภาษี'], ['branch', 'สาขา'], ['phone', 'โทรศัพท์']].map(([k, label]) => (
+                        <label key={k} className="text-[11px] text-slate-500">
+                          {label}
+                          <input
+                            value={shop[k]}
+                            onChange={(e) => saveShop({ ...shop, [k]: e.target.value })}
+                            className="mt-1 w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                          />
+                        </label>
+                      ))}
+                      <label className="sm:col-span-2 text-[11px] text-slate-500">
+                        ที่อยู่ร้าน
+                        <textarea
+                          rows={2}
+                          value={shop.address}
+                          onChange={(e) => saveShop({ ...shop, address: e.target.value })}
+                          className="mt-1 w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
+                <div className="fc-print-root p-5 bg-slate-100 max-h-[70vh] overflow-auto">
+                  <FullTaxDoc shop={shop} buyer={buyer} bill={taxModal.bill} lines={linesOf(taxModal.bill)} />
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

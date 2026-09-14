@@ -179,3 +179,52 @@ tr.row-void td:nth-child(5) {
     display: table-header-group;   /* หัวตารางซ้ำทุกหน้า */
   }
 }
+
+/* ===== พิมพ์ใบกำกับภาษี (เมนูเฟรนไชส์ → รายงานยอดขาย) =====
+   ใบกำกับภาษีต้องเป็น A4 แนวตั้ง คนละแนวกับรายงานเงินเดือนข้างบนที่เป็นแนวนอน
+   @page ตั้งซ้อนกันแบบมีเงื่อนไขไม่ได้ จึงใช้ "named page" แล้วผูกกับกล่องที่จะพิมพ์เอา
+
+   เอกสารอยู่ใน modal ซึ่งซ้อนอยู่ในโครงแอปที่ล็อกความสูงไว้ — สั่งพิมพ์ตรง ๆ จะได้กระดาษ
+   แผ่นเดียวเท่าที่เห็นบนจอ จึงซ่อนทุกอย่างด้วย visibility แล้วเปิดเฉพาะกล่องเอกสาร
+   (ใช้ visibility ไม่ใช่ display เพราะ display:none ที่ตัวแม่จะพาลูกหายไปด้วย) */
+@page tax {
+  size: A4 portrait;
+  margin: 8mm;
+}
+
+@media print {
+  body.fc-print-mode * {
+    visibility: hidden !important;
+  }
+  body.fc-print-mode .fc-print-root,
+  body.fc-print-mode .fc-print-root * {
+    visibility: visible !important;
+  }
+  body.fc-print-mode .fc-print-root {
+    page: tax;
+    position: absolute !important;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+  }
+  /* ปุ่ม/ช่องกรอกในกล่องเอกสาร ไม่ต้องติดไปบนกระดาษ */
+  body.fc-print-mode .fc-no-print {
+    display: none !important;
+  }
+  /* ใบกำกับภาษีหนึ่งใบต้องไม่ถูกตัดคาบหน้ากระดาษ */
+  body.fc-print-mode .fc-slip {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  body.fc-print-mode .fc-page-break {
+    break-after: page;
+    page-break-after: always;
+  }
+}
