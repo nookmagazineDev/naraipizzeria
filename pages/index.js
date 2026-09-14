@@ -602,7 +602,7 @@ const getItemColFilterValue = (row, key) => {
 /* แท็บที่ใช้แผงกรอง "กำหนดช่วงวันที่และสาขา" (ช่วงวันที่ + outlet ของฝั่งยอดขาย) ร่วมกัน
    เขียนเป็นรายชื่อ "หน้าที่ใช้" แทนรายชื่อ "หน้าที่ไม่ใช้" เพราะตอนเพิ่มเมนูใหม่มักลืมไปต่อท้าย
    แล้วแผงกรองของยอดขายจะไปโผล่ในหน้าที่ไม่เกี่ยวข้อง (เคยหลุดไปแล้วที่หน้ารายงานเงินเดือน) */
-const SALES_TABS = ['dashboard', 'sales', 'dailySale', 'details', 'itemSearch'];
+const SALES_TABS = ['dashboard', 'sales', 'dailySale', 'details', 'itemSearch', 'taxInvoice'];
 
 /* เมนู "เฟรนไชส์" (ข้อมูลจากฐาน Aoringo — ดู docs/franchise-aoringo.md)
    ห้าหน้าย่อยใช้คอมโพเนนต์ตัวเดียวกัน เปลี่ยนแค่ prop view เพื่อให้ข้อมูลที่โหลดไว้
@@ -687,6 +687,9 @@ export default function App() {
 
   // Datasets
   const [salesRaw, setSalesRaw] = useState([]);
+  // บิลครบทุกแถว (ยังไม่ตัดโต๊ะ 600 / บิลยอดเหมา) — หน้าใบกำกับภาษีใช้ชุดนี้
+  // เพราะใบที่ออกไปแล้วคือเอกสารที่ลูกค้าถืออยู่จริง ต้องเห็นครบแม้ยอดนั้นจะไม่ถูกนับเป็นยอดขาย
+  const [salesAllRaw, setSalesAllRaw] = useState([]);
   const [detailRaw, setDetailRaw] = useState([]);        // กรองแล้ว (ใช้คำนวณ)
   const [detailAllRaw, setDetailAllRaw] = useState([]);  // ครบทุกแถว (ใช้แสดงหน้ารายละเอียด)
   const [costMap, setCostMap] = useState({});
@@ -947,6 +950,7 @@ export default function App() {
         isExcludedTable(r.tableID ?? r.TableID) || isExcludedItem(r.itemCode));
 
       setSalesRaw(cleanSales);
+      setSalesAllRaw(allSales);
       setDetailRaw(cleanDetails);
       setDetailAllRaw(allDetails);
       setExcludedRaw(excludedDetails);
@@ -2587,9 +2591,6 @@ export default function App() {
             {/* HR: รายงานเงินเดือน — สรุปวันทำงาน/วันลา/OT รายคน ตามสาขาและช่วงวันที่ แล้วสั่งพิมพ์ */}
             {activeTab === 'salaryReport' && <SalaryReport />}
 
-            {/* ACC: ใบกำกับภาษีเต็มรูป — บิลที่มีเลขในคอลัมน์ FullTaxInvNo เรียงใบล่าสุดขึ้นก่อน */}
-            {activeTab === 'taxInvoice' && <TaxInvoice />}
-
             {/* ACC: ค่าใช้จ่ายอื่นๆ (กรอก+บันทึกลง Google Sheet) */}
             {activeTab === 'otherExpense' && <OtherExpense />}
 
@@ -2692,6 +2693,9 @@ export default function App() {
                     )}
                   </button>
 
+                  {/* ปุ่มส่งออกกลางของแผงนี้ส่งออก "ตารางของหน้าที่เปิดอยู่" — หน้าใบกำกับภาษีมีปุ่มส่งออก
+                      ของตัวเอง (คนละชุดคอลัมน์) ถ้าปล่อยปุ่มนี้ไว้จะได้ไฟล์รายละเอียดรายการมาแทน */}
+                  {activeTab !== 'taxInvoice' && (
                   <button 
                     disabled={!loaded || (
                       activeTab === 'sales' ? filteredSales.length === 0 :
@@ -2715,6 +2719,7 @@ export default function App() {
                     <Download size={16} />
                     <span>Export Excel</span>
                   </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -2750,6 +2755,19 @@ export default function App() {
               </div>
             ) : (
               <>
+                {/* ACC: ใบกำกับภาษีเต็มรูป — คัดจากบิลชุดเดียวกับแดชบอร์ด (salesAllRaw) ที่โหลดไว้แล้ว
+                    ไม่ยิง /api/sales ซ้ำของตัวเอง กดค้นหาทีเดียวใช้ได้ทุกหน้าในกลุ่มนี้ */}
+                {activeTab === 'taxInvoice' && (
+                  <TaxInvoice
+                    bills={salesAllRaw}
+                    loaded={loaded}
+                    startDate={startDate}
+                    endDate={endDate}
+                    selectedOutlet={selectedOutlet}
+                    onOpenDetail={openDetail}
+                  />
+                )}
+
                 {/* TAB 1: DASHBOARD VIEW */}
                 {activeTab === 'dashboard' && (
               <>
