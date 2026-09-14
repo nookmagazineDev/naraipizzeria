@@ -50,6 +50,7 @@ import Attendance from '../components/Attendance';
 import BranchList from '../components/BranchList';
 import SalaryReport from '../components/SalaryReport';
 import OtherExpense from '../components/OtherExpense';
+import TaxInvoice from '../components/TaxInvoice';
 import QcRdMenu from '../components/QcRdMenu';
 import QcRdItems from '../components/QcRdItems';
 import AiNarai from '../components/AiNarai';
@@ -60,6 +61,9 @@ import LoginPage from '../components/LoginPage';
 import UserList from '../components/UserList';
 import ChangePasswordModal from '../components/ChangePasswordModal';
 import { MENU_GROUPS, MENU_LABELS, ROLE_ADMIN, firstAllowedMenu, hasPerm } from '../lib/permissions';
+import {
+  OPEN_DATE_BUFFER_DAYS, addDaysStr, dateFromRow, getChunks, normalizeArray, safeFetchJson,
+} from '../lib/salesFetch';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -281,46 +285,6 @@ const outletLabel = id => {
   const name = OUTLETS[parseInt(id)];
   return name ? `${id} · ${name}` : (id != null ? String(id) : '-');
 };
-
-// ยึด "วันที่เปิดบิล" (startTime) เป็นหลักทุกเมนู; fallback เป็นวันปิด/ชำระ (date) ถ้าไม่มี
-const dateFromRow = row => {
-  const t = row['startTime'];
-  if (t) return String(t).slice(0, 10);
-  const d = row['Date'] || row['date'];
-  return d ? String(d).slice(0, 10) : '-';
-};
-
-// ดึงข้อมูลเผื่อท้ายช่วงไว้กี่วัน (รองรับบิลที่ "เปิด" ในช่วง แต่ "ปิด/ชำระ" ข้ามวัน)
-const OPEN_DATE_BUFFER_DAYS = 2;
-const addDaysStr = (str, days) => {
-  const d = new Date(str);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
-};
-
-const normalizeArray = json =>
-  Array.isArray(json) ? json
-  : Array.isArray(json.data) ? json.data
-  : Array.isArray(json.result) ? json.result
-  : Object.values(json).find(v => Array.isArray(v)) ?? [];
-
-// อ่าน response แบบปลอดภัย: ถ้าเซิร์ฟเวอร์ล้ม/หมดเวลาจะได้หน้า error เป็น HTML/ข้อความดิบ
-// (เช่น "An error occurred..." ของ Vercel) ไม่ใช่ JSON — เดิม res.json() ตรงนี้จะโยน
-// SyntaxError ดิบที่อ่านไม่รู้เรื่อง ("Unexpected token 'A'...") ฟังก์ชันนี้แปลงเป็น
-// ข้อความไทยที่บอกสาเหตุและช่วงวันที่ที่มีปัญหาแทน
-async function safeFetchJson(res, label, chunkLabel) {
-  const text = await res.text();
-  let json;
-  try { json = JSON.parse(text); }
-  catch {
-    const isTimeout = /FUNCTION_INVOCATION_TIMEOUT|An error occurred with your deployment/i.test(text);
-    throw new Error(isTimeout
-      ? `${label}: เซิร์ฟเวอร์ตอบช้าเกินไป (หมดเวลา) ช่วง ${chunkLabel} — ลองกด "ค้นหาข้อมูล" ใหม่อีกครั้ง หรือเลือกช่วงวันที่/สาขาให้แคบลง`
-      : `${label}: ได้รับข้อมูลที่ไม่ใช่ JSON (สถานะ ${res.status}) ช่วง ${chunkLabel}`);
-  }
-  if (!res.ok) throw new Error(json.error || `${label}: HTTP ${res.status} (ช่วง ${chunkLabel})`);
-  return json;
-}
 
 const PAGE_SIZE = 50;
 
@@ -659,7 +623,7 @@ const FRANCHISE_TITLES = {
    ที่นี่เก็บเฉพาะ "หน้าตา" ของแต่ละกลุ่ม/เมนู (ไอคอนและสี) ซึ่งเป็นเรื่องของหน้าเว็บล้วน ๆ */
 const MENU_ICONS = {
   dashboard: LayoutDashboard, sales: TrendingUp, dailySale: Receipt, details: Layers,
-  itemSearch: Search, otherExpense: DollarSign,
+  itemSearch: Search, taxInvoice: FileText, otherExpense: DollarSign,
   stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar,
   employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, branchList: Building2,
   qcrdMenu: FileText, qcrdItems: PackageSearch,
@@ -831,30 +795,6 @@ export default function App() {
   };
 
   const toggleGroup = (key) => setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
-
-  // Helper to chunk date range
-  function getChunks(startStr, endStr, chunkSizeDays = 5) {
-    const chunks = [];
-    let start = new Date(startStr);
-    const end = new Date(endStr);
-    
-    while (start <= end) {
-      let chunkEnd = new Date(start);
-      chunkEnd.setDate(chunkEnd.getDate() + chunkSizeDays - 1);
-      if (chunkEnd > end) {
-        chunkEnd = new Date(end);
-      }
-      
-      chunks.push({
-        start: start.toISOString().slice(0, 10),
-        end: chunkEnd.toISOString().slice(0, 10)
-      });
-      
-      start = new Date(chunkEnd);
-      start.setDate(start.getDate() + 1);
-    }
-    return chunks;
-  }
 
   // Fetch both APIs sequentially in chunks
   async function loadData() {
@@ -2545,6 +2485,7 @@ export default function App() {
                 {activeTab === 'attendance' && <Fingerprint size={20} className="text-amber-600" />}
                 {activeTab === 'branchList' && <Building2 size={20} className="text-amber-600" />}
                 {activeTab === 'salaryReport' && <Wallet size={20} className="text-amber-600" />}
+                {activeTab === 'taxInvoice' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdMenu' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdItems' && <ClipboardList size={20} className="text-amber-600" />}
@@ -2569,6 +2510,7 @@ export default function App() {
                   : activeTab === 'attendance' ? 'ดูสแกนหน้า (เข้า-ออกงาน)'
                   : activeTab === 'branchList' ? 'จัดการสาขา'
                   : activeTab === 'salaryReport' ? 'รายงานเงินเดือน'
+                  : activeTab === 'taxInvoice' ? 'ใบกำกับภาษี (เต็มรูป)'
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
@@ -2644,6 +2586,9 @@ export default function App() {
 
             {/* HR: รายงานเงินเดือน — สรุปวันทำงาน/วันลา/OT รายคน ตามสาขาและช่วงวันที่ แล้วสั่งพิมพ์ */}
             {activeTab === 'salaryReport' && <SalaryReport />}
+
+            {/* ACC: ใบกำกับภาษีเต็มรูป — บิลที่มีเลขในคอลัมน์ FullTaxInvNo เรียงใบล่าสุดขึ้นก่อน */}
+            {activeTab === 'taxInvoice' && <TaxInvoice />}
 
             {/* ACC: ค่าใช้จ่ายอื่นๆ (กรอก+บันทึกลง Google Sheet) */}
             {activeTab === 'otherExpense' && <OtherExpense />}
