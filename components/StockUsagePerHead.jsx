@@ -51,6 +51,7 @@ export default function StockUsagePerHead() {
   // ผลการคำนวณรอบล่าสุด — เก็บช่วงวันที่ที่ใช้คำนวณไว้ด้วย จะได้ไม่โชว์เลขเก่าคู่กับวันที่ใหม่
   const [report, setReport] = useState(null); // { from, to, branches: [...], usage: {branch: {id: qty}} }
   const [detailItem, setDetailItem] = useState(null);
+  const [showHotSpots, setShowHotSpots] = useState(false);  // กดการ์ด "จุดที่ใช้เกินค่ากลาง" แล้วไล่ดูทีละจุด
 
   // ค่าตั้งเบิกที่สาขาตั้งไว้ (ตาราง stock_avg_per_head) — โหลดตอนเปิดหน้าต่างรายละเอียดครั้งแรก
   const [settings, setSettings] = useState(null);
@@ -229,6 +230,25 @@ export default function StockUsagePerHead() {
     return result;
   }, [rows, searchTerm, sortBy, onlyUsed]);
 
+  /** ทุก "จุด" ที่ใช้เกินค่ากลาง — 1 จุด = 1 ไอเทมของ 1 สาขา เรียงจากเกินมากสุด
+      แยกออกมาจาก summary เพราะการ์ดใช้แค่จำนวน ส่วนหน้าต่างรายละเอียดใช้ทั้งรายการ */
+  const hotSpots = useMemo(() => {
+    const out = [];
+    rows.forEach(r => {
+      r.cells.forEach(c => {
+        if (c.diffPct === null || c.diffPct <= DEVIATION_PCT) return;
+        out.push({
+          row: r, branch: c.branch, perHead: c.perHead, usage: c.usage,
+          mean: r.mean, diffPct: c.diffPct,
+          // ใช้เกินค่ากลางไปกี่หน่วยในช่วงนี้ = (ต่อหัวที่ใช้จริง - ค่ากลาง) x จำนวนหัวของสาขานั้น
+          // เป็นตัวเรียงที่ตรงกับ "เสียหายจริง" มากกว่า % เพราะของที่ใช้น้อยมาก ๆ เกิน 300% ก็ยังไม่กี่กรัม
+          excessQty: (c.perHead - r.mean) * c.branch.covers,
+        });
+      });
+    });
+    return out.sort((a, b) => b.excessQty - a.excessQty);
+  }, [rows]);
+
   const summary = useMemo(() => {
     if (!report) return null;
     const okCount = activeBranches.filter(b => b.ok).length;
@@ -237,9 +257,9 @@ export default function StockUsagePerHead() {
       total: activeBranches.length,
       covers: usableBranches.reduce((s, b) => s + b.covers, 0),
       usedItems: rows.filter(r => r.totalUsage > 0).length,
-      hotSpots: rows.reduce((s, r) => s + r.overCount, 0),
+      hotSpots: hotSpots.length,
     };
-  }, [report, rows, usableBranches, activeBranches]);
+  }, [report, rows, usableBranches, activeBranches, hotSpots]);
 
   /** ค่าตั้งเบิกของทุกสาขา — ทะเบียนเดียวกับคอลัมน์ "ค่าเฉลี่ย" ของหน้านับสต๊อก
       getStockItems ของสาขาไหนก็คืน calcBranches ของ "ทุกสาขา" มาให้ จึงยิงสาขาเดียวพอ */
@@ -498,11 +518,26 @@ export default function StockUsagePerHead() {
               <div className="text-xl font-bold text-blue-700 mt-1">{fmtInt(summary.usedItems)}</div>
               <div className="text-[10px] text-gray-400 mt-0.5">จากทั้งหมด {fmtInt(items.length)} รายการ</div>
             </div>
-            <div className="bg-white border border-red-100 rounded-2xl p-3">
+            {/* การ์ดเดียวในแถวที่กดได้ — เป็นตัวเลขที่คนดูอยากรู้ต่อเสมอว่า "จุดไหนบ้าง"
+                ทำเป็นปุ่มจริง ๆ (ไม่ใช่ div ที่ผูก onClick) จะได้กด Tab/Enter ได้ด้วย */}
+            <button
+              type="button"
+              onClick={() => summary.hotSpots > 0 && setShowHotSpots(true)}
+              disabled={summary.hotSpots === 0}
+              title={summary.hotSpots > 0 ? 'คลิกเพื่อดูว่าเป็นไอเทมไหนของสาขาไหนบ้าง' : 'ไม่มีจุดไหนเกินเกณฑ์'}
+              className={`text-left bg-white border border-red-100 rounded-2xl p-3 transition-colors ${
+                summary.hotSpots > 0
+                  ? 'cursor-pointer hover:border-red-300 hover:bg-red-50/40 focus:outline-none focus:ring-2 focus:ring-red-300'
+                  : 'cursor-default'}`}
+            >
               <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" /> จุดที่ใช้เกินค่ากลาง &gt;{DEVIATION_PCT}%</div>
               <div className="text-xl font-bold text-red-600 mt-1">{fmtInt(summary.hotSpots)} จุด</div>
-              <div className="text-[10px] text-gray-400 mt-0.5">1 จุด = 1 ไอเทมของ 1 สาขา</div>
-            </div>
+              <div className="text-[10px] text-gray-400 mt-0.5">
+                {summary.hotSpots > 0
+                  ? <span className="text-red-500 font-medium">คลิกดูรายละเอียด →</span>
+                  : '1 จุด = 1 ไอเทมของ 1 สาขา'}
+              </div>
+            </button>
           </div>
 
           <div className="bg-white border border-fuchsia-100 rounded-2xl px-3 py-2.5 mb-3 flex flex-wrap items-center gap-1.5">
@@ -648,6 +683,16 @@ export default function StockUsagePerHead() {
         )}
       </div>
 
+      {showHotSpots && (
+        <HotSpotModal
+          spots={hotSpots}
+          report={report}
+          deviationPct={DEVIATION_PCT}
+          onPick={(spot) => { setShowHotSpots(false); openDetail(spot.row); }}
+          onClose={() => setShowHotSpots(false)}
+        />
+      )}
+
       {detailItem && (
         <DetailModal
           row={detailItem}
@@ -657,6 +702,147 @@ export default function StockUsagePerHead() {
           onClose={() => setDetailItem(null)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * หน้าต่าง "จุดที่ใช้เกินค่ากลาง" — ไล่ทีละจุด (1 จุด = 1 ไอเทมของ 1 สาขา)
+ *
+ * เรียงตาม "เกินไปกี่หน่วย" ไม่ใช่ % เพราะของที่ใช้น้อยมากเกิน 300% ก็ยังไม่กี่กรัม
+ * ส่วนของที่ใช้เยอะเกินแค่ 20% อาจเป็นเงินหลักหมื่น — เรียงด้วย % จะดันตัวที่ไม่สำคัญขึ้นหัวตาราง
+ *
+ * กรองตามสาขาได้ เพราะคำถามที่ตามมาเสมอคือ "แล้วสาขานี้มีปัญหากี่ตัว"
+ * กดที่แถว = เปิดหน้าต่างเทียบทุกสาขาของไอเทมนั้นต่อ (ตัวเดียวกับที่กดจากชื่อสินค้าในตาราง)
+ */
+function HotSpotModal({ spots, report, deviationPct, onPick, onClose }) {
+  const [branchFilter, setBranchFilter] = useState('');
+
+  // สาขาไหนมีจุดเกินกี่จุด — เรียงจากมากไปน้อย ใช้เป็นทั้งสรุปและปุ่มกรอง
+  const byBranch = useMemo(() => {
+    const m = new Map();
+    spots.forEach(sp => {
+      const k = sp.branch.key;
+      const cur = m.get(k) || { key: k, name: sp.branch.name, count: 0 };
+      cur.count += 1;
+      m.set(k, cur);
+    });
+    return [...m.values()].sort((a, b) => b.count - a.count);
+  }, [spots]);
+
+  const shown = useMemo(
+    () => (branchFilter ? spots.filter(sp => sp.branch.key === branchFilter) : spots),
+    [spots, branchFilter]
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-red-100 bg-red-50/50">
+          <h3 className="font-bold text-red-900 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" />
+            จุดที่ใช้เกินค่ากลาง &gt;{deviationPct}%
+            <span className="font-normal text-[11px] text-red-500">
+              {fmtInt(spots.length)} จุด · {report?.from} ถึง {report?.to}
+            </span>
+          </h3>
+          <button onClick={onClose} className="text-red-400 hover:text-red-700 font-bold text-xl leading-none">&times;</button>
+        </div>
+
+        <div className="p-4 max-h-[72vh] overflow-y-auto">
+          {/* กรองตามสาขา — ตัวเลขข้างชื่อคือจำนวนจุดของสาขานั้น */}
+          <div className="flex flex-wrap items-center gap-1.5 mb-3">
+            <span className="text-[11px] font-semibold text-gray-500 mr-1">สาขา :</span>
+            <button
+              onClick={() => setBranchFilter('')}
+              className={`rounded-full px-2.5 py-0.5 text-[11px] border transition-colors ${
+                !branchFilter ? 'border-red-300 bg-red-100 text-red-800 font-semibold'
+                  : 'border-gray-200 bg-white text-gray-600 hover:border-red-200'}`}>
+              ทุกสาขา <b>{fmtInt(spots.length)}</b>
+            </button>
+            {byBranch.map(b => (
+              <button key={b.key}
+                onClick={() => setBranchFilter(branchFilter === b.key ? '' : b.key)}
+                className={`rounded-full px-2.5 py-0.5 text-[11px] border transition-colors ${
+                  branchFilter === b.key ? 'border-red-300 bg-red-100 text-red-800 font-semibold'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-red-200'}`}>
+                {b.name.toUpperCase()} <b>{fmtInt(b.count)}</b>
+              </button>
+            ))}
+          </div>
+
+          {shown.length === 0 ? (
+            <div className="text-center py-10 text-gray-400 text-sm">ไม่มีจุดที่เกินเกณฑ์</div>
+          ) : (
+            <div className="overflow-x-auto border border-red-100 rounded-xl">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-red-50/70">
+                    <th className="px-3 py-2 text-left text-[10px] font-bold text-red-800 uppercase whitespace-nowrap">สาขา</th>
+                    <th className="px-3 py-2 text-left text-[10px] font-bold text-red-800 uppercase">วัตถุดิบ</th>
+                    <th className="px-3 py-2 text-right text-[10px] font-bold text-red-800 uppercase whitespace-nowrap">ใช้ต่อหัว</th>
+                    <th className="px-3 py-2 text-right text-[10px] font-bold text-red-800 uppercase whitespace-nowrap">ค่ากลาง</th>
+                    <th className="px-3 py-2 text-right text-[10px] font-bold text-red-800 uppercase whitespace-nowrap">ต่างจากค่ากลาง</th>
+                    <th className="px-3 py-2 text-right text-[10px] font-bold text-red-800 uppercase whitespace-nowrap"
+                      title="(ใช้ต่อหัว − ค่ากลาง) × จำนวนหัวของสาขานั้น = ใช้เกินไปกี่หน่วยในช่วงนี้">เกินไป (หน่วย)</th>
+                    <th className="px-3 py-2 text-right text-[10px] font-bold text-red-800 uppercase whitespace-nowrap">ยอดใช้รวม</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {shown.map((sp, i) => (
+                    <tr key={`${sp.branch.key}-${sp.row.id}-${i}`}
+                      className="hover:bg-red-50/40 cursor-pointer"
+                      onClick={() => onPick(sp)}
+                      title="คลิกเพื่อดูไอเทมนี้เทียบทุกสาขา">
+                      <td className="px-3 py-2 whitespace-nowrap font-semibold text-gray-700">{sp.branch.name.toUpperCase()}</td>
+                      <td className="px-3 py-2">
+                        <div className="text-gray-800 hover:text-fuchsia-700 hover:underline">{sp.row.item.name}</div>
+                        <div className="text-[10px] font-mono text-gray-400">
+                          {sp.row.item.productId}{sp.row.item.unit ? ` · ${sp.row.item.unit}` : ''}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono font-semibold text-red-600 whitespace-nowrap">{fmtPerHead(sp.perHead)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-400 whitespace-nowrap">{sp.mean ? fmtPerHead(sp.mean) : '-'}</td>
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                          sp.diffPct >= 100 ? 'bg-red-600 text-white'
+                            : sp.diffPct >= 50 ? 'bg-red-100 text-red-700'
+                            : 'bg-amber-100 text-amber-700'}`}>
+                          +{sp.diffPct.toFixed(0)}%
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono font-semibold text-red-700 whitespace-nowrap">{fmtUsage(sp.excessQty)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-500 whitespace-nowrap">{fmtUsage(sp.usage)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="text-[11px] text-gray-400 mt-3 leading-relaxed">
+            เรียงจาก <span className="text-gray-600 font-medium">เกินไป (หน่วย)</span> มากไปน้อย —
+            ไม่ได้เรียงด้วย % เพราะของที่ใช้น้อยมากเกิน 300% ก็ยังไม่กี่กรัม
+            ส่วนของที่ใช้เยอะเกินแค่ 20% อาจเป็นเงินหลักหมื่น ·
+            คลิกที่แถวเพื่อดูไอเทมนั้นเทียบทุกสาขาแบบเต็ม ·
+            ค่ากลาง = ยอดใช้รวม ÷ จำนวนหัวรวม ของสาขาที่ใช้ไอเทมนั้น
+          </p>
+          <p className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">
+            เกินค่ากลางไม่ได้แปลว่าผิดเสมอไป — สูตรที่ต่างกัน เมนูขายดีคนละตัว หรือสาขาที่เพิ่งเปิด
+            ก็ทำให้ต่างได้ ใช้เป็นจุดตั้งต้นในการไปดูหน้างานว่าตักเกินสูตร ของหาย หรือตัดสต๊อกไม่ครบ
+          </p>
+        </div>
+
+        <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center gap-3">
+          <span className="text-[11px] text-gray-400">
+            แสดง {fmtInt(shown.length)} จาก {fmtInt(spots.length)} จุด
+          </span>
+          <button className="px-4 py-2 bg-red-100 text-red-700 rounded-lg text-sm font-medium hover:bg-red-200 transition-colors"
+            onClick={onClose}>
+            ปิดหน้าต่าง
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
