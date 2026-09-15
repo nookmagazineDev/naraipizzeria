@@ -1,15 +1,18 @@
-// ACC › ใบกำกับภาษี (เต็มรูป)
+// ACC › ใบกำกับภาษี
 //
 // ตอบคำถามเดียว: "ใบกำกับภาษีที่ออกไปแล้วมีใบไหนบ้าง ใบล่าสุดเลขอะไร ของบิลวันไหน ยอดเท่าไหร่"
 //
-// ที่มาของข้อมูล: คอลัมน์ FullTaxInvNo ของบิลที่หน้า index โหลดไว้แล้ว (prop bills = salesAllRaw)
+// มีสองประเภทให้เลือกดู (ปุ่มสลับด้านบน) — คนละเล่ม คนละเลขวิ่ง จึงต้องดูแยกกัน:
+//   เต็มรูป     = คอลัมน์ FullTaxInvNo — ใบที่ออกให้ลูกค้าที่ขอในนามบริษัท/บุคคล (มีวันที่ออกใบแยก)
+//   อย่างย่อ ABB = คอลัมน์ TaxInvNo     — ใบที่เครื่องออกให้ทุกบิลตอนปิดการขาย
+//
+// ที่มาของข้อมูล: บิลที่หน้า index โหลดไว้แล้ว (prop bills = salesAllRaw)
 // หน้านี้ "ไม่ยิง API เอง" — ใช้แผงกรองช่วงวันที่/สาขาและข้อมูลชุดเดียวกับแดชบอร์ดและหน้ายอดขาย
 // กดค้นหาทีเดียวได้ครบทุกหน้าในกลุ่ม (ดู SALES_TABS ใน pages/index.js)
-// บิลไหนไม่มีเลขในคอลัมน์นี้แปลว่าไม่ได้ออกใบกำกับเต็มรูป จึงไม่ขึ้นในหน้านี้
-// (บิลปกติออกแค่ใบเสร็จ/ใบกำกับอย่างย่อ = TaxInvNo)
+// บิลไหนไม่มีเลขในคอลัมน์ของประเภทที่เลือก แปลว่าไม่ได้ออกใบประเภทนั้น จึงไม่ขึ้นในตาราง
 //
 // เรียง "ใบล่าสุดขึ้นก่อน" ตามวันเวลาปิดบิลจริง (เวลาที่ออกใบ) ใหม่สุดอยู่บนสุด
-// เวลาซ้ำกันค่อยดูเลขวิ่งใน FullTaxInvNo — เทียบเฉพาะเลขวิ่ง ไม่เอารหัสสาขามาเทียบด้วย
+// เวลาซ้ำกันค่อยดูเลขวิ่งของใบ — เทียบเฉพาะเลขวิ่ง ไม่เอารหัสสาขามาเทียบด้วย
 // กดหัวคอลัมน์เพื่อเรียงแบบอื่นได้ แต่เปิดหน้ามาจะเจอใบล่าสุดอยู่บนสุดเสมอ
 //
 // หมายเหตุ: หน้านี้ใช้บิลชุด "ครบทุกแถว" ไม่ตัดโต๊ะ/บิลที่ยอดขายไม่นับ (เช่นโต๊ะ 600) ออก
@@ -59,11 +62,41 @@ const invSeqOf = (invNo, branchCode) => {
  */
 const compareSeq = (a, b) => (a.length - b.length) || a.localeCompare(b);
 
+/**
+ * ประเภทใบกำกับที่เลือกดูได้ — ต่างกันแค่ "อ่านเลขจากคอลัมน์ไหน" ที่เหลือใช้ตรรกะชุดเดียวกันหมด
+ * ใบอย่างย่อไม่มีคอลัมน์วันที่ออกใบ/รหัสผู้ขอของตัวเอง (FullTaxDate, FullTaxAccID เป็นของใบเต็มรูป)
+ * จึงซ่อนคอลัมน์พวกนั้นตอนดูแบบย่อ ไม่งั้นได้ช่องว่างเปล่าทั้งแถว
+ */
+const DOC_TYPES = [
+  {
+    key: 'full',
+    tab: 'เต็มรูป',
+    title: 'ใบกำกับภาษีเต็มรูป',
+    invLabel: 'เลขที่ใบกำกับภาษี',
+    field: 'fullTaxInvNo',
+    hint: 'ใบที่ออกให้ลูกค้าที่ขอในนามบริษัท/บุคคล — เลขอยู่ในคอลัมน์ FullTaxInvNo ของบิล',
+    hasTaxDate: true,
+    file: 'tax-invoice-full',
+    sheet: 'ใบกำกับเต็มรูป',
+  },
+  {
+    key: 'abb',
+    tab: 'อย่างย่อ (ABB)',
+    title: 'ใบกำกับภาษีอย่างย่อ (ABB)',
+    invLabel: 'เลขที่ใบกำกับอย่างย่อ',
+    field: 'taxInvNo',
+    hint: 'ใบที่เครื่องออกให้ตอนปิดการขาย — เลขอยู่ในคอลัมน์ TaxInvNo ของบิล',
+    hasTaxDate: false,
+    file: 'tax-invoice-abb',
+    sheet: 'ใบกำกับอย่างย่อ',
+  },
+];
+
 /* คอลัมน์ในตาราง — sortVal คืนค่าที่เอาไปเรียง (ไม่มี sortVal = เรียงด้วยเลขวิ่งของใบ) */
-const COLUMNS = [
-  { key: 'invNo', label: 'เลขที่ใบกำกับภาษี', align: 'left' },
+const columnsFor = doc => [
+  { key: 'invNo', label: doc.invLabel, align: 'left' },
   { key: 'billTime', label: 'วันที่/เวลาปิดบิล', align: 'left', sortVal: r => r.billTime },
-  { key: 'taxDate', label: 'วันที่ออกใบ', align: 'left', sortVal: r => r.taxDate || '' },
+  ...(doc.hasTaxDate ? [{ key: 'taxDate', label: 'วันที่ออกใบ', align: 'left', sortVal: r => r.taxDate || '' }] : []),
   { key: 'branch', label: 'สาขา', align: 'left', sortVal: r => r.branch },
   { key: 'checkID', label: 'เลขที่บิล', align: 'left', sortVal: r => String(r.checkID ?? '') },
   { key: 'checkDesc', label: 'รายละเอียด (Check Desc)', align: 'left', sortVal: r => r.checkDesc },
@@ -80,10 +113,21 @@ export default function TaxInvoice({
   selectedOutlet = '',
   onOpenDetail,        // เปิดหน้าต่างรายการในบิล — ตัวเดียวกับที่หน้ารายงานยอดการขายใช้
 }) {
+  const [docKey, setDocKey] = useState('full');   // ประเภทใบที่กำลังดู: เต็มรูป / อย่างย่อ
   const [search, setSearch] = useState('');
   // ค่าตั้งต้น = ใบล่าสุดอยู่บนสุด (col: null คือใช้ลำดับ "ใบล่าสุดก่อน" ที่คำนวณไว้แล้ว)
   const [sort, setSort] = useState({ col: null, asc: false });
   const [page, setPage] = useState(1);
+
+  const doc = DOC_TYPES.find(d => d.key === docKey) || DOC_TYPES[0];
+  const columns = useMemo(() => columnsFor(doc), [doc]);
+
+  // สลับประเภท = คนละเล่ม คนละเลขวิ่ง เริ่มดูใหม่ตั้งแต่หน้าแรกและลำดับตั้งต้น
+  const pickDoc = key => {
+    setDocKey(key);
+    setSort({ col: null, asc: false });
+    setPage(1);
+  };
 
   // ทะเบียนสาขากลาง (HR → จัดการสาขา) — แปลง outletID เป็นรหัสสาขา และใช้ตัดรหัสออกจากเลขที่ใบ
   const { branches } = useBranches();
@@ -95,7 +139,7 @@ export default function TaxInvoice({
 
   const rows = useMemo(() => {
     const list = bills
-      .filter(b => hasInvNo(b.fullTaxInvNo))
+      .filter(b => hasInvNo(b[doc.field]))
       // สาขาถูกกรองที่ฝั่ง API ตอนดึงอยู่แล้ว กรองซ้ำเผื่อผู้ใช้เปลี่ยน dropdown โดยยังไม่กดค้นหาใหม่
       .filter(b => !selectedOutlet || String(b.outletID) === String(selectedOutlet))
       .map(b => {
@@ -104,8 +148,8 @@ export default function TaxInvoice({
         const branch = branchByOutlet[String(b.outletID)] || String(b.outletID ?? '-');
         return {
           raw: b,                                            // ไว้ส่งต่อให้ปุ่ม "ดูบิล"
-          invNo: String(b.fullTaxInvNo).trim(),
-          seq: invSeqOf(b.fullTaxInvNo, branch),
+          invNo: String(b[doc.field]).trim(),
+          seq: invSeqOf(b[doc.field], branch),
           billDate: dateFromRow(b),                          // วันที่เปิดบิล (ยึดเหมือนทุกหน้า)
           // เวลาปิดบิล = เวลาที่ออกใบกำกับจริง ใช้เป็นตัวเรียงหลัก
           // (FullTaxDate เป็นคอลัมน์วันที่ล้วน เวลาเป็น 00:00:00 เสมอ เรียงละเอียดระดับเวลาไม่ได้)
@@ -125,7 +169,7 @@ export default function TaxInvoice({
     // ใบล่าสุดก่อน: ปิดบิลทีหลัง = ใบใหม่กว่า · เวลาซ้ำกันค่อยดูเลขวิ่ง (ไม่สนว่าเป็นใบของสาขาไหน)
     list.sort((a, b) => b.billTime.localeCompare(a.billTime) || compareSeq(b.seq, a.seq));
     return list;
-  }, [bills, selectedOutlet, branchByOutlet]);
+  }, [bills, selectedOutlet, branchByOutlet, doc]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -135,7 +179,7 @@ export default function TaxInvoice({
       : rows;
 
     if (sort.col) {
-      const col = COLUMNS.find(c => c.key === sort.col);
+      const col = columns.find(c => c.key === sort.col);
       const dir = sort.asc ? 1 : -1;
       // เรียงจากสำเนา — rows ต้องคงลำดับ "ใบล่าสุดก่อน" ไว้เผื่อผู้ใช้กดกลับ
       list = [...list].sort((a, b) => {
@@ -147,7 +191,7 @@ export default function TaxInvoice({
       });
     }
     return list;
-  }, [rows, search, sort]);
+  }, [rows, search, sort, columns]);
 
   const totals = useMemo(() => visible.reduce(
     (s, r) => ({ amount: s.amount + r.amount, vat: s.vat + r.vat, beforeVat: s.beforeVat + r.beforeVat }),
@@ -177,41 +221,85 @@ export default function TaxInvoice({
 
   function exportExcel() {
     if (!visible.length) return;
+    // คอลัมน์เฉพาะของใบเต็มรูป (วันที่ออกใบ · รหัสผู้ขอ) ไม่ต้องมีในไฟล์ของใบอย่างย่อ
+    const fullCols = doc.hasTaxDate;
+    const head = [doc.invLabel, 'วันที่บิล', 'เวลาปิดบิล', ...(fullCols ? ['วันที่ออกใบ'] : []),
+      'สาขา', 'เลขที่บิล', 'รายละเอียด (Check Desc)', ...(fullCols ? ['รหัสผู้ขอใบกำกับ'] : []),
+      'ยอดก่อน VAT', 'VAT', 'ยอดขาย (รวม VAT)'];
     const aoa = [
-      ['ใบกำกับภาษี (เต็มรูป)', `${startDate} ถึง ${endDate}`,
+      [doc.title, `${startDate} ถึง ${endDate}`,
         selectedOutlet ? `สาขา ${branchByOutlet[String(selectedOutlet)] || selectedOutlet}` : 'ทุกสาขา'],
       [],
-      ['เลขที่ใบกำกับภาษี', 'วันที่บิล', 'เวลาปิดบิล', 'วันที่ออกใบ', 'สาขา', 'เลขที่บิล', 'รายละเอียด (Check Desc)',
-        'รหัสผู้ขอใบกำกับ', 'ยอดก่อน VAT', 'VAT', 'ยอดขาย (รวม VAT)'],
-      ...visible.map(r => [r.invNo, r.billDate, r.billTime, r.taxDate || '', r.branch, String(r.checkID ?? ''),
-        r.checkDesc, r.accID, Number(r.beforeVat.toFixed(2)), Number(r.vat.toFixed(2)), Number(r.amount.toFixed(2))]),
+      head,
+      ...visible.map(r => [r.invNo, r.billDate, r.billTime, ...(fullCols ? [r.taxDate || ''] : []),
+        r.branch, String(r.checkID ?? ''), r.checkDesc, ...(fullCols ? [r.accID] : []),
+        Number(r.beforeVat.toFixed(2)), Number(r.vat.toFixed(2)), Number(r.amount.toFixed(2))]),
       [],
-      ['รวม', '', '', '', '', `${visible.length} ใบ`, '', '',
+      ['รวม', `${visible.length} ใบ`, ...Array(head.length - 5).fill(''),
         Number(totals.beforeVat.toFixed(2)), Number(totals.vat.toFixed(2)), Number(totals.amount.toFixed(2))],
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 20 }, { wch: 12 }, { wch: 10 }, { wch: 14 }, { wch: 30 },
-      { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 16 }];
+    ws['!cols'] = [{ wch: 22 }, { wch: 12 }, { wch: 20 }, ...(fullCols ? [{ wch: 12 }] : []),
+      { wch: 10 }, { wch: 14 }, { wch: 30 }, ...(fullCols ? [{ wch: 16 }] : []),
+      { wch: 14 }, { wch: 12 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'ใบกำกับภาษี');
-    XLSX.writeFile(wb, `tax-invoice_${startDate}_${endDate}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, doc.sheet);
+    XLSX.writeFile(wb, `${doc.file}_${startDate}_${endDate}.xlsx`);
   }
 
   if (!loaded) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 bg-white border border-slate-100 rounded-2xl shadow-sm text-slate-400">
-        <FileText size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
-        <p className="text-sm">กรุณากดปุ่ม &quot;ค้นหาข้อมูล&quot; ด้านบน เพื่อแสดงใบกำกับภาษีของช่วงวันที่ที่เลือก</p>
+      <div className="flex flex-col gap-6">
+      {/* เลือกประเภทใบกำกับ — คนละเล่ม คนละเลขวิ่ง ดูทีละแบบ */}
+      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex flex-wrap items-center gap-x-4 gap-y-2">
+        <span className="text-xs font-bold text-slate-500">ประเภทใบกำกับ:</span>
+        <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 gap-1">
+          {DOC_TYPES.map(t => (
+            <button
+              key={t.key}
+              onClick={() => pickDoc(t.key)}
+              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                t.key === docKey ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-500 hover:text-amber-600'
+              }`}
+            >
+              {t.tab}
+            </button>
+          ))}
+        </div>
+        <span className="text-[11px] text-slate-400">{doc.hint}</span>
+      </div>
+        <div className="flex flex-col items-center justify-center py-20 bg-white border border-slate-100 rounded-2xl shadow-sm text-slate-400">
+          <FileText size={48} className="text-slate-300 mb-4 stroke-[1.5]" />
+          <p className="text-sm">กรุณากดปุ่ม &quot;ค้นหาข้อมูล&quot; ด้านบน เพื่อแสดง{doc.title}ของช่วงวันที่ที่เลือก</p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-6">
+      {/* เลือกประเภทใบกำกับ — คนละเล่ม คนละเลขวิ่ง ดูทีละแบบ */}
+      <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm flex flex-wrap items-center gap-x-4 gap-y-2">
+        <span className="text-xs font-bold text-slate-500">ประเภทใบกำกับ:</span>
+        <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1 gap-1">
+          {DOC_TYPES.map(t => (
+            <button
+              key={t.key}
+              onClick={() => pickDoc(t.key)}
+              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                t.key === docKey ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-500 hover:text-amber-600'
+              }`}
+            >
+              {t.tab}
+            </button>
+          ))}
+        </div>
+        <span className="text-[11px] text-slate-400">{doc.hint}</span>
+      </div>
       {/* สรุป: ใบล่าสุด + จำนวนใบ + ยอดรวม */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <div className="bg-white border border-amber-200 rounded-2xl p-5 shadow-sm">
-          <span className="text-xs text-slate-400 font-semibold block">ใบกำกับล่าสุด</span>
+          <span className="text-xs text-slate-400 font-semibold block">{doc.title} — ใบล่าสุด</span>
           {rows.length ? (
             <>
               <span className="text-xl font-bold text-amber-600 font-mono mt-0.5 block break-all">{rows[0].invNo}</span>
@@ -220,7 +308,7 @@ export default function TaxInvoice({
               </span>
             </>
           ) : (
-            <span className="text-sm text-slate-400 mt-2 block">ช่วงนี้ยังไม่มีใบกำกับเต็มรูป</span>
+            <span className="text-sm text-slate-400 mt-2 block">ช่วงนี้ไม่มี{doc.title}สักใบ</span>
           )}
         </div>
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
@@ -259,9 +347,9 @@ export default function TaxInvoice({
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-bold text-slate-700">รายการใบกำกับภาษีเต็มรูป</h2>
+            <h2 className="text-sm font-bold text-slate-700">รายการ{doc.title}</h2>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              คัดจากบิลที่มีเลขในคอลัมน์ FullTaxInvNo — เรียงใบล่าสุด (ปิดบิลทีหลังสุด) ขึ้นก่อน
+              คัดจากบิลที่มีเลขในคอลัมน์ {doc.field === 'taxInvNo' ? 'TaxInvNo' : 'FullTaxInvNo'} — เรียงใบล่าสุด (ปิดบิลทีหลังสุด) ขึ้นก่อน
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -290,7 +378,7 @@ export default function TaxInvoice({
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100 text-slate-500 font-bold sticky top-0">
                 <th className="px-4 py-3 text-slate-600">ตัวช่วย</th>
-                {COLUMNS.map(c => (
+                {columns.map(c => (
                   <th key={c.key} onClick={() => clickSort(c.key)}
                     className={`px-4 py-3 text-slate-600 cursor-pointer hover:bg-slate-100 hover:text-amber-600 transition-colors whitespace-nowrap ${c.align === 'right' ? 'text-right' : ''}`}>
                     <div className={`flex items-center gap-1 ${c.align === 'right' ? 'justify-end' : ''}`}>
@@ -304,9 +392,9 @@ export default function TaxInvoice({
             <tbody className="divide-y divide-slate-100 text-slate-700">
               {pageRows.length === 0 ? (
                 <tr>
-                  <td colSpan={COLUMNS.length + 1} className="py-16 text-center text-slate-400">
+                  <td colSpan={columns.length + 1} className="py-16 text-center text-slate-400">
                     <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                    ช่วงนี้ไม่มีบิลที่ออกใบกำกับภาษีเต็มรูป
+                    ช่วงนี้ไม่มีบิลที่ออก{doc.title}
                   </td>
                 </tr>
               ) : pageRows.map((r, i) => (
@@ -325,7 +413,7 @@ export default function TaxInvoice({
                     <div>{r.billTime ? r.billTime.slice(0, 10) : r.billDate}</div>
                     {r.billTime && <div className="text-[10px] text-slate-400">{r.billTime.slice(11)}</div>}
                   </td>
-                  <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{r.taxDate || '-'}</td>
+                  {doc.hasTaxDate && <td className="px-4 py-2.5 whitespace-nowrap text-slate-500">{r.taxDate || '-'}</td>}
                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{r.branch}</td>
                   <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-500">{r.checkID ?? '-'}</td>
                   <td className="px-4 py-2.5 max-w-[240px] truncate text-slate-600" title={r.checkDesc}>{r.checkDesc || '-'}</td>
@@ -338,7 +426,7 @@ export default function TaxInvoice({
             {visible.length > 0 && (
               <tfoot>
                 <tr className="bg-slate-50 border-t border-slate-200 font-bold text-slate-700">
-                  <td className="px-4 py-3" colSpan={7}>รวม {visible.length.toLocaleString('th-TH')} ใบ</td>
+                  <td className="px-4 py-3" colSpan={columns.length - 2}>รวม {visible.length.toLocaleString('th-TH')} ใบ</td>
                   <td className="px-4 py-3 text-right font-mono">{fmtMoney(totals.beforeVat)}</td>
                   <td className="px-4 py-3 text-right font-mono">{fmtMoney(totals.vat)}</td>
                   <td className="px-4 py-3 text-right font-mono text-emerald-700">{fmtMoney(totals.amount)}</td>

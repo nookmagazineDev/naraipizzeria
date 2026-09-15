@@ -2514,7 +2514,7 @@ export default function App() {
                   : activeTab === 'attendance' ? 'ดูสแกนหน้า (เข้า-ออกงาน)'
                   : activeTab === 'branchList' ? 'จัดการสาขา'
                   : activeTab === 'salaryReport' ? 'รายงานเงินเดือน'
-                  : activeTab === 'taxInvoice' ? 'ใบกำกับภาษี (เต็มรูป)'
+                  : activeTab === 'taxInvoice' ? 'ใบกำกับภาษี (เต็มรูป / อย่างย่อ ABB)'
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
