@@ -10,7 +10,8 @@ import { useBranches } from '../lib/useBranches';
  * - หน่วย (คอลัมน์ D) ว่าง → วิเคราะห์จากชื่ออัตโนมัติ (badge "วิเคราะห์") + ปุ่มบันทึกกลับ
  * - แก้ไขได้: ชื่อ (B), ราคา (C), สถานะ (E), ไอเทมทดแทนสูงสุด 3 ตัว (F–H), ตัวแปลงหน่วย (I),
  *   สาขาที่ใช้ (J), หมวดสโตร์ (N — ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
- *   ลบได้ (ทั้งแถว) — โหมดชีทใช้ _row ระบุแถวเผื่อรหัสซ้ำ, โหมด SQL คีย์ด้วยรหัสจึงไม่มีแถวซ้ำ
+ *   ลบได้ (ทั้งแถว) — โหมดชีททั้งแก้ไขและลบส่ง _row ไประบุแถวเผื่อรหัสซ้ำ (ไม่งั้นโดนแถวแรกเสมอ),
+ *   โหมด SQL คีย์ด้วยรหัสจึงไม่มีแถวซ้ำ
  *   ผ่าน action: saveItem / addItem / deleteItem (ดู lib/qcrdApi.js)
  */
 
@@ -55,10 +56,14 @@ export default function QcRdItems() {
   const [syncing, setSyncing] = useState(false);   // กำลังดันชีทขึ้น SQL เอง (ปุ่ม "อัพขึ้น SQL")
 
   // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งตาราง (ใช้หลังกดบันทึก — ตารางเดิมยังอ่านได้ระหว่างรอ)
-  // fresh = ต่อ ?t= กันไม่ให้ CDN คืนของที่แคชไว้ก่อนหน้าการบันทึกรอบนี้
+  //
+  // ต่อ ?t= ทุกครั้ง (ไม่ใช่เฉพาะตอนโหลดหลังบันทึก) เพราะ /api/qcrd ตั้งแคชไว้ที่ CDN
+  // s-maxage=30 + stale-while-revalidate=120 — เปิดหน้านี้ใหม่/กด F5 หลังเพิ่งบันทึก
+  // จึงมีสิทธิ์ได้ของก่อนบันทึกกลับมาเป็นนาที ๆ ซึ่งดูเหมือน "บันทึกแล้วข้อมูลไม่เปลี่ยน"
+  // หน้านี้เป็นหน้าแก้ไข ต้องเห็นของจริงเสมอ ยอมเสียเวลาโหลดชีทใหม่ทุกรอบ
   const load = ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
-    fetch(`/api/qcrd?sheet=item${quiet ? `&t=${Date.now()}` : ''}`)
+    fetch(`/api/qcrd?sheet=item&t=${Date.now()}`)
       .then(r => r.json())
       .then(res => {
         if (res.status === 'success') {
@@ -179,6 +184,9 @@ export default function QcRdItems() {
 
   const openEdit = (i) => setEditItem({
     isNew: false,
+    // _row = เลขแถวจริงในชีท — ส่งไปกับตอนบันทึกด้วย ไม่งั้นรหัสที่ซ้ำกันจะถูกเขียนลงแถวแรกเสมอ
+    // (ผู้ใช้แก้แถวที่สอง กดบันทึกขึ้นว่าสำเร็จ แต่แถวที่แก้ไม่เปลี่ยน เพราะของไปลงแถวแรกแทน)
+    row: i._row,
     code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])],
     // หน่วยที่ระบบวิเคราะห์เองยังไม่ได้อยู่ในชีท — ใส่ให้เป็นค่าตั้งต้นในช่อง กดบันทึกแล้วจะลงชีทจริง
     price: i.price ?? '', unit: i.unit || '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
@@ -208,7 +216,7 @@ export default function QcRdItems() {
     setToast(null);
     try {
       const res = await apiCall(editItem.isNew ? 'addItem' : 'saveItem', {
-        code, name: editItem.name.trim(),
+        code, row: editItem.row, name: editItem.name.trim(),
         status: editItem.status, subs: editItem.subs.slice(0, 3),
         price: editItem.price, unit: (editItem.unit || '').trim(), converter: editItem.converter,
         branches: editItem.branches, storeCategory: (editItem.storeCategory || '').trim(),

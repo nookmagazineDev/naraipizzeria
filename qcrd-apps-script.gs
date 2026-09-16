@@ -394,40 +394,58 @@ function saveMenuStatus_(ss, data) {
 }
 
 // แก้ไขข้อมูลวัตถุดิบ: ชื่อ(B) ราคา(C) หน่วย(D) สถานะ(E) ไอเทมทดแทน(F-H) ตัวแปลงหน่วย(I) สาขาที่ใช้(J) หมวดสโตร์(N)
-// payload: { code, name, price, unit, status, subs: ['รหัส1','รหัส2','รหัส3'], converter, branches: ['SJP','CRM'], storeCategory }
+// payload: { code, row, name, price, unit, status, subs: ['รหัส1','รหัส2','รหัส3'], converter, branches: ['SJP','CRM'], storeCategory }
+//
+// row = เลขแถวจริงในชีท (1-indexed) จาก field _row ที่ /api/qcrd?sheet=item ส่งมา — เหมือน deleteItem
+// ชีท item มีรหัสซ้ำกันอยู่หลายตัว ถ้าหาด้วยรหัสอย่างเดียวจะเจอแถวแรกเสมอ คนแก้แถวที่สองจะได้
+// "บันทึกสำเร็จ" แต่แถวที่ตัวเองแก้ไม่เปลี่ยน (ของไปทับแถวแรกแทน) — อาการ "บันทึกแล้วไม่ถูกบันทึก"
+// แถวที่ส่งมาต้องมีรหัสตรงกันด้วย ไม่ตรง = ชีทถูกแทรก/ลบแถวหลังจากหน้าเว็บโหลดไป ให้รีเฟรชก่อน
 function saveItem_(ss, data) {
   var code = String(data.code || '').trim();
   if (!code) return { status: 'error', message: 'ต้องระบุรหัสวัตถุดิบ' };
   var sh = ss.getSheetByName('item');
   if (!sh) return { status: 'error', message: 'ไม่พบชีท item' };
   var values = sh.getRange(1, 1, sh.getLastRow(), 1).getValues();
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][0] || '').trim() === code) {
-      var row = i + 1;
-      if (data.name !== undefined && String(data.name).trim()) sh.getRange(row, 2).setValue(String(data.name).trim());
-      if (data.price !== undefined && data.price !== '' && !isNaN(Number(data.price))) {
-        sh.getRange(row, 3).setValue(Number(data.price));
-      }
-      if (data.unit !== undefined) sh.getRange(row, 4).setValue(String(data.unit || '').trim());
-      if (data.status !== undefined) sh.getRange(row, 5).setValue(String(data.status || 'ใช้งาน').trim());
-      if (data.subs !== undefined) {
-        var subs = (data.subs || []).slice(0, 3);
-        sh.getRange(row, 6, 1, 3).setValues([[subs[0] || '', subs[1] || '', subs[2] || '']]);
-      }
-      if (data.converter !== undefined) {
-        sh.getRange(row, 9).setValue(data.converter === '' ? '' : Number(data.converter) || '');
-      }
-      if (data.branches !== undefined) {
-        sh.getRange(row, 10).setValue((data.branches || []).join(','));
-      }
-      if (data.storeCategory !== undefined) {
-        sh.getRange(row, 14).setValue(String(data.storeCategory || '').trim());
-      }
-      writeItemExtra_(sh, row, data);
-      return { status: 'success', data: { code: code, row: row } };
+
+  var row = 0;
+  var targetRow = Number(data.row) || 0;
+  if (targetRow > 1 && targetRow <= values.length) {
+    if (String(values[targetRow - 1][0] || '').trim() !== code) {
+      return { status: 'error', message: 'แถว ' + targetRow + ' ไม่ตรงกับรหัส ' + code + ' (ข้อมูลในชีทอาจเปลี่ยนไปแล้ว รีเฟรชหน้าแล้วลองอีกครั้ง)' };
+    }
+    row = targetRow;
+  } else {
+    // ไม่ได้ส่ง row มา (หน้าเว็บเวอร์ชันเก่า) → หาแถวแรกที่รหัสตรงเหมือนเดิม
+    for (var i = 1; i < values.length && !row; i++) {
+      if (String(values[i][0] || '').trim() === code) row = i + 1;
     }
   }
-  return { status: 'error', message: 'ไม่พบรหัส ' + code + ' ในชีท item' };
+  if (!row) return { status: 'error', message: 'ไม่พบรหัส ' + code + ' ในชีท item' };
+
+  if (data.name !== undefined && String(data.name).trim()) sh.getRange(row, 2).setValue(String(data.name).trim());
+  // ราคาว่าง = ล้างค่าในชีท (ของเดิมข้ามไปเฉย ๆ คนลบราคาจึงเห็นราคาเก่าค้างอยู่ทั้งที่ขึ้นว่าบันทึกแล้ว)
+  // ส่วนค่าที่ไม่ใช่ตัวเลขถือว่าพิมพ์ผิด ไม่เขียนทับของเดิม
+  if (data.price !== undefined) {
+    if (String(data.price).trim() === '') sh.getRange(row, 3).setValue('');
+    else if (!isNaN(Number(data.price))) sh.getRange(row, 3).setValue(Number(data.price));
+  }
+  if (data.unit !== undefined) sh.getRange(row, 4).setValue(String(data.unit || '').trim());
+  if (data.status !== undefined) sh.getRange(row, 5).setValue(String(data.status || 'ใช้งาน').trim());
+  if (data.subs !== undefined) {
+    var subs = (data.subs || []).slice(0, 3);
+    sh.getRange(row, 6, 1, 3).setValues([[subs[0] || '', subs[1] || '', subs[2] || '']]);
+  }
+  if (data.converter !== undefined) {
+    sh.getRange(row, 9).setValue(data.converter === '' ? '' : Number(data.converter) || '');
+  }
+  if (data.branches !== undefined) {
+    sh.getRange(row, 10).setValue((data.branches || []).join(','));
+  }
+  if (data.storeCategory !== undefined) {
+    sh.getRange(row, 14).setValue(String(data.storeCategory || '').trim());
+  }
+  writeItemExtra_(sh, row, data);
+  return { status: 'success', data: { code: code, row: row } };
 }
 
 // เพิ่มวัตถุดิบใหม่: ต่อแถวใหม่ท้ายชีท item (กันรหัสซ้ำ)
