@@ -24,6 +24,7 @@ import path from 'node:path';
 import { probeEndpoints, extraTargets } from '../../lib/sqlProbe.mjs';
 import { fetchQcrdSheet } from '../../lib/qcrdSheet';
 import { isConfigured as hasDirectDb, describeTarget, runQuery, credentials } from '../../lib/qcrdPool';
+import { usingSql } from '../../lib/qcrdSource';
 import {
   mapGroups, mapMenus, mapBomByMenu, mapItems,
   groupStmt, menuStmt, bomStmt, itemStmt, itemBranchStmt, combine, PARAM_LIMIT,
@@ -189,6 +190,20 @@ export default async function handler(req, res) {
 
   const step = str(q.step) || 'check';
   const confirm = String(q.confirm || '') === '1';
+
+  // โหมด SQL แล้ว ห้ามดันชีททับฐาน — กติกาเดียวกับ /api/qcrd-sync (ดูหมายเหตุในไฟล์นั้น)
+  // ชีทหยุดอัปเดตตั้งแต่วันที่พลิกสวิตช์ การ MERGE ทั้งใบคือเอาของเก่าทับของจริงที่หน้าเว็บเพิ่งแก้
+  // ซึ่งกู้คืนไม่ได้ และคนกดจะไม่รู้ตัวเลย (เห็นแค่ว่า "บันทึกไปแล้วข้อมูลกลับเป็นค่าเก่า")
+  // step ที่แค่อ่าน (check/verify/probe) กับ schema (สร้าง/เพิ่มคอลัมน์ ไม่แตะข้อมูล) ยังทำได้ตามเดิม
+  const WRITES_DATA = ['group', 'menu', 'bom', 'item'];
+  if (usingSql() && WRITES_DATA.includes(step) && confirm && String(q.force || '') !== '1') {
+    return res.status(200).json({
+      status: 'error', step,
+      message: 'ตอนนี้ QC/RD ใช้ SQL เป็นต้นทางแล้ว (QCRD_SOURCE=sql) — ' +
+        `การดัน step=${step} จากชีทจะเอาข้อมูลเก่าทับของจริงที่แก้ไว้ในฐาน จึงปิดไว้ ` +
+        'ถ้าตั้งใจจริง ๆ (เช่น กู้ข้อมูลจากชีท) ให้ต่อ &force=1 ท้าย URL',
+    });
+  }
   const offset = Math.max(0, Number(q.offset) || 0);
   const deadline = Date.now() + BUDGET_MS;
   const t0 = Date.now();

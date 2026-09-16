@@ -228,6 +228,8 @@ async function migrateStep(step, confirm) {
 
 function mountQcrd(app) {
   const WRITE_KEY = process.env.QCRD_WRITE_KEY || '';
+  // ที่มาของข้อมูล QC/RD ตามที่ตั้งไว้บนเครื่องนี้ — ใช้กันไม่ให้ดันชีททับฐานหลังย้ายไป SQL แล้ว
+  const SOURCE_IS_SQL = String(process.env.QCRD_SOURCE || '').toLowerCase() === 'sql';
 
   const send = (res, promise, label) =>
     promise
@@ -298,6 +300,19 @@ function mountQcrd(app) {
     }
     const step = str(req.query.step) || 'check';
     const confirm = String(req.query.confirm || '') === '1';
+
+    // โหมด SQL แล้ว ห้ามดันชีททับฐาน — กติกาเดียวกับ /api/qcrd-sync และ /api/qcrd-migrate ฝั่งเว็บ
+    // ชีทหยุดอัปเดตตั้งแต่วันที่พลิกสวิตช์ MERGE ทั้งใบ = เอาของเก่าทับของจริงที่หน้าเว็บเพิ่งแก้
+    // ต้องตั้ง env QCRD_SOURCE=sql บนเครื่องนี้ด้วย ตัวกันถึงจะทำงาน (เครื่องนี้ไม่เห็น env ของ Vercel)
+    if (SOURCE_IS_SQL && ['group', 'menu', 'bom', 'item'].includes(step)
+        && confirm && String(req.query.force || '') !== '1') {
+      return res.status(200).json({
+        status: 'error', step,
+        message: `ตอนนี้ QC/RD ใช้ SQL เป็นต้นทางแล้ว (QCRD_SOURCE=sql) — การดัน step=${step} จากชีท` +
+          'จะเอาข้อมูลเก่าทับของจริงที่แก้ไว้ในฐาน จึงปิดไว้ ถ้าตั้งใจจริง ๆ (เช่น กู้ข้อมูลจากชีท) ให้ต่อ &force=1 ท้าย URL',
+      });
+    }
+
     const t0 = Date.now();
     try {
       const data = await migrateStep(step, confirm);
