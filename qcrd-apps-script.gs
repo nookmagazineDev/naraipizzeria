@@ -441,6 +441,13 @@ function saveItem_(ss, data) {
   if (data.branches !== undefined) {
     sh.getRange(row, 10).setValue((data.branches || []).join(','));
   }
+  // K=itemID ของ POS, L=หน่วยเบิก — ฝั่งสต๊อกใช้สองช่องนี้ เดิมหน้าเว็บส่งมาไม่ได้ ต้องไปพิมพ์ในชีทเอง
+  if (data.posItemId !== undefined) {
+    sh.getRange(row, 11).setValue(String(data.posItemId || '').trim());
+  }
+  if (data.requestUnit !== undefined) {
+    sh.getRange(row, 12).setValue(String(data.requestUnit || '').trim());
+  }
   if (data.storeCategory !== undefined) {
     sh.getRange(row, 14).setValue(String(data.storeCategory || '').trim());
   }
@@ -449,8 +456,9 @@ function saveItem_(ss, data) {
 }
 
 // เพิ่มวัตถุดิบใหม่: ต่อแถวใหม่ท้ายชีท item (กันรหัสซ้ำ)
-// คอลัมน์: A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ F–H=ไอเทมทดแทน I=ตัวแปลง J=สาขาที่ใช้ N=หมวดสโตร์
-// payload: { code, name, price, unit, status, subs[], converter, branches[], storeCategory }
+// คอลัมน์: A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ F–H=ไอเทมทดแทน I=ตัวแปลง J=สาขาที่ใช้
+//          K=itemID(POS) L=หน่วยเบิก N=หมวดสโตร์
+// payload: { code, name, price, unit, status, subs[], converter, branches[], posItemId, requestUnit, storeCategory }
 function addItem_(ss, data) {
   var code = String(data.code || '').trim();
   if (!code) return { status: 'error', message: 'ต้องระบุรหัสวัตถุดิบ' };
@@ -474,7 +482,7 @@ function addItem_(ss, data) {
     code, name, price, String(data.unit || '').trim(), String(data.status || 'ใช้งาน').trim(),
     subs[0] || '', subs[1] || '', subs[2] || '',
     converter, (data.branches || []).join(','),
-    '', '', '', storeCategory,
+    String(data.posItemId || '').trim(), String(data.requestUnit || '').trim(), '', storeCategory,
   ]]);
   writeItemExtra_(sh, newRow, data);
   return { status: 'success', data: { code: code, row: newRow } };

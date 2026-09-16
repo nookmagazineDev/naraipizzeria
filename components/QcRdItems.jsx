@@ -9,7 +9,7 @@ import { useBranches } from '../lib/useBranches';
  * — /api/qcrd คืนรูปแบบเดียวกันทั้งสองทาง หน้านี้จึงไม่ต้องรู้ว่าอ่านมาจากไหน
  * - หน่วย (คอลัมน์ D) ว่าง → วิเคราะห์จากชื่ออัตโนมัติ (badge "วิเคราะห์") + ปุ่มบันทึกกลับ
  * - แก้ไขได้: ชื่อ (B), ราคา (C), สถานะ (E), ไอเทมทดแทนสูงสุด 3 ตัว (F–H), ตัวแปลงหน่วย (I),
- *   สาขาที่ใช้ (J), หมวดสโตร์ (N — ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
+ *   สาขาที่ใช้ (J), itemID ของ POS (K) + หน่วยเบิก (L), หมวดสโตร์ (N — ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
  *   ลบได้ (ทั้งแถว) — โหมดชีททั้งแก้ไขและลบส่ง _row ไประบุแถวเผื่อรหัสซ้ำ (ไม่งั้นโดนแถวแรกเสมอ),
  *   โหมด SQL คีย์ด้วยรหัสจึงไม่มีแถวซ้ำ
  *   ผ่าน action: saveItem / addItem / deleteItem (ดู lib/qcrdApi.js)
@@ -129,6 +129,21 @@ export default function QcRdItems() {
     return new Set(Object.keys(count).filter(c => count[c] > 1));
   }, [items]);
 
+  // itemID ที่ถูกผูกไว้กับวัตถุดิบมากกว่า 1 ตัว — ผูกซ้ำแล้วตอนตัดสต๊อกตามยอดขายจะไปลงผิดตัว
+  // เตือนอย่างเดียว ไม่ห้ามบันทึก (บางทีต้องผูกซ้ำชั่วคราวระหว่างย้ายของ)
+  const duplicatePos = useMemo(() => {
+    const count = {};
+    items.forEach(i => { if (i.posItemId) count[i.posItemId] = (count[i.posItemId] || 0) + 1; });
+    return new Set(Object.keys(count).filter(c => count[c] > 1));
+  }, [items]);
+  const noPosCount = useMemo(() => items.filter(i => !i.posItemId).length, [items]);
+  /** วัตถุดิบตัวอื่นที่ผูก itemID นี้ไว้อยู่แล้ว — ใช้เตือนตอนกรอกในฟอร์ม */
+  const posOwner = (pos, exceptCode) => {
+    const v = String(pos || '').trim();
+    if (!v) return null;
+    return items.find(i => i.posItemId === v && i.code !== exceptCode) || null;
+  };
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter(i => {
@@ -141,7 +156,9 @@ export default function QcRdItems() {
       if (branchFilter === NO_BRANCH) { if ((i.usedBranches || []).length) return false; }
       else if (branchFilter && !(i.usedBranches || []).includes(branchFilter)) return false;
       if (!q) return true;
-      return codeMatch(i.code, q) || i.name.toLowerCase().includes(q);
+      // ค้นด้วย itemID ของ POS ได้ด้วย — คนคุมสต๊อกมักถือเลขนี้มาถามว่าคือวัตถุดิบตัวไหน
+      return codeMatch(i.code, q) || i.name.toLowerCase().includes(q)
+        || (i.posItemId && codeMatch(i.posItemId, q));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, search, unitFilter, statusFilter, storeFilter, typeFilter, branchFilter]);
@@ -199,6 +216,9 @@ export default function QcRdItems() {
     code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])],
     // หน่วยที่ระบบวิเคราะห์เองยังไม่ได้อยู่ในชีท — ใส่ให้เป็นค่าตั้งต้นในช่อง กดบันทึกแล้วจะลงชีทจริง
     price: i.price ?? '', unit: i.unit || '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
+    // itemID/หน่วยเบิก — ตั้งต้นจากค่าที่อ่านมาเสมอ (โหมด SQL = ค่าจาก dbo.stock_item)
+    // ถ้าไม่เติมตรงนี้ กดบันทึกทีเดียวจะกลายเป็นส่งค่าว่างไปล้างของเดิมในฐานทิ้ง
+    posItemId: i.posItemId || '', requestUnit: i.requestUnit || '',
     storeCategory: i.storeCategory || '', addingNewStore: false,
     itemType: i.itemType === PACKAGING ? PACKAGING : MATERIAL, usedWhen: i.usedWhen || '',
   });
@@ -206,7 +226,8 @@ export default function QcRdItems() {
   const openNew = () => setEditItem({
     isNew: true,
     code: '', name: '', status: 'ใช้งาน', subs: [],
-    price: '', unit: '', converter: '', branches: [], storeCategory: '', addingNewStore: false,
+    price: '', unit: '', converter: '', branches: [], posItemId: '', requestUnit: '',
+    storeCategory: '', addingNewStore: false,
     itemType: MATERIAL, usedWhen: '',
   });
 
@@ -230,6 +251,8 @@ export default function QcRdItems() {
         status: editItem.status, subs: editItem.subs.slice(0, 3),
         price: editItem.price, unit: (editItem.unit || '').trim(), converter: editItem.converter,
         branches: editItem.branches, storeCategory: (editItem.storeCategory || '').trim(),
+        // itemID ของ POS + หน่วยเบิก — ฝั่งสต๊อก/ตัดยอดขายใช้สองช่องนี้ เดิมแก้ได้ที่ชีทเท่านั้น
+        posItemId: (editItem.posItemId || '').trim(), requestUnit: (editItem.requestUnit || '').trim(),
         // ประเภท/ใช้กับ — ไว้แยกต้นทุนบรรจุภัณฑ์ระหว่างทานที่ร้านกับห่อกลับบ้าน
         itemType: editItem.itemType === PACKAGING ? PACKAGING : MATERIAL,
         usedWhen: editItem.itemType === PACKAGING ? (editItem.usedWhen || USED_WHEN[0]) : '',
@@ -303,6 +326,10 @@ export default function QcRdItems() {
                 {inactiveCount > 0 && ` · ปิดการใช้งาน ${inactiveCount}`}
                 {duplicateCodes.size > 0 && (
                   <span className="text-amber-600 font-semibold"> · รหัสซ้ำ {duplicateCodes.size} รหัส</span>
+                )}
+                {noPosCount > 0 && ` · ยังไม่ได้ผูก itemID ${noPosCount.toLocaleString()}`}
+                {duplicatePos.size > 0 && (
+                  <span className="text-amber-600 font-semibold"> · itemID ซ้ำ {duplicatePos.size} เลข</span>
                 )}
               </p>
             </div>
@@ -395,6 +422,7 @@ export default function QcRdItems() {
             <thead className="bg-slate-50 text-slate-500 sticky top-0">
               <tr className="text-xs font-bold uppercase tracking-wide">
                 <th className="px-4 py-3 text-left">รหัส</th>
+                <th className="px-3 py-3 text-left">itemID (POS)</th>
                 <th className="px-4 py-3 text-left">ชื่อ</th>
                 <th className="px-4 py-3 text-center">หน่วย</th>
                 <th className="px-4 py-3 text-right">ราคาต้นทุน</th>
@@ -408,11 +436,11 @@ export default function QcRdItems() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={11} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
+                <tr><td colSpan={11} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
               ) : filtered.map(i => (
                 <tr key={i._row ?? i.code} className={`hover:bg-slate-50/60 ${i.status === 'ปิดการใช้งาน' ? 'bg-rose-50/40 text-slate-400' : ''}`}>
                   <td className="px-4 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">
@@ -420,6 +448,23 @@ export default function QcRdItems() {
                     {duplicateCodes.has(i.code) && (
                       <span title="รหัสนี้มีมากกว่า 1 แถวในชีท" className="ml-1 inline-flex items-center gap-0.5 px-1 py-0.5 bg-amber-50 text-amber-600 border border-amber-200 rounded text-[9px] font-bold align-middle">
                         <AlertTriangle size={9} />ซ้ำ
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+                    {i.posItemId ? (
+                      <span className={duplicatePos.has(i.posItemId) ? 'text-amber-600 font-bold' : 'text-slate-500'}>
+                        {i.posItemId}
+                        {duplicatePos.has(i.posItemId) && (
+                          <span title="itemID นี้ถูกผูกไว้กับวัตถุดิบมากกว่า 1 ตัว" className="ml-1 inline-flex items-center gap-0.5 px-1 py-0.5 bg-amber-50 border border-amber-200 rounded text-[9px] align-middle">
+                            <AlertTriangle size={9} />ซ้ำ
+                          </span>
+                        )}
+                      </span>
+                    ) : <span className="text-slate-300" title="ยังไม่ได้ผูกกับ itemID ของ POS">—</span>}
+                    {i.requestUnit && (
+                      <span title="หน่วยเบิก" className="ml-1 inline-block px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-sans align-middle">
+                        เบิก: {i.requestUnit}
                       </span>
                     )}
                   </td>
@@ -565,6 +610,31 @@ export default function QcRdItems() {
                     onChange={e => setEditItem(m => ({ ...m, converter: e.target.value }))} placeholder="เช่น 1000"
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-500">หน่วยเบิก <span className="font-normal">(หน่วยที่สาขาใช้เบิกของ)</span></label>
+                  <input value={editItem.requestUnit}
+                    onChange={e => setEditItem(m => ({ ...m, requestUnit: e.target.value }))} placeholder="เช่น ถุง"
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+              </div>
+
+              {/* itemID ของ POS — ฝั่งตัดสต๊อกตามยอดขายใช้เลขนี้จับคู่ ผูกซ้ำ/ผิดตัวแล้วยอดจะไปลงผิดวัตถุดิบ
+                  เตือนอย่างเดียวไม่ห้ามบันทึก เพราะบางช่วงต้องผูกซ้ำชั่วคราวระหว่างสลับของ */}
+              <div>
+                <label className="text-xs font-bold text-slate-500">itemID (POS) <span className="font-normal">— เลขที่ใช้จับคู่กับระบบขายหน้าร้าน</span></label>
+                <input value={editItem.posItemId}
+                  onChange={e => setEditItem(m => ({ ...m, posItemId: e.target.value }))} placeholder="เว้นว่างได้ถ้ายังไม่ผูก"
+                  className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                {(() => {
+                  const owner = posOwner(editItem.posItemId, editItem.isNew ? null : editItem.code);
+                  return owner ? (
+                    <p className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                      <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
+                      <span>itemID นี้ผูกกับ <span className="font-mono">{owner.code}</span> {owner.name} อยู่แล้ว —
+                        ถ้าผูกซ้ำ ตอนตัดสต๊อกตามยอดขายจะไปลงตัวใดตัวหนึ่งเท่านั้น (บันทึกได้ แต่ควรเช็คก่อน)</span>
+                    </p>
+                  ) : null;
+                })()}
               </div>
 
               <div className="grid grid-cols-2 gap-3">

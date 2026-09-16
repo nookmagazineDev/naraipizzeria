@@ -230,6 +230,9 @@ export default async function handler(req, res) {
             // I=ตัวแปลงหน่วย (หน่วยเล็กต่อ 1 หน่วยซื้อ), J=สาขาที่ใช้ (คั่นด้วย ,)
             converter: num(r[8]),
             usedBranches: (r[9] || '').split(',').map(s => s.trim()).filter(Boolean),
+            // K=itemID ของ POS, L=หน่วยเบิก — คืนให้ตรงกับที่ฝั่ง SQL คืน หน้าเว็บจะได้ใช้ชุดเดียวกัน
+            posItemId: (r[10] || '').trim(),
+            requestUnit: (r[11] || '').trim(),
             // N=หมวดสโตร์ (ตำแหน่งจัดเก็บ เช่น ของแห้ง/ห้องผัก/ตู้1)
             storeCategory: (r[13] || '').trim(),
             // O=ประเภท (วัตถุดิบ/แพ็กเกจจิ้ง) · P=ใช้กับ (ทั้งสอง/ทานที่ร้าน/ห่อกลับบ้าน)
