@@ -31,6 +31,10 @@ const MATERIAL = 'วัตถุดิบ';
 const PACKAGING = 'แพ็กเกจจิ้ง';
 const USED_WHEN = ['ทั้งสอง', 'ทานที่ร้าน', 'ห่อกลับบ้าน'];
 
+// ข้อความอธิบายตอนหน้าถูกล็อกไม่ให้แก้ (โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท) — ชุดเดียวกับหน้าเมนู QC/RD
+const LOCK_HINT = 'ตอนนี้อ่านข้อมูลจาก SQL ไม่ได้ กำลังแสดงข้อมูลจากชีทแทน — ' +
+  'ถ้าบันทึกตอนนี้จะเขียนทับของจริงด้วยข้อมูลที่อาจเก่ากว่า จึงล็อกไว้ก่อน (กดรีเฟรชเมื่อ SQL กลับมา)';
+
 // รายชื่อสาขาสำหรับเลือก "สาขาที่ใช้ไอเทม" มาจากทะเบียนกลาง (HR → จัดการสาขา)
 // ชุดเดียวกับหน้าค่าใช้จ่ายและหน้าดูสแกนหน้า — ดู lib/useBranches.js
 
@@ -53,6 +57,9 @@ export default function QcRdItems() {
   const [deleteTarget, setDeleteTarget] = useState(null); // { code, name, row }
   const [deleting, setDeleting] = useState(false);
   const [source, setSource] = useState('sheet');   // ข้อมูลชุดนี้มาจากชีทหรือ SQL
+  // โหมด SQL ที่อ่านฐานไม่ได้แล้วถอยไปอ่านชีท — ที่เห็นบนจอเป็นของชีท แต่ปุ่มบันทึกเขียนลง SQL
+  // บันทึกไปก็ไม่เห็นผลบนจอ (จอโหลดจากชีท) = อาการ "บันทึกสำเร็จแต่ข้อมูลไม่เปลี่ยน" จึงล็อกไว้เลย
+  const [degraded, setDegraded] = useState(false);
   const [syncing, setSyncing] = useState(false);   // กำลังดันชีทขึ้น SQL เอง (ปุ่ม "อัพขึ้น SQL")
 
   // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งตาราง (ใช้หลังกดบันทึก — ตารางเดิมยังอ่านได้ระหว่างรอ)
@@ -69,6 +76,7 @@ export default function QcRdItems() {
         if (res.status === 'success') {
           setItems(res.data || []);
           setSource(res.source || 'sheet');
+          setDegraded(Boolean(res.degraded));
           setError('');
           // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ต้องบอก ไม่งั้นแก้ไปแล้วเห็นข้อมูลเก่าจะงง
           // (ตั้งเฉพาะตอนมี warning จริง ไม่งั้นจะไปลบข้อความ "บันทึกสำเร็จ" ที่เพิ่งขึ้นมา)
@@ -168,6 +176,7 @@ export default function QcRdItems() {
   };
 
   const saveUnits = async () => {
+    if (degraded) { setToast({ ok: false, msg: LOCK_HINT }); return; }
     setSaving(true);
     setToast(null);
     try {
@@ -206,6 +215,7 @@ export default function QcRdItems() {
   }));
 
   const saveItem = async () => {
+    if (degraded) { setToast({ ok: false, msg: LOCK_HINT }); return; }
     const code = String(editItem.code || '').trim();
     if (editItem.isNew && !code) { setToast({ ok: false, msg: 'กรุณากรอกรหัสวัตถุดิบ' }); return; }
     if (editItem.isNew && items.some(i => String(i.code).trim() === code)) {
@@ -239,6 +249,7 @@ export default function QcRdItems() {
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
+    if (degraded) { setToast({ ok: false, msg: LOCK_HINT }); return; }
     setDeleting(true);
     setToast(null);
     try {
@@ -262,6 +273,24 @@ export default function QcRdItems() {
   // การบีบไว้ที่ max-w-6xl ทำให้ต้องเลื่อนแนวนอนตลอดทั้งที่จอกว้างพอ
   return (
     <div className="w-full space-y-5">
+      {/* แถบค้าง (ไม่ใช่ toast ที่หายไปเอง) — สถานะนี้ห้ามแก้ข้อมูล คนใช้ต้องเห็นตลอดเวลาที่เปิดหน้าอยู่ */}
+      {degraded && (
+        <div className="flex items-start gap-2.5 p-4 bg-rose-50 border border-rose-200 rounded-2xl">
+          <AlertTriangle size={18} className="flex-shrink-0 text-rose-500 mt-0.5" />
+          <div className="text-sm">
+            <p className="font-bold text-rose-700">อ่านข้อมูลจาก SQL ไม่ได้ — ล็อกการแก้ไขไว้ชั่วคราว</p>
+            <p className="text-rose-600 mt-0.5">
+              ที่แสดงอยู่เป็นข้อมูลจากชีท ซึ่งอาจไม่ตรงกับของจริงใน SQL — ถ้าบันทึกตอนนี้จะเขียนลง SQL
+              แต่จอยังโหลดจากชีท จึงเห็นเป็น “บันทึกแล้วข้อมูลไม่เปลี่ยน” และเสี่ยงทับของจริงด้วยของเก่า
+              จึงปิดปุ่มบันทึกทั้งหมดไว้ก่อน ดูได้แต่แก้ไม่ได้
+            </p>
+            <button onClick={() => load()}
+              className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-white border border-rose-200 rounded-lg hover:bg-rose-100">
+              ลองใหม่
+            </button>
+          </div>
+        </div>
+      )}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -295,14 +324,14 @@ export default function QcRdItems() {
                 อัพขึ้น SQL
               </button>
             )}
-            <button onClick={openNew}
-              title="เพิ่มวัตถุดิบใหม่ลงชีท item"
-              className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+            <button onClick={openNew} disabled={degraded}
+              title={degraded ? LOCK_HINT : 'เพิ่มวัตถุดิบใหม่ลงทะเบียนวัตถุดิบ'}
+              className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
               <Plus size={14} /> เพิ่มวัตถุดิบ
             </button>
             {autoCount > 0 && (
-              <button onClick={saveUnits} disabled={saving}
-                title="บันทึกหน่วยที่วิเคราะห์ได้ลงช่องหน่วยของวัตถุดิบ (เฉพาะช่องที่ยังว่าง)"
+              <button onClick={saveUnits} disabled={saving || degraded}
+                title={degraded ? LOCK_HINT : 'บันทึกหน่วยที่วิเคราะห์ได้ลงช่องหน่วยของวัตถุดิบ (เฉพาะช่องที่ยังว่าง)'}
                 className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 บันทึกหน่วยที่วิเคราะห์ ({autoCount})
@@ -455,13 +484,13 @@ export default function QcRdItems() {
                   </td>
                   <td className="px-4 py-2 text-center">
                     <div className="inline-flex items-center gap-1.5">
-                      <button onClick={() => openEdit(i)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50">
+                      <button onClick={() => openEdit(i)} disabled={degraded} title={degraded ? LOCK_HINT : ''}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:text-slate-300 disabled:hover:bg-white">
                         <Pencil size={12} /> แก้ไข
                       </button>
                       <button onClick={() => setDeleteTarget({ code: i.code, name: i.name, row: i._row })}
-                        title="ลบวัตถุดิบนี้"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-500 bg-white border border-slate-200 rounded-lg hover:bg-rose-50 hover:border-rose-200">
+                        disabled={degraded} title={degraded ? LOCK_HINT : 'ลบวัตถุดิบนี้'}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-500 bg-white border border-slate-200 rounded-lg hover:bg-rose-50 hover:border-rose-200 disabled:text-slate-300 disabled:hover:bg-white disabled:hover:border-slate-200">
                         <Trash2 size={12} />
                       </button>
                     </div>
@@ -673,7 +702,7 @@ export default function QcRdItems() {
             <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-2">
               <button onClick={() => setEditItem(null)} disabled={savingItem}
                 className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
-              <button onClick={saveItem} disabled={savingItem}
+              <button onClick={saveItem} disabled={savingItem || degraded} title={degraded ? LOCK_HINT : ''}
                 className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
                 {savingItem ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />}
                 {savingItem ? 'กำลังบันทึก…' : (editItem.isNew ? 'เพิ่มวัตถุดิบ' : 'บันทึก')}
@@ -694,13 +723,15 @@ export default function QcRdItems() {
                 <p className="text-sm text-slate-500 mt-1">
                   <span className="font-mono text-xs text-slate-400">{deleteTarget.code}</span> {deleteTarget.name}
                 </p>
-                <p className="text-xs text-rose-500 mt-2">ลบทั้งแถวออกจากชีท item ทันที — ย้อนกลับไม่ได้</p>
+                <p className="text-xs text-rose-500 mt-2">
+                  ลบออกจาก{source === 'sql' ? 'ทะเบียนวัตถุดิบใน SQL (dbo.stock_item)' : 'ชีท item ทั้งแถว'}ทันที — ย้อนกลับไม่ได้
+                </p>
               </div>
             </div>
             <div className="p-4 border-t border-slate-100 flex items-center justify-end gap-2">
               <button onClick={() => setDeleteTarget(null)} disabled={deleting}
                 className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
-              <button onClick={confirmDelete} disabled={deleting}
+              <button onClick={confirmDelete} disabled={deleting || degraded} title={degraded ? LOCK_HINT : ''}
                 className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-rose-500 hover:bg-rose-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
                 {deleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
                 {deleting ? 'กำลังลบ…' : 'ลบเลย'}
