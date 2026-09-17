@@ -1,7 +1,12 @@
 // ประวัติสแกนหน้า/สแกนนิ้ว จากเครื่องสแกน ZKBio Time 9
 //
 //   GET /api/attendance?start=YYYY-MM-DD&end=YYYY-MM-DD[&branch=รหัสสาขา][&emp=รหัสพนักงาน]
-//   → { status:'success', branch, start, end, count, truncated, source, data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
+//   → { status:'success', branch, start, end, from, count, truncated, missing, source,
+//       data:[{ empCode, name, time, date, state, stateLabel, area, terminal }] }
+//
+// ช่วงที่ยาวกว่า CHUNK_DAYS วัน จะถูกหั่นเป็นก้อนละไม่กี่วันแล้วยิงทีละก้อน (ดู runInChunks)
+// เพราะต้นทางแต่ละทางมีเพดานแถวของตัวเอง — ขอทีเดียวทั้งเดือนแล้วชนเพดานเมื่อไหร่
+// จะมี "ทั้งวัน" หายไปเงียบๆ โดยที่เราไม่รู้ว่ามันตัดวันต้นช่วงหรือวันท้ายช่วงทิ้ง
 //
 // มีสามทางให้ดึง ลองทีละทางจนกว่าจะได้ (การเชื่อมต่อ/คิวรี่อยู่ใน lib/zkDb.js):
 //   office-server — /attendance (ไล่ลองหลาย base: Cloudflare Tunnel, เครื่องคลาวด์, เครื่องเดิม)
@@ -34,6 +39,16 @@ export function exclusiveEnd(end) {
   d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);
 }
+
+/** เลื่อนวันแบบ YYYY-MM-DD (คิดบน UTC ไม่ให้เวลาท้องถิ่นของเซิร์ฟเวอร์มาทำวันเพี้ยน) */
+export function addDays(ymd, n) {
+  const d = new Date(ymd + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** วันของแถว — ทาง office ส่ง date มาให้แล้ว ทางอื่นตัดเอาจาก time */
+const rowDate = (r) => txt(r.date) || txt(r.time).slice(0, 10);
 
 /** แปลงแถวดิบจาก SQL + ชื่อพนักงาน ให้เป็นรูปที่หน้าเว็บใช้ */
 export function mapPunchRows(rows, nameOf = {}) {
@@ -92,6 +107,98 @@ const WAYS = {
   sql:    { run: viaSqlDirect,    label: () => 'ต่อ SQL ตรง',                            code: 'ZK_CONNECT_FAILED' },
 };
 
+// ── หั่นช่วงวันที่เป็นก้อน ──────────────────────────────────────────────
+// เพดานแถวของต้นทาง (office-server / host API / TOP ของ SQL) ทำให้ขอทีเดียวทั้งเดือน
+// แบบทุกสาขาแล้วได้ข้อมูลไม่ครบ — และวันที่หายคือ "หายทั้งวัน" ไม่ใช่หายบางคน
+// ขอเป็นก้อนละสัปดาห์ก้อนละไม่กี่พันแถว จึงไม่มีก้อนไหนชนเพดานของใครเลย
+
+/** ขนาดก้อน (วัน) — สัปดาห์ละก้อน: ทุกสาขา 7 วัน ≈ 8 พันแถว ยังห่างเพดานทุกทาง */
+export const CHUNK_DAYS = 7;
+/** ยิงพร้อมกันกี่ก้อน — เท่าที่เร็วขึ้นโดยไม่ไปแย่งคอนเนคชันของเครื่องที่ออฟฟิศ */
+const CHUNK_CONCURRENCY = 2;
+
+/** '2026-09-01'..'2026-09-17' -> [{start,end}] ก้อนละไม่เกิน size วัน */
+export function dateChunks(start, end, size = CHUNK_DAYS) {
+  const out = [];
+  for (let s = start; s <= end; s = addDays(s, size)) {
+    const e = addDays(s, size - 1);
+    out.push({ start: s, end: e > end ? end : e });
+  }
+  return out;
+}
+
+/** กันแถวซ้ำตอนรวมก้อน (ก้อนไม่ทับกันอยู่แล้ว แต่ต้นทางอาจส่งซ้ำเอง) */
+const rowKey = (r) => `${txt(r.empCode)}|${txt(r.time)}|${txt(r.state)}|${txt(r.terminal)}`;
+
+/** รวมผลทุกก้อน ตัดตัวซ้ำ แล้วเรียงใหม่→เก่า (ลำดับที่หน้าเว็บคาดหวัง) */
+export function mergePunches(lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists || []) {
+    for (const r of list || []) {
+      const k = rowKey(r);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(r);
+    }
+  }
+  return out.sort((a, b) => txt(b.time).localeCompare(txt(a.time)));
+}
+
+/**
+ * ยิงทางหนึ่งทางให้ครบทุกก้อน — ก้อนไหนล้ม = ทางนี้ล้มทั้งทาง แล้วไปลองทางถัดไป
+ * (ยอมล้มดีกว่าคืนข้อมูลครึ่งๆ ที่ดูเหมือนครบ)
+ *
+ * ก้อนแรกที่ล้มจะหยุดก้อนที่เหลือทันที — ทางที่ติดต่อไม่ได้จะค้างจน timeout ทุกก้อน
+ * ปล่อยให้ยิงต่อจะกินเวลาจนชน maxDuration ก่อนได้ลองทางสำรอง
+ */
+async function runInChunks(run, args) {
+  const chunks = dateChunks(args.start, args.end);
+  if (chunks.length === 1) return mergePunches([await run(args)]);
+
+  const queue = [...chunks];
+  const lists = [];
+  let failed = null;
+  const worker = async () => {
+    for (let c = queue.shift(); c !== undefined && !failed; c = queue.shift()) {
+      try {
+        lists.push(await run({ ...args, start: c.start, end: c.end }));
+      } catch (e) {
+        failed = failed || e;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, queue.length) }, worker));
+  if (failed) throw failed;
+  return mergePunches(lists);
+}
+
+/**
+ * ตัดให้เหลือไม่เกินเพดาน โดยตัด "ทั้งวัน" จากวันเก่าสุดขึ้นมา (แถวเรียงใหม่→เก่ามาแล้ว)
+ * ตัดกลางวันจะได้วันที่มีข้อมูลครึ่งวัน ซึ่งอ่านแล้วเข้าใจผิดว่าพนักงานไม่ได้สแกน
+ * คืน { data, truncated, from } — from = วันเก่าสุดที่ยังอยู่ในชุดข้อมูล
+ */
+export function capByDay(rows, cap = ZK_ROW_CAP) {
+  if ((rows || []).length <= cap) return { data: rows || [], truncated: false, from: null };
+  let n = 0;
+  let day = null;
+  for (const r of rows) {
+    const d = rowDate(r);
+    if (n >= cap && d !== day) break;  // ครบเพดานแล้ว และกำลังจะขึ้นวันใหม่ = พอ
+    day = d;
+    n++;
+  }
+  return { data: rows.slice(0, n), truncated: true, from: day };
+}
+
+/** วันในช่วงที่ไม่มีการสแกนเลยสักครั้ง — ไว้บอกผู้ใช้ว่า "ขาดวันไหน" ตั้งแต่ยังไม่ต้องไล่ดูตาราง */
+export function missingDates(rows, start, end) {
+  const have = new Set((rows || []).map(rowDate));
+  const out = [];
+  for (let d = start; d <= end; d = addDays(d, 1)) if (!have.has(d)) out.push(d);
+  return out;
+}
+
 /**
  * ดึงรายการสแกน — ลองทีละทางตามลำดับ ได้ทางไหนก่อนใช้ทางนั้น
  * ทางแรกเลือกด้วย env ZK_SOURCE (default office) ที่เหลือเป็นทางสำรองเรียงตามเดิม
@@ -108,7 +215,7 @@ async function loadPunches(args) {
   const errs = {};
   for (const name of names) {
     try {
-      return { data: await WAYS[name].run(args), source: name };
+      return { data: await runInChunks(WAYS[name].run, args), source: name };
     } catch (e) {
       errs[name] = e;
     }
@@ -143,17 +250,23 @@ export default async function handler(req, res) {
   try {
     const { data: all, source } = await loadPunches({ start, end, branch, emp });
 
-    // เกินเพดาน = ช่วงวันที่กว้างไป ตัดให้เหลือรายการล่าสุดแล้วเตือนผู้ใช้
-    const truncated = all.length >= ZK_ROW_CAP;
-    const data = truncated ? all.slice(0, ZK_ROW_CAP) : all;
+    // เกินเพดาน = ช่วงวันที่กว้างไป ตัดวันเก่าสุดทิ้งทีละทั้งวันแล้วบอกผู้ใช้ว่าเหลือตั้งแต่วันไหน
+    const { data, truncated, from } = capByDay(all);
+
+    // วันที่ไม่มีสแกนเลย — นับเฉพาะช่วงที่ส่งกลับไปจริง (ถ้าถูกตัด วันก่อนหน้านั้นไม่ใช่ "ขาด")
+    const missing = missingDates(data, truncated ? from : start, end);
 
     return res.status(200).json({
       status: 'success',
       branch, start, end,
+      from: truncated ? from : start,
       count: data.length,
       truncated,
+      missing,
       source,
-      ...(truncated ? { message: `ข้อมูลถูกตัดที่ ${ZK_ROW_CAP.toLocaleString()} รายการ — ช่วงวันที่กว้างเกินไป กรุณาแคบช่วงลงหรือเลือกสาขา` } : {}),
+      ...(truncated
+        ? { message: `ข้อมูลเกิน ${ZK_ROW_CAP.toLocaleString()} รายการ — แสดงตั้งแต่วันที่ ${from} ถึง ${end} เท่านั้น กรุณาแคบช่วงวันที่ลงหรือเลือกสาขา` }
+        : {}),
       data,
     });
   } catch (err) {

@@ -116,8 +116,8 @@ if (!zkInstance) zkConfig.port = Number(process.env.ZK_DB_PORT) || 1433;
 const ZK_TRANS_TABLE = (process.env.ZK_TRANS_TABLE || 'iclock_transaction').replace(/[^A-Za-z0-9_]/g, '');
 const ZK_EMP_TABLE   = (process.env.ZK_EMP_TABLE   || 'personnel_employee').replace(/[^A-Za-z0-9_]/g, '');
 const ZK_DEPT_TABLE  = (process.env.ZK_DEPT_TABLE  || 'personnel_department').replace(/[^A-Za-z0-9_]/g, '');
-// เพดานจำนวนแถวของ /zk/transactions (ค่านี้ต้องตรงกับรายการ ZK_ROW_CAPS ใน pages/api/attendance.js
-// ซึ่งใช้ตรวจว่าข้อมูลถูกตัดเพราะชนเพดานหรือเปล่า)
+// เพดานจำนวนแถวของ /zk/transactions — ฝั่ง /api/attendance หั่นช่วงวันที่เป็นก้อนละสัปดาห์
+// ก่อนยิงมาแล้ว ปกติจึงไม่ชนเพดานนี้ (เพดานเป็นแค่กันเหนียวเวลามีใครยิงช่วงยาวๆ มาตรงๆ)
 const ZK_MAX_ROWS = Math.max(1, Number(process.env.ZK_MAX_ROWS) || 100000);
 
 // ต่อ ZKBio แบบ lazy: ต่อครั้งแรกเมื่อมีคนเรียก /zk/* — ต่อไม่ได้ก็ไม่กระทบ API ยอดขายหลัก
@@ -353,14 +353,17 @@ app.get('/zk/transactions', async (req, res) => {
     // เพดานแถว: หน้า "ดูสแกนหน้า" มีช่วง "เดือนนี้/เดือนที่แล้ว" แบบทุกสาขา
     // ซึ่งเกิน 20,000 แถวได้ง่าย (≈20 สาขา x 15 คน x 4 ครั้ง/วัน x 30 วัน)
     // แถวเล็กมากและ response ถูก gzip อยู่แล้ว จึงขยายเพดานได้โดยไม่หนัก
-    // (ถ้าชนเพดานพอดี ฝั่ง /api/attendance จะเตือนผู้ใช้ให้แคบช่วงวันที่ลง)
+    //
+    // เรียงใหม่→เก่า เพื่อให้ TOP ตัด "วันเก่าสุด" ทิ้งเวลาชนเพดาน — เรียงเก่า→ใหม่แล้วโดนตัด
+    // จะทำให้วันล่าสุดหายไปทั้งวันโดยไม่มีอะไรบอก ซึ่งเป็นวันที่คนดูหน้านี้อยากเห็นที่สุด
+    // (ฝั่ง /api/attendance เรียงใหม่→เก่าอยู่แล้ว การสลับตรงนี้จึงไม่กระทบรูปข้อมูลที่ส่งไป)
     const result = await dbReq.query(`
       SELECT TOP ${ZK_MAX_ROWS}
         emp_code, punch_time, punch_state, verify_type,
         terminal_sn, terminal_alias, area_alias
       FROM dbo.${ZK_TRANS_TABLE}
       WHERE punch_time >= @start AND punch_time <= @end${empFilter}${areaFilter}
-      ORDER BY punch_time
+      ORDER BY punch_time DESC
     `);
     res.json({ data: result.recordset.map(mapRow) });
   } catch (e) {
