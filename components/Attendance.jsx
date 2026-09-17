@@ -42,13 +42,13 @@ const shortDay = (ymd) => {
 };
 
 /**
- * วันที่ไม่มีการสแกนเลยสักครั้งในช่วงที่ดึงมา (/api/attendance ส่ง missing มาให้)
- * เคยมีกรณีข้อมูลขาดไปหลายวันโดยไม่มีอะไรบอก กว่าจะรู้ก็ตอนไล่ดูตารางทีละแถว
+ * วันที่ไม่มีข้อมูลเลยสักแถวในช่วงที่ดึงมา — ทั้ง /api/attendance และ /api/hr-schedule
+ * ส่ง missing มาให้ เคยมีกรณีข้อมูลขาดไปหลายวันโดยไม่มีอะไรบอก กว่าจะรู้ก็ตอนไล่ดูทีละแถว
  */
-const missingText = (dates) => {
+const missingText = (dates, what) => {
   const shown = dates.slice(0, 12).map(shortDay).join(', ');
   const more = dates.length > 12 ? ` และอีก ${dates.length - 12} วัน` : '';
-  return `ไม่มีข้อมูลสแกนของวันที่ ${shown}${more} (รวม ${dates.length} วัน)`;
+  return `ไม่มี${what}ของวันที่ ${shown}${more} (รวม ${dates.length} วัน)`;
 };
 
 const Dash = () => <span className="text-slate-300">—</span>;
@@ -158,7 +158,7 @@ export default function Attendance() {
 
       // ขาดเป็นวันๆ = คนละเรื่องกับ "ไม่มีข้อมูลเลย" — บอกไปเลยว่าขาดวันไหน จะได้ไม่ต้องไล่หาเอง
       const miss = Array.isArray(json.missing) ? json.missing : [];
-      setMissNote(punches.length && miss.length ? missingText(miss) : '');
+      setMissNote(punches.length && miss.length ? missingText(miss, 'ข้อมูลสแกน') : '');
 
       const range = s === e ? s : `${s} ถึง ${e}`;
       setLoadedInfo(`${range} · ${b || 'ทุกสาขา'} · ${json.count || 0} ครั้ง`);
@@ -209,6 +209,9 @@ export default function Attendance() {
       if (json.unknown?.length) notes.push(`ไม่มีสาขา ${json.unknown.join(', ')} ในฐานข้อมูลตารางงาน`);
       if (json.failed?.length) notes.push(`ดึงตารางงานไม่ได้: ${json.failed.map((f) => f.branch).join(', ')}`);
       if (json.truncated) notes.push(json.message || 'ตารางงานถูกตัดเพราะช่วงวันที่กว้างเกินไป');
+      // ขาดเป็นวันๆ เหมือนฝั่งเวลาสแกน — บอกไว้ด้วยว่าสองฝั่งขาดวันเดียวกันหรือคนละวัน
+      const missSched = Array.isArray(json.missing) ? json.missing : [];
+      if (json.count > 0 && missSched.length) notes.push(missingText(missSched, 'ตารางงาน'));
       if (json.count === 0 && notes.length === 0) notes.push('ช่วงวันที่นี้ยังไม่มีใครลงตารางงานไว้');
       setSchedNote(notes.join(' · '));
     } catch (err) {

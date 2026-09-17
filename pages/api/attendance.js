@@ -21,6 +21,8 @@ import {
   hasDirectDbConfig, preferredSource,
   getZkPool, zkNameMap, queryPunches, ZK_ROW_CAP,
 } from '../../lib/zkDb';
+// ตัวช่วยชุดเดียวกับที่ /api/hr-schedule ใช้ — ทั้งสองฝั่งของหน้านี้เจอปัญหาเพดานแถวเหมือนกัน
+import { dateChunks, capByDay, missingDates, dayOf } from '../../lib/dateRange';
 
 // ช่วงกว้างๆ ทุกสาขาใช้เวลาหลายสิบวินาที — เผื่อเวลาให้พอเหมือน /api/sales
 export const config = { maxDuration: 60 };
@@ -40,15 +42,8 @@ export function exclusiveEnd(end) {
   return d.toISOString().slice(0, 10);
 }
 
-/** เลื่อนวันแบบ YYYY-MM-DD (คิดบน UTC ไม่ให้เวลาท้องถิ่นของเซิร์ฟเวอร์มาทำวันเพี้ยน) */
-export function addDays(ymd, n) {
-  const d = new Date(ymd + 'T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
 /** วันของแถว — ทาง office ส่ง date มาให้แล้ว ทางอื่นตัดเอาจาก time */
-const rowDate = (r) => txt(r.date) || txt(r.time).slice(0, 10);
+const rowDate = (r) => txt(r.date) || dayOf(r.time);
 
 /** แปลงแถวดิบจาก SQL + ชื่อพนักงาน ให้เป็นรูปที่หน้าเว็บใช้ */
 export function mapPunchRows(rows, nameOf = {}) {
@@ -117,16 +112,6 @@ export const CHUNK_DAYS = 7;
 /** ยิงพร้อมกันกี่ก้อน — เท่าที่เร็วขึ้นโดยไม่ไปแย่งคอนเนคชันของเครื่องที่ออฟฟิศ */
 const CHUNK_CONCURRENCY = 2;
 
-/** '2026-09-01'..'2026-09-17' -> [{start,end}] ก้อนละไม่เกิน size วัน */
-export function dateChunks(start, end, size = CHUNK_DAYS) {
-  const out = [];
-  for (let s = start; s <= end; s = addDays(s, size)) {
-    const e = addDays(s, size - 1);
-    out.push({ start: s, end: e > end ? end : e });
-  }
-  return out;
-}
-
 /** กันแถวซ้ำตอนรวมก้อน (ก้อนไม่ทับกันอยู่แล้ว แต่ต้นทางอาจส่งซ้ำเอง) */
 const rowKey = (r) => `${txt(r.empCode)}|${txt(r.time)}|${txt(r.state)}|${txt(r.terminal)}`;
 
@@ -153,7 +138,7 @@ export function mergePunches(lists) {
  * ปล่อยให้ยิงต่อจะกินเวลาจนชน maxDuration ก่อนได้ลองทางสำรอง
  */
 async function runInChunks(run, args) {
-  const chunks = dateChunks(args.start, args.end);
+  const chunks = dateChunks(args.start, args.end, CHUNK_DAYS);
   if (chunks.length === 1) return mergePunches([await run(args)]);
 
   const queue = [...chunks];
@@ -171,32 +156,6 @@ async function runInChunks(run, args) {
   await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, queue.length) }, worker));
   if (failed) throw failed;
   return mergePunches(lists);
-}
-
-/**
- * ตัดให้เหลือไม่เกินเพดาน โดยตัด "ทั้งวัน" จากวันเก่าสุดขึ้นมา (แถวเรียงใหม่→เก่ามาแล้ว)
- * ตัดกลางวันจะได้วันที่มีข้อมูลครึ่งวัน ซึ่งอ่านแล้วเข้าใจผิดว่าพนักงานไม่ได้สแกน
- * คืน { data, truncated, from } — from = วันเก่าสุดที่ยังอยู่ในชุดข้อมูล
- */
-export function capByDay(rows, cap = ZK_ROW_CAP) {
-  if ((rows || []).length <= cap) return { data: rows || [], truncated: false, from: null };
-  let n = 0;
-  let day = null;
-  for (const r of rows) {
-    const d = rowDate(r);
-    if (n >= cap && d !== day) break;  // ครบเพดานแล้ว และกำลังจะขึ้นวันใหม่ = พอ
-    day = d;
-    n++;
-  }
-  return { data: rows.slice(0, n), truncated: true, from: day };
-}
-
-/** วันในช่วงที่ไม่มีการสแกนเลยสักครั้ง — ไว้บอกผู้ใช้ว่า "ขาดวันไหน" ตั้งแต่ยังไม่ต้องไล่ดูตาราง */
-export function missingDates(rows, start, end) {
-  const have = new Set((rows || []).map(rowDate));
-  const out = [];
-  for (let d = start; d <= end; d = addDays(d, 1)) if (!have.has(d)) out.push(d);
-  return out;
 }
 
 /**
@@ -251,10 +210,10 @@ export default async function handler(req, res) {
     const { data: all, source } = await loadPunches({ start, end, branch, emp });
 
     // เกินเพดาน = ช่วงวันที่กว้างไป ตัดวันเก่าสุดทิ้งทีละทั้งวันแล้วบอกผู้ใช้ว่าเหลือตั้งแต่วันไหน
-    const { data, truncated, from } = capByDay(all);
+    const { data, truncated, from } = capByDay(all, ZK_ROW_CAP, rowDate);
 
     // วันที่ไม่มีสแกนเลย — นับเฉพาะช่วงที่ส่งกลับไปจริง (ถ้าถูกตัด วันก่อนหน้านั้นไม่ใช่ "ขาด")
-    const missing = missingDates(data, truncated ? from : start, end);
+    const missing = missingDates(data, truncated ? from : start, end, rowDate);
 
     return res.status(200).json({
       status: 'success',

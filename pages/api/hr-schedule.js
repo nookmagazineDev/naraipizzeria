@@ -1,7 +1,7 @@
 // ตารางงานที่สาขาลงไว้ (dbo.hr_timesheet ในฐานข้อมูล narai_hr) — ใช้คู่กับ /api/attendance
 //
 //   GET /api/hr-schedule?start=YYYY-MM-DD&end=YYYY-MM-DD[&branch=รหัสสาขา][&branches=a,b,c]
-//   → { status:'success', start, end, branches, count, data:[...], failed:[...] }
+//   → { status:'success', start, end, from, branches, count, truncated, missing, data:[...], failed:[...] }
 //
 // ไม่ระบุสาขา = ดึงทุกสาขาที่มีในฐานข้อมูล HR (หน้า "ดูสแกนหน้า" ใช้ทางนี้ตอนเลือก "ทุกสาขา"
 // เพราะสาขาที่หยุดทั้งสาขาจะไม่มีสแกนเลย ถ้าเดารายชื่อสาขาจากข้อมูลสแกนก็จะมองไม่เห็นวันหยุดนั้น)
@@ -10,16 +10,27 @@
 // รหัสสาขาที่เครื่องสแกนส่งมา (area_alias) เป็นตัวพิมพ์ใหญ่ ส่วนในฐาน HR เก็บตามที่หน้าเว็บ
 // ของสาขาใช้ (ตัวพิมพ์เล็ก) จึงเทียบแบบไม่สนตัวพิมพ์ แล้วส่งตัวสะกดที่เก็บจริงไปคิวรี่
 import { fetchScheduleBranches, fetchTimesheet, fetchTimesheetMany } from '../../lib/hrSchedule';
+// ตัวช่วยชุดเดียวกับ /api/attendance — ทั้งสองฝั่งของหน้า "ดูสแกนหน้า" เจอปัญหาเพดานแถวเหมือนกัน
+import { capByDay, missingDates, dayOf } from '../../lib/dateRange';
 
 // ยิงทีละสาขาหลายรอบ — เผื่อเวลาให้พอเหมือน /api/attendance
 export const config = { maxDuration: 60 };
 
 // เพดานเดียวกับ ZK_ROW_CAP ของ /api/attendance — ทุกสาขา x ทั้งเดือนได้หลักหมื่นแถว
 // ถ้าปล่อยไม่จำกัด หน้าเว็บต้องวาดตารางใหญ่มากจนหน่วง ชนเพดานเมื่อไหร่ = ช่วงวันที่กว้างเกิน
+//
+// เวลาตัดต้องตัด "ทั้งวัน" จากวันเก่าสุด (capByDay) — แถวที่ได้มาเรียงตามลำดับที่สาขาไหน
+// ตอบก่อน การตัดดื้อๆ ด้วย slice จึงเท่ากับทำ "บางสาขา" หายไปทั้งสาขาแบบสุ่ม
 const ROW_CAP = 20000;
 
 const txt = (v) => (v == null ? '' : String(v).trim());
 const isYmd = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+/** วันของแถวตารางงาน — workDate อาจมาเป็น '2026-09-15' หรือ '2026-09-15T00:00:00.000Z' */
+const rowDate = (r) => dayOf(r.workDate);
+
+/** แถวที่สาขากด "ล้างข้อมูล" ทิ้งไว้ — หน้าเว็บไม่แสดง จึงไม่นับว่าวันนั้นมีตารางงาน */
+const isCleared = (r) => txt(r.otherNote) === 'ล้างข้อมูล';
 
 /** 'SJP,crm' -> ['SJP','crm'] (ตัดค่าว่างและตัวซ้ำทิ้ง) */
 const splitList = (v) => [...new Set(txt(v).split(',').map((s) => s.trim()).filter(Boolean))];
@@ -68,10 +79,12 @@ export default async function handler(req, res) {
       return res.status(200).json({
         status: 'success',
         start, end,
+        from: start,
         branches: [],
         unknown,
         count: 0,
         truncated: false,
+        missing: [],
         failed: [],
         data: [],
       });
@@ -81,19 +94,30 @@ export default async function handler(req, res) {
       ? { rows: await fetchTimesheet({ branch: resolved[0], start, end }), failed: [] }
       : await fetchTimesheetMany({ branches: resolved, start, end });
 
-    const truncated = rows.length > ROW_CAP;
-    const data = truncated ? rows.slice(0, ROW_CAP) : rows;
+    // เรียงใหม่→เก่าก่อนตัด ไม่งั้น "วันเก่าสุด" ที่ capByDay จะตัด ไม่ใช่วันเก่าสุดจริงๆ
+    // (แถวมาเรียงตามสาขาที่ตอบก่อน) — เรียงสาขา/ชื่อต่อท้ายให้ผลออกมาเหมือนเดิมทุกครั้ง
+    rows.sort((a, b) =>
+      rowDate(b).localeCompare(rowDate(a)) ||
+      txt(a.branch).localeCompare(txt(b.branch)) ||
+      txt(a.name).localeCompare(txt(b.name)));
+
+    const { data, truncated, from } = capByDay(rows, ROW_CAP, rowDate);
+
+    // วันที่ไม่มีตารางงานเลยสักสาขา — นับเฉพาะช่วงที่ส่งกลับไปจริง และไม่นับแถวที่ถูกล้างข้อมูล
+    const missing = missingDates(data.filter((r) => !isCleared(r)), truncated ? from : start, end, rowDate);
 
     return res.status(200).json({
       status: 'success',
       start, end,
+      from: truncated ? from : start,
       branches: resolved,
       unknown,
       count: data.length,
       truncated,
+      missing,
       failed,
       ...(truncated
-        ? { message: `ตารางงานถูกตัดที่ ${ROW_CAP.toLocaleString()} แถว — ช่วงวันที่กว้างเกินไป กรุณาแคบช่วงลงหรือเลือกสาขา` }
+        ? { message: `ตารางงานเกิน ${ROW_CAP.toLocaleString()} แถว — แสดงตั้งแต่วันที่ ${from} ถึง ${end} เท่านั้น กรุณาแคบช่วงวันที่ลงหรือเลือกสาขา` }
         : {}),
       data,
     });
