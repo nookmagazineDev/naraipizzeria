@@ -35,6 +35,22 @@ const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const num2 = (v) => (v != null ? v.toFixed(2) : '-');
 
+/** '2026-09-15' -> '15/9' */
+const shortDay = (ymd) => {
+  const [, m, d] = String(ymd || '').split('-');
+  return m && d ? `${Number(d)}/${Number(m)}` : String(ymd || '');
+};
+
+/**
+ * วันที่ไม่มีข้อมูลเลยสักแถวในช่วงที่ดึงมา — ทั้ง /api/attendance และ /api/hr-schedule
+ * ส่ง missing มาให้ เคยมีกรณีข้อมูลขาดไปหลายวันโดยไม่มีอะไรบอก กว่าจะรู้ก็ตอนไล่ดูทีละแถว
+ */
+const missingText = (dates, what) => {
+  const shown = dates.slice(0, 12).map(shortDay).join(', ');
+  const more = dates.length > 12 ? ` และอีก ${dates.length - 12} วัน` : '';
+  return `ไม่มี${what}ของวันที่ ${shown}${more} (รวม ${dates.length} วัน)`;
+};
+
 const Dash = () => <span className="text-slate-300">—</span>;
 /** ช่องเวลา 'HH:mm' — ว่าง = ไม่มีข้อมูลฝั่งนั้น */
 const timeCell = (t, cls = '') => (t ? <span className={`font-mono ${cls}`}>{t}</span> : <Dash />);
@@ -99,6 +115,7 @@ export default function Attendance() {
   const [error, setError] = useState('');
   const [errorCode, setErrorCode] = useState('');   // แยกสาเหตุ เพื่อขึ้นวิธีแก้ให้ตรงจุด
   const [warning, setWarning] = useState('');        // เตือนตอนข้อมูลถูกตัดเพราะช่วงกว้างเกิน
+  const [missNote, setMissNote] = useState('');      // วันที่ไม่มีการสแกนเลยในช่วงที่ดึงมา
   const [rows, setRows] = useState(null);            // null = ยังไม่เคยดึง
   const [schedRows, setSchedRows] = useState([]);    // ตารางงานที่สาขาลงไว้ ในช่วงวันเดียวกัน
   const [schedNote, setSchedNote] = useState('');    // ดึงตารางงานไม่ได้/ได้ไม่ครบทุกสาขา
@@ -138,6 +155,11 @@ export default function Attendance() {
       const punches = json.data || [];
       setRows(punches);
       setWarning(json.truncated ? (json.message || 'ข้อมูลถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
+
+      // ขาดเป็นวันๆ = คนละเรื่องกับ "ไม่มีข้อมูลเลย" — บอกไปเลยว่าขาดวันไหน จะได้ไม่ต้องไล่หาเอง
+      const miss = Array.isArray(json.missing) ? json.missing : [];
+      setMissNote(punches.length && miss.length ? missingText(miss, 'ข้อมูลสแกน') : '');
+
       const range = s === e ? s : `${s} ถึง ${e}`;
       setLoadedInfo(`${range} · ${b || 'ทุกสาขา'} · ${json.count || 0} ครั้ง`);
 
@@ -155,6 +177,7 @@ export default function Attendance() {
       setScanEdits([]);
       setEditNote('');
       setWarning('');
+      setMissNote('');
       setError(err.message || 'ดึงข้อมูลไม่สำเร็จ');
       setErrorCode(err.code || '');
     } finally {
@@ -186,6 +209,9 @@ export default function Attendance() {
       if (json.unknown?.length) notes.push(`ไม่มีสาขา ${json.unknown.join(', ')} ในฐานข้อมูลตารางงาน`);
       if (json.failed?.length) notes.push(`ดึงตารางงานไม่ได้: ${json.failed.map((f) => f.branch).join(', ')}`);
       if (json.truncated) notes.push(json.message || 'ตารางงานถูกตัดเพราะช่วงวันที่กว้างเกินไป');
+      // ขาดเป็นวันๆ เหมือนฝั่งเวลาสแกน — บอกไว้ด้วยว่าสองฝั่งขาดวันเดียวกันหรือคนละวัน
+      const missSched = Array.isArray(json.missing) ? json.missing : [];
+      if (json.count > 0 && missSched.length) notes.push(missingText(missSched, 'ตารางงาน'));
       if (json.count === 0 && notes.length === 0) notes.push('ช่วงวันที่นี้ยังไม่มีใครลงตารางงานไว้');
       setSchedNote(notes.join(' · '));
     } catch (err) {
@@ -558,6 +584,17 @@ export default function Attendance() {
         <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-sm flex items-start gap-2">
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
           <span>{warning}</span>
+        </div>
+      )}
+
+      {/* ขาดข้อมูลบางวัน — ไม่ใช่ error (ทางที่ดึงมาทำงานปกติ) แต่ต้องเห็นทันทีว่าขาดวันไหน */}
+      {missNote && !loading && (
+        <div className="p-3 bg-orange-50 border border-orange-200 text-orange-800 rounded-xl text-sm flex items-start gap-2">
+          <CalendarDays size={18} className="mt-0.5 flex-shrink-0" />
+          <span>
+            {missNote} — ถ้าเป็นวันที่ร้านเปิด ให้ตรวจว่าเครื่องสแกนของสาขาส่งข้อมูลเข้า ZKBio
+            และเซิร์ฟเวอร์ที่ออฟฟิศยังรันอยู่ไหม (วันหยุดของสาขาจะไม่มีสแกนอยู่แล้ว)
+          </span>
         </div>
       )}
 
