@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud } from 'lucide-react';
+import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud, Download } from 'lucide-react';
 import { apiCall, syncNote, syncOk, syncSql } from '../lib/qcrdApi';
 import { useBranches } from '../lib/useBranches';
 
@@ -50,6 +50,7 @@ export default function QcRdItems() {
   const [storeFilter, setStoreFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');   // '' = ทุกประเภท, MATERIAL, PACKAGING
   const [branchFilter, setBranchFilter] = useState(''); // '' = ทุกสาขา, รหัสสาขา, NO_BRANCH
+  const [posFilter, setPosFilter] = useState('');     // '' = ทุกรายการ, NO_POS, DUP_POS
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null); // { ok, msg }
   const [editItem, setEditItem] = useState(null); // { code, name, status, subs[] }
@@ -106,6 +107,8 @@ export default function QcRdItems() {
   const packagingCount = useMemo(() => items.filter(i => i.itemType === PACKAGING).length, [items]);
   const NO_STORE = '__none__'; // ค่าพิเศษของตัวกรอง = แสดงเฉพาะรายการที่ยังไม่ได้ระบุหมวดสโตร์
   const NO_BRANCH = '__nobranch__'; // เช่นเดียวกัน = แสดงเฉพาะรายการที่ยังไม่ได้ระบุสาขา
+  const NO_POS = '__nopos__';      // เฉพาะตัวที่ยังไม่ได้ผูก itemID ของ POS (ไว้ไล่เติมให้ครบ)
+  const DUP_POS = '__duppos__';    // เฉพาะตัวที่ itemID ไปซ้ำกับวัตถุดิบตัวอื่น (ต้องสะสาง)
 
   // จำนวนไอเทมต่อสาขา — เอาไปโชว์ในตัวเลือกให้รู้ว่าสาขานั้นมีของกี่รายการก่อนกดเลือก
   const branchCounts = useMemo(() => {
@@ -155,13 +158,15 @@ export default function QcRdItems() {
       if (typeFilter === MATERIAL && i.itemType === PACKAGING) return false;
       if (branchFilter === NO_BRANCH) { if ((i.usedBranches || []).length) return false; }
       else if (branchFilter && !(i.usedBranches || []).includes(branchFilter)) return false;
+      if (posFilter === NO_POS && i.posItemId) return false;
+      if (posFilter === DUP_POS && !(i.posItemId && duplicatePos.has(i.posItemId))) return false;
       if (!q) return true;
       // ค้นด้วย itemID ของ POS ได้ด้วย — คนคุมสต๊อกมักถือเลขนี้มาถามว่าคือวัตถุดิบตัวไหน
       return codeMatch(i.code, q) || i.name.toLowerCase().includes(q)
         || (i.posItemId && codeMatch(i.posItemId, q));
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, search, unitFilter, statusFilter, storeFilter, typeFilter, branchFilter]);
+  }, [items, search, unitFilter, statusFilter, storeFilter, typeFilter, branchFilter, posFilter, duplicatePos]);
 
   // ติ๊กครบทุกสาขาแล้วหรือยัง — ต้องมีสาขาในทะเบียนอย่างน้อยหนึ่งตัวถึงจะนับว่า "ครบ"
   // (ช่วงที่ทะเบียนยังโหลดไม่เสร็จ รายการว่าง ถ้าไม่กันไว้ปุ่มจะขึ้นเป็นเลือกครบทั้งที่ยังไม่ได้เลือก)
@@ -292,6 +297,23 @@ export default function QcRdItems() {
     }
   };
 
+  // โหลดรายการที่กรองอยู่เป็น CSV — ใช้ไล่เติม itemID ทีละล็อต หรือส่งให้คนอื่นช่วยกรอก
+  // นำหน้าด้วย BOM ไม่งั้น Excel เปิดแล้วภาษาไทยเป็นตัวยึกยือ
+  const exportCsv = () => {
+    const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const head = ['รหัส', 'itemID (POS)', 'ชื่อ', 'หน่วย', 'หน่วยเบิก', 'ราคาต้นทุน', 'ตัวแปลง', 'สถานะ', 'หมวดสโตร์', 'สาขาที่ใช้'];
+    const body = filtered.map(i => [
+      i.code, i.posItemId, i.name, i.unit, i.requestUnit, i.price ?? '', i.converter ?? '',
+      i.status, i.storeCategory, (i.usedBranches || []).join(' '),
+    ].map(cell).join(','));
+    const blob = new Blob(['\ufeff' + [head.map(cell).join(','), ...body].join('\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `วัตถุดิบ${posFilter === NO_POS ? '-ยังไม่ได้ผูก-itemID' : posFilter === DUP_POS ? '-itemID-ซ้ำ' : ''}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   // เต็มความกว้างจอ — ตารางนี้มีสิบกว่าคอลัมน์ (สาขาที่ใช้ · หมวดสโตร์ · ไอเทมทดแทน)
   // การบีบไว้ที่ max-w-6xl ทำให้ต้องเลื่อนแนวนอนตลอดทั้งที่จอกว้างพอ
   return (
@@ -351,6 +373,11 @@ export default function QcRdItems() {
                 อัพขึ้น SQL
               </button>
             )}
+            <button onClick={exportCsv} disabled={loading || filtered.length === 0}
+              title="โหลดรายการที่กรองอยู่ตอนนี้เป็นไฟล์ CSV (เปิดด้วย Excel ได้)"
+              className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 disabled:text-slate-300 border border-slate-200 text-slate-600 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+              <Download size={14} /> โหลด CSV ({filtered.length.toLocaleString()})
+            </button>
             <button onClick={openNew} disabled={degraded}
               title={degraded ? LOCK_HINT : 'เพิ่มวัตถุดิบใหม่ลงทะเบียนวัตถุดิบ'}
               className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
@@ -370,7 +397,7 @@ export default function QcRdItems() {
         <div className="p-4 flex flex-wrap gap-3 border-b border-slate-100">
           <div className="relative flex-1 min-w-[220px]">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหารหัส / ชื่อวัตถุดิบ…"
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหารหัส / ชื่อวัตถุดิบ / itemID…"
               className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
           </div>
           <select value={unitFilter} onChange={e => setUnitFilter(e.target.value)}
@@ -389,6 +416,13 @@ export default function QcRdItems() {
             <option value="">ทุกหมวดสโตร์ ({storeCategories.length})</option>
             {storeCategories.map(s => <option key={s} value={s}>{s}</option>)}
             {noStoreCount > 0 && <option value={NO_STORE}>— ไม่ได้ระบุ ({noStoreCount})</option>}
+          </select>
+          <select value={posFilter} onChange={e => setPosFilter(e.target.value)}
+            title="ไล่ดูว่ายังเหลือวัตถุดิบตัวไหนที่ยังไม่ได้ผูกกับ itemID ของ POS"
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="">itemID: ทุกรายการ</option>
+            {noPosCount > 0 && <option value={NO_POS}>— ยังไม่ได้ผูก ({noPosCount.toLocaleString()})</option>}
+            {duplicatePos.size > 0 && <option value={DUP_POS}>— ผูกซ้ำกัน ({duplicatePos.size})</option>}
           </select>
           <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
             className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
