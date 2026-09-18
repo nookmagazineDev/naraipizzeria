@@ -1,0 +1,307 @@
+# แผน: ทำ naraipizzeria เป็นทะเบียนสาขากลาง (Branch Hub)
+
+> เอกสารนี้เป็น **แผนที่เสนอ ยังไม่ได้ลงมือ** — อ่านแล้วช่วยตัดสินใจหัวข้อ
+> "เรื่องที่ต้องเคาะก่อนเริ่ม" ท้ายไฟล์ก่อน แล้วค่อยเริ่มเฟส 0
+
+---
+
+## 1. เป้าหมาย
+
+ให้ **naraipizzeria เป็นที่เดียวที่สร้าง แก้ และปิดสาขา** แล้วอีกสองระบบ
+(Narai-branch = ระบบตารางงาน, narai-storefct = ระบบสโตร์/ครัวกลาง) ดึงไปใช้
+เปิดสาขาใหม่ = กรอกที่หน้า `HR → จัดการสาขา` ที่เดียว ไม่ต้องไล่แก้โค้ดแล้ว deploy สามโปรเจค
+
+**ไม่อยู่ในขอบเขต:** ขอรหัสร้านฝั่ง POS (`outlet_id`) ยังต้องได้เลขมาจากผู้ขายระบบ POS
+แล้วเอามากรอกเอง และการตั้ง `area_alias` บนเครื่องสแกนหน้า ZKBio ก็ยังต้องไปทำที่เครื่องนั้น
+ทะเบียนนี้เป็น "สมุดทะเบียน" ไม่ใช่ตัวไปสั่งระบบปลายทาง
+
+---
+
+## 2. สภาพตอนนี้ — ทะเบียนสาขามีอยู่ 3 ชุด ไม่ตรงกัน
+
+| ที่อยู่ | เก็บอะไร | ใครแก้ | สภาพ |
+|---|---|---|---|
+| `InventoryNarai.dbo.hr_branch` (โปรเจคนี้) | code, name, outlet_id, status, note, sort_order | หน้า `HR → จัดการสาขา` | ✅ แก้จากหน้าเว็บได้แล้ว |
+| `narai_hr.dbo.hr_branch` (Narai-branch) | branch, branch_name, outlet_id, **daily_target, monthly_target, max_wage**, is_active | ไม่มีหน้าจอ — ต้อง `UPDATE` ด้วยมือ (ดู `docs/hr-sql-migration.md:266` ของโปรเจคนั้น) | ⚠️ แก้ได้เฉพาะคนที่เข้า SSMS ได้ |
+| `narai-storefct/lib/branches.js` → `BRANCH_MAP` | code → outlet_id + ชื่อ | ฝังในโค้ด — แก้แล้วต้อง deploy | ⚠️ ไฟล์เขียนไว้เองว่า "ถ้ามีสาขาใหม่ ต้องมาเติมที่นี่" |
+
+### 2.1 ของที่หลุดกันไปแล้วจริง ๆ (เจอจากการไล่โค้ด)
+
+| รหัส | โปรเจคนี้ | storefct | หมายเหตุ |
+|---|---|---|---|
+| **HPS** | `109` | `902` | **ขัดกันตรง ๆ** — มีตัวใดตัวหนึ่งที่ผิด ยอดสาขานี้ฝั่งใดฝั่งหนึ่งจึงอ่านผิดร้านอยู่ |
+| **STS** | ไม่มี | `55` | โปรเจคนี้ไม่รู้จักสาขานี้เลย |
+| **ZK3** | ไม่มี | `906` | เหมือนกัน |
+
+> `UQ_hr_branch_outlet` ในสคีมาห้าม `outlet_id` ซ้ำอยู่แล้ว เพราะ "เลขซ้ำ = ยอดขายสองสาขารวมกันมั่ว"
+> แต่ข้อห้ามนั้นคุมได้แค่ภายในตารางตัวเอง ข้าม**ระบบ**ยังหลุดได้อยู่ดี — ซึ่งก็หลุดไปแล้วตามตาราง
+
+### 2.2 ตารางแมปที่ยัง hardcode อยู่ (ทั้งที่มีทะเบียนแล้ว)
+
+- `pages/index.js:87` — `OUTLETS` 20 ตัว ใช้แปลง outletID → ชื่อสาขาทั้งหน้าแดชบอร์ด/รายงานยอดขาย
+- `narai-storefct/lib/branches.js` — `BRANCH_MAP` 23 ตัว
+- ฝั่ง API ของโปรเจคนี้ **แก้ไปแล้ว** — 7 ไฟล์ (`usage`, `orderd`, `withdrawals`, `extra-orders`,
+  `usagebytable`, `usage-bom`, `ai-chat`) อ่านผ่าน `lib/branchRegistry.js` เรียบร้อย
+
+### 2.3 กติกา "รหัสสองตัวคือร้านเดียวกัน" (alias) กระจายอยู่ 5 ที่
+
+```
+naraipizzeria/lib/branchRegistry.js      ALIASES = { zjp: 7, zip: 12 }
+naraipizzeria/pages/api/usage.js:70      { 'zjp': 'sjp' }
+Narai-branch/src/utils/branchAlias.js    [['zjp','sjp']]
+Narai-branch/office-server/hr-session.js BRANCH_ALIAS_GROUPS   (ไฟล์บอกเองว่า "เพิ่มคู่ใหม่ต้องแก้ทั้งสองที่")
+narai-storefct/lib/branches.js           ALIASES = { zjp: 'sjp' }
+```
+
+ห้าที่นี้ไม่มีอะไรบังคับให้ตรงกัน — เพิ่มคู่ใหม่แล้วลืมที่ใดที่หนึ่ง อาการคือ
+"ล็อกอินรหัสนี้แล้วข้อมูลขึ้นไม่ครบ" ซึ่งเงียบมากและหายาก (เคสจริงของ `zjp`/`sjp` ที่เขียนไว้ในไฟล์พวกนั้น)
+
+### 2.4 ข้อได้เปรียบที่ทำให้แผนนี้ง่ายกว่าที่คิด
+
+`Narai-branch/office-server/hr-db.js:6` เขียนไว้ว่า **`narai_hr` กับ `InventoryNarai` อยู่บน
+อินสแตนซ์เดียวกัน** (`NARAI-PIZZARIA\SQLEXPRESS`) และไฟล์นั้นเปิด pool ไปที่ `InventoryNarai`
+ไว้อยู่แล้ว (`export const stockDb`, บรรทัด 117)
+
+แปลว่า **ฝั่งตารางงานไม่ต้องยิง API ข้ามเน็ตมาเอาทะเบียนเลย** — อ่านข้ามฐานด้วยชื่อสามท่อน
+(`InventoryNarai.dbo.hr_branch`) ได้ตรง ๆ ไม่ต้องมีงาน sync ไม่ต้องมีข้อมูลสองชุดให้หลุดกัน
+
+---
+
+## 3. หลักการออกแบบ
+
+1. **ทะเบียนแม่มีที่เดียว** — `InventoryNarai.dbo.hr_branch` ที่เดียวเท่านั้นที่เขียนได้
+   ที่อื่นเป็น "สำเนาที่อ่านอย่างเดียว" หรือ view เสมอ
+2. **`branch_code` เป็นคีย์ถาวร ห้ามแก้ ห้ามลบ** — กติกานี้มีอยู่แล้วใน `lib/branchSql.mjs`
+   และต้องยกระดับให้แรงขึ้น เพราะตอนนี้รหัสนี้ถูกอ้างข้ามไปอีกสองระบบแล้ว
+   (ตารางงาน, ข้อมูลสแกนหน้า, ค่าใช้จ่าย, คอลัมน์ "สาขาที่ใช้" ของวัตถุดิบ, ใบเบิกฝั่งสโตร์)
+   เลิกใช้สาขา = ตั้ง `ปิดการใช้งาน` ไม่ใช่ลบแถว
+3. **ตัวแปลรหัสห้ามพัง** — ทุกทางอ่านต้องมีทางถอย ชุดเดิมที่ทำไว้แล้วใน
+   `lib/branchRegistry.js` (deadline 5 วิ → รายชื่อสำรองในโค้ด) เป็นแม่แบบ
+   ของทุกตัวที่จะเพิ่ม ไม่มีหน้าไหนได้สิทธิ์ค้างเพราะทะเบียนสาขาอ่านไม่ได้
+4. **เพิ่มความสามารถทีละเฟส ถอยได้ทุกเฟส** — ไม่มีเฟสไหนที่ต้อง deploy สามโปรเจคพร้อมกัน
+
+---
+
+## 4. โครงสร้างที่เสนอ
+
+```
+                        ┌──────────────────────────────────┐
+                        │  naraipizzeria                   │
+                        │  หน้า HR → จัดการสาขา (ตัวกลาง)     │
+                        │  components/BranchList.jsx        │
+                        └───────────────┬──────────────────┘
+                                        │ POST /api/branches
+                                        ▼
+        ╔═══════════════════════════════════════════════════════════╗
+        ║  SQL Server  NARAI-PIZZARIA\SQLEXPRESS                    ║
+        ║                                                           ║
+        ║  InventoryNarai.dbo.hr_branch        ← ทะเบียนแม่ (เขียนที่นี่ที่เดียว) ║
+        ║  InventoryNarai.dbo.hr_branch_alias  ← ใหม่: รหัสพ้อง       ║
+        ║  InventoryNarai.dbo.hr_branch_target ← ใหม่: เป้า/เพดานค่าแรง ║
+        ╚════╤════════════════════════════╤═════════════════════════╝
+             │ อ่านข้ามฐาน (อินสแตนซ์เดียวกัน) │ อ่านผ่าน pool เดิม
+             ▼                            ▼
+   narai_hr.dbo.v_hr_branch        lib/sheetsSource.js
+   (VIEW — โค้ดตารางงานเดิมไม่ต้องแก้)      │
+             │                            ▼
+             ▼                     /api/branches  (ในเว็บ — ต้องล็อกอิน)
+   Narai-branch/office-server      /api/branch-feed (ใหม่ — token, อ่านอย่างเดียว)
+   schedule.js getBranches()               │
+                                           ▼
+                                  narai-storefct/lib/branchHub.js
+                                  (แคช + ถอยไป BRANCH_MAP เดิม)
+```
+
+### ทำไมฝั่งตารางงานใช้ VIEW ไม่ใช่ sync
+
+`narai_hr.dbo.hr_branch` ถูก **อ่านอย่างเดียว** ในแอป — ไล่ดูทั้งโปรเจค Narai-branch
+แล้วเจอแค่ 2 จุด (`office-server/schedule.js:352` และ `:632`) ทั้งคู่เป็น `SELECT`
+ส่วนค่าเป้าถูกตั้งด้วย `UPDATE` มือตามที่เอกสารของเขาบอก
+
+ตารางที่ไม่มีใครเขียนจากแอป = เปลี่ยนเป็น view ได้โดย**ไม่ต้องแก้โค้ดของโปรเจคนั้นเลยสักบรรทัด**
+(ถ้าทำ sync แทน จะได้ข้อมูลสองชุดที่หลุดกันได้ + ต้องมี cron + ต้องมีคนคอยดูว่า sync ตายหรือยัง
+ซึ่งเป็นปัญหาเดียวกับที่กำลังจะแก้อยู่พอดี)
+
+---
+
+## 5. สคีมาที่ต้องเพิ่ม
+
+### 5.1 `dbo.hr_branch` — เติมคอลัมน์ (ตารางเดิม ไม่ทุบ)
+
+| คอลัมน์ | ชนิด | ทำไม |
+|---|---|---|
+| `opened_at` | `DATE NULL` | วันเปิดสาขา — รายงานย้อนหลังจะได้รู้ว่าก่อนหน้านี้ยังไม่มีสาขานี้ ไม่ใช่ "ยอดเป็น 0" |
+| `closed_at` | `DATE NULL` | วันปิด — คู่กับข้อบน |
+| `region` | `NVARCHAR(50)` | กลุ่ม/โซน ไว้จัดกลุ่มรายงาน (ตอนนี้ไม่มีเลย) |
+| `pos_db_key` | `NVARCHAR(50) NULL` | เผื่อฝั่ง POS ใช้คีย์ที่ไม่ใช่เลข outlet (storefct เก็บ `Ord_StrID` เป็น string อยู่) |
+
+ทั้งหมด `NULL` ได้ + มีดีฟอลต์ → `ALTER TABLE ADD` รันบนตารางที่มีข้อมูลอยู่แล้วได้ทันที ไม่ล็อกนาน
+
+### 5.2 `dbo.hr_branch_alias` — ตารางใหม่ (แก้ปัญหาข้อ 2.3)
+
+```sql
+CREATE TABLE dbo.hr_branch_alias (
+    alias       NVARCHAR(20) NOT NULL,   -- รหัสพ้อง เช่น ZJP
+    branch_code NVARCHAR(10) NOT NULL,   -- ชี้ไปสาขาจริง เช่น SJP
+    source      NVARCHAR(50) NOT NULL,   -- มาจากไหน: 'login' / 'pos' / 'zkbio' / 'sheet'
+    note        NVARCHAR(255) NOT NULL DEFAULT (N''),
+    CONSTRAINT PK_hr_branch_alias PRIMARY KEY (alias),
+    CONSTRAINT FK_hr_branch_alias FOREIGN KEY (branch_code) REFERENCES dbo.hr_branch (branch_code)
+);
+```
+
+ข้อมูลตั้งต้น = `zjp→SJP`, `zip→CRM` (ที่ฝังอยู่ใน `lib/branchRegistry.js` ตอนนี้)
+`source` มีไว้เพราะรหัสพ้องแต่ละตัวมาจากคนละระบบ คนที่มาอ่านทีหลังจะได้รู้ว่าลบได้หรือยัง
+
+### 5.3 `dbo.hr_branch_target` — ตารางใหม่ (รับของจาก narai_hr)
+
+```sql
+CREATE TABLE dbo.hr_branch_target (
+    branch_code    NVARCHAR(10)  NOT NULL,
+    daily_target   DECIMAL(14,2) NOT NULL DEFAULT (0),
+    monthly_target DECIMAL(14,2) NOT NULL DEFAULT (0),
+    max_wage       DECIMAL(14,2) NOT NULL DEFAULT (0),
+    updated_at     DATETIME2(0)  NOT NULL DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_hr_branch_target PRIMARY KEY (branch_code),
+    CONSTRAINT FK_hr_branch_target FOREIGN KEY (branch_code) REFERENCES dbo.hr_branch (branch_code)
+);
+```
+
+แยกตารางไม่รวมกับ `hr_branch` เพราะเป็นของที่ **เปลี่ยนบ่อยกว่าและคนละคนแก้** —
+ทะเบียนเป็นงานเปิดสาขา (ปีละไม่กี่ครั้ง) ส่วนเป้ายอด/เพดานค่าแรงเป็นงานรายเดือน
+แยกไว้แล้วจะให้สิทธิ์แก้คนละชุดได้ และประวัติ `updated_at` ก็ไม่ปนกัน
+
+### 5.4 `narai_hr.dbo.v_hr_branch` — VIEW แทนตารางเดิม
+
+```sql
+CREATE VIEW dbo.v_hr_branch AS
+SELECT  b.branch_code                     AS branch,
+        NULLIF(b.branch_name, N'')        AS branch_name,
+        b.outlet_id,
+        ISNULL(t.daily_target,   0)       AS daily_target,
+        ISNULL(t.monthly_target, 0)       AS monthly_target,
+        ISNULL(t.max_wage,       0)       AS max_wage,
+        CASE WHEN b.status = N'ใช้งาน' THEN 1 ELSE 0 END AS is_active,
+        b.updated_at
+FROM    InventoryNarai.dbo.hr_branch        b
+LEFT JOIN InventoryNarai.dbo.hr_branch_target t ON t.branch_code = b.branch_code;
+```
+
+ขั้นตอนสลับ (เฟส 3) ทำแบบถอยได้:
+`hr_branch` → เปลี่ยนชื่อเป็น `hr_branch_legacy` (เก็บไว้ ไม่ลบ) → สร้าง view ชื่อ `hr_branch`
+โค้ดของ Narai-branch ที่ `SELECT ... FROM dbo.hr_branch` ยังวิ่งเหมือนเดิมทุกประการ
+พังเมื่อไหร่ = drop view แล้ว rename กลับ ใช้เวลาไม่ถึงนาที
+
+> ⚠️ ข้อควรระวัง: login ที่ Narai-branch ใช้ (`narai_web` / `HR_DB_USER`) ต้องมีสิทธิ์
+> `SELECT` บน `InventoryNarai.dbo.hr_branch` ด้วย ไม่งั้น view จะอ่านไม่ออกทั้งที่ตัว view สร้างสำเร็จ
+> — ต้องเพิ่มใน `docs/create-app-login.sql` ของโปรเจคนั้น
+
+---
+
+## 6. สัญญาของ API
+
+### 6.1 `/api/branches` (เดิม) — ไม่เปลี่ยนรูปแบบที่คืน
+
+ทุกหน้าในโปรเจคนี้ใช้อยู่ผ่าน `lib/useBranches.js` **ห้ามเปลี่ยนชื่อช่อง**
+เพิ่มช่องใหม่ได้ (`region`, `openedAt`, `aliases`) แต่ของเดิมต้องอยู่ครบ
+
+### 6.2 `/api/branch-feed` — เส้นใหม่สำหรับโปรเจคอื่น
+
+```
+GET /api/branch-feed
+  header: x-branch-key: <BRANCH_FEED_KEY>
+  →  { status:'success', version:'<hash>', updatedAt:'...', data:[...], aliases:{...} }
+```
+
+- ต้องเพิ่ม `/api/branch-feed` ใน `PUBLIC_PATHS` ของ `middleware.js` แล้ว **ตรวจ token
+  ในตัว handler เอง** (แพตเทิร์นเดียวกับ `SHEETS_WRITE_KEY`) — ไม่ใช่เปิดโล่ง
+- อ่านอย่างเดียวเสมอ ไม่มี POST — โปรเจคอื่นแก้ทะเบียนไม่ได้ แก้ได้ที่หน้า HR ที่เดียว
+- `version` = hash ของเนื้อทะเบียน ฝั่งผู้ใช้เอาไปเทียบว่าต้องล้างแคชไหม
+  โดยไม่ต้องดาวน์โหลดทั้งก้อน
+- ทำไมต้องแยกเส้น ไม่ใช้ `/api/branches` ตรง ๆ: เส้นเดิมอยู่หลังคุกกี้ล็อกอินของคน
+  ถ้าเจาะรูให้ token ผ่านด้วย จะกลายเป็นเส้นที่มีสองระบบสิทธิ์ปนกันแล้วพลาดง่าย
+  เส้นใหม่ทำหน้าที่เดียว: จ่ายทะเบียนออกไปข้างนอก
+
+---
+
+## 7. แผนลงมือเป็นเฟส
+
+แต่ละเฟสจบในตัว deploy ได้เลย ไม่มีเฟสไหนต้องขึ้นพร้อมกันสามโปรเจค
+
+### เฟส 0 — สะสางข้อมูลให้ตรงกันก่อน (ไม่แตะโค้ด)
+
+1. เคาะว่า **HPS = 109 หรือ 902** แล้วแก้ฝั่งที่ผิด
+2. ตัดสินว่า **STS(55) / ZK3(906)** ยังเปิดอยู่ไหม — เปิดอยู่ให้เพิ่มเข้าทะเบียน
+   เลิกใช้แล้วให้เพิ่มแล้วตั้ง `ปิดการใช้งาน` (ไม่ใช่ไม่เพิ่ม — ข้อมูลเก่ายังอ้างรหัสนี้อยู่)
+3. กดปุ่ม **"เทียบกับตารางงาน"** ในหน้า `จัดการสาขา` (มีอยู่แล้ว) ไล่ให้สองที่ตรงกัน
+
+> เฟสนี้สำคัญที่สุด — ถ้ายังไม่ตรงกันแล้วไปรวมศูนย์ จะกลายเป็นการเอา**ข้อมูลที่ผิด**
+> ไปแจกให้ทุกระบบใช้พร้อมกัน ซึ่งแย่กว่าสภาพตอนนี้
+
+### เฟส 1 — ขยายทะเบียนแม่ (naraipizzeria เท่านั้น)
+
+| ไฟล์ | ทำอะไร |
+|---|---|
+| `docs/schema-hr-branch.sql` | `ALTER TABLE ADD` 4 คอลัมน์ + `CREATE TABLE` alias/target + seed alias `zjp`,`zip` |
+| `lib/branchCore.mjs` | เพิ่ม `normalizeRegion`, `resolveAlias` + ใส่ field ใหม่ใน type |
+| `lib/branchSql.mjs` | `readBranches` join alias/target · `saveBranch` รับ field ใหม่ · เพิ่ม `saveAlias`/`deleteAlias`/`saveTarget` |
+| `lib/branchRegistry.js` | เลิกใช้ `ALIASES` ที่ฝังในโค้ด → อ่านจากตาราง (คงทางถอยไป ALIASES เดิมไว้) |
+| `pages/api/branches.js` | รับ action ใหม่ + คืน field ใหม่ (ของเดิมครบเหมือนเดิม) |
+| `components/BranchList.jsx` | เพิ่มแท็บ/ช่องกรอก: รหัสพ้อง, เป้ายอด, วันเปิด-ปิด, โซน |
+| `pages/index.js` | เลิกใช้ `OUTLETS` ที่ฝังไว้ → ใช้ `useBranches()` (มีทางถอยอยู่แล้วในตัว hook) |
+
+**ถอย:** คอลัมน์ใหม่ `NULL` ได้หมด ตารางใหม่ไม่มีใครอ่านถ้ายังไม่ deploy โค้ด → rollback = deploy โค้ดเก่ากลับ ฐานไม่ต้องแตะ
+
+### เฟส 2 — เปิดเส้นจ่ายออก
+
+- `pages/api/branch-feed.js` (ใหม่) + เพิ่ม path ใน `middleware.js`
+- env ใหม่: `BRANCH_FEED_KEY`
+- ยังไม่มีใครเรียก — deploy แล้วทดสอบด้วย `curl` ได้เลย ความเสี่ยงเกือบศูนย์
+
+### เฟส 3 — ต่อฝั่งตารางงาน (Narai-branch)
+
+1. รัน `ALTER TABLE narai_hr.dbo.hr_branch → hr_branch_legacy`
+2. คัดค่าเป้าจาก legacy เข้า `InventoryNarai.dbo.hr_branch_target` (ครั้งเดียว)
+3. `CREATE VIEW narai_hr.dbo.hr_branch` ตามข้อ 5.4
+4. เพิ่มสิทธิ์ `SELECT` ข้ามฐานให้ `narai_web` ใน `docs/create-app-login.sql`
+5. **ไม่ต้องแก้โค้ดของ Narai-branch เลย** — นอกจาก `src/utils/branchAlias.js` +
+   `office-server/hr-session.js` ที่ควรเปลี่ยนไปอ่าน alias จากฐาน (ทำทีหลังได้ แยกรอบ)
+
+**ถอย:** `DROP VIEW` + `rename hr_branch_legacy → hr_branch` — ข้อมูลเดิมยังอยู่ครบเพราะไม่ได้ลบ
+
+### เฟส 4 — ต่อฝั่งสโตร์ (narai-storefct)
+
+- `lib/branchHub.js` (ใหม่) — ยิง `/api/branch-feed` + แคช + **ถอยไป `BRANCH_MAP` เดิมเมื่อยิงไม่ถึง**
+- `lib/branches.js` — `outletIdForBranch()` เปลี่ยนไปถาม hub ก่อน (`BRANCH_MAP` เหลือเป็นตัวสำรอง ไม่ลบ)
+- env ใหม่: `BRANCH_HUB_BASE`, `BRANCH_FEED_KEY`
+
+**ถอย:** ไม่ตั้ง env = ใช้ `BRANCH_MAP` เดิมเป๊ะ ๆ เท่ากับพฤติกรรมวันนี้
+
+### เฟส 5 — เก็บกวาด
+
+- ลบ `{ 'zjp': 'sjp' }` ใน `pages/api/usage.js:70`
+- ทำหน้า "ตรวจสุขภาพทะเบียน" ในหน้าจัดการสาขา: เทียบสามระบบให้เห็นในจอเดียว
+  (ตอนนี้ปุ่มเทียบมีแค่กับตารางงาน) — เพื่อไม่ให้ปัญหาข้อ 2.1 กลับมาอีกโดยไม่มีใครรู้
+
+---
+
+## 8. เรื่องที่ต้องเคาะก่อนเริ่ม
+
+1. **HPS คือ outlet 109 หรือ 902?** ← ตอบข้อนี้ก่อนข้ออื่น ตอนนี้มีระบบหนึ่งอ่านผิดร้านอยู่แน่นอน
+2. **STS (55) และ ZK3 (906)** ยังเปิดอยู่ไหม หรือปิดไปแล้ว
+3. **ค่าเป้ายอด/เพดานค่าแรง** ย้ายมาไว้ที่นี่เลยไหม (เฟส 3 ข้อ 2) — ย้ายแล้วจะแก้จากหน้าเว็บได้
+   ไม่ต้องเปิด SSMS อีก แต่แปลว่าโปรเจคนี้ถือข้อมูลของฝ่าย HR เพิ่มขึ้น
+4. **`/api/branch-feed` ใช้ token ธรรมดาพอไหม** หรืออยากได้ IP allowlist ด้วย
+5. **เฟส 3 ต้องรัน DDL บนเครื่องออฟฟิศ** — ใครรันและรันช่วงไหน (ควรนอกเวลาขาย)
+
+---
+
+## 9. ความเสี่ยงที่ต้องระวัง
+
+| ความเสี่ยง | ผลถ้าเกิด | กัน |
+|---|---|---|
+| ทะเบียนแม่ล่ม = ทุกระบบหาสาขาไม่เจอ | หน้าเว็บทั้งสามระบบ dropdown ว่าง | ทุกทางอ่านมีรายชื่อสำรองในโค้ด + deadline (แพตเทิร์น `lib/branchRegistry.js` ที่มีอยู่แล้ว) |
+| View ข้ามฐานช้ากว่าตารางเดิม | หน้าลงตารางงานหน่วง | ตารางยี่สิบแถว ไม่มี join หนัก — วัดจริงก่อน แล้วค่อยพิจารณา indexed view ถ้าจำเป็น |
+| แก้ `branch_code` หรือลบสาขา | ข้อมูลเก่าทุกระบบกำพร้าทันที | มีกติกาใน `lib/branchSql.mjs` แล้ว — เฟส 1 ให้ย้าย "ลบ" ไปอยู่หลังการยืนยันว่าไม่มีข้อมูลอ้างถึง |
+| สิทธิ์ข้ามฐานไม่ได้ให้ | view สร้างผ่านแต่ query พัง (เจอตอนรันจริงเท่านั้น) | เฟส 3 ข้อ 4 + ทดสอบด้วย login จริงของแอป ไม่ใช่ `sa` |
+| `BRANCH_FEED_KEY` หลุด | คนนอกเห็นรายชื่อสาขา + outlet id | เส้นนี้อ่านอย่างเดียว ไม่มียอดขาย — ความเสียหายจำกัด แต่ควรหมุนคีย์ได้ |
