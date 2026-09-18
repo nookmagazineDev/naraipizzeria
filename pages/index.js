@@ -61,6 +61,7 @@ import LoginPage from '../components/LoginPage';
 import UserList from '../components/UserList';
 import ChangePasswordModal from '../components/ChangePasswordModal';
 import { MENU_GROUPS, MENU_LABELS, ROLE_ADMIN, firstAllowedMenu, hasPerm } from '../lib/permissions';
+import { FALLBACK_BRANCHES } from '../lib/branches';
 import {
   OPEN_DATE_BUFFER_DAYS, addDaysStr, dateFromRow, getChunks, normalizeArray, safeFetchJson,
 } from '../lib/salesFetch';
@@ -83,18 +84,61 @@ import {
 } from 'recharts';
 import * as XLSX from 'xlsx';
 
-/* ───────── OUTLETS ───────── */
-const OUTLETS = {
-  7:'SJP', 12:'CRM', 19:'XCM', 37:'SLR', 51:'SUM',
-  59:'XUM', 61:'SCS', 63:'SMP', 67:'XSB', 72:'XHH',
-  78:'HRS', 79:'CLK', 80:'P90', 109:'HPS', 400:'ZBW',
-  401:'ZPT', 500:'NPT', 501:'WRM', 503:'WMT', 904:'IPR',
-};
+/* ───────── OUTLETS ─────────
+   ตารางแมป { 7: 'SJP', ... } — รหัสร้านฝั่ง POS -> รหัสสาขา
 
-const OUTLET_LIST = Object.entries(OUTLETS).map(([id, name]) => ({
-  id: parseInt(id),
-  name
-})).sort((a, b) => a.id - b.id);
+   เมื่อก่อนเป็นรายชื่อ 20 ตัวที่พิมพ์ไว้ตรงนี้ ซึ่งเป็นชุดที่ 11 ของรายชื่อเดียวกัน
+   เปิดสาขาใหม่ทีต้องไล่แก้ทุกที่ ตอนนี้:
+     - ค่าตั้งต้น มาจากรายชื่อสำรองชุดเดียวกับฝั่ง API (lib/branches.js)
+     - ของจริง เติมทับตอนเปิดหน้าจากทะเบียนสาขาใน /api/branches (useOutletRegistry ข้างล่าง)
+   เพิ่มสาขาที่หน้า HR > จัดการสาขา แล้วหน้านี้เห็นเองโดยไม่ต้องแก้โค้ด
+
+   ⚠️ ตั้งใจให้เป็น object ที่เปลี่ยนค่าได้ ไม่ใช่ค่าคงที่ — outletLabel() เป็นฟังก์ชัน
+      ระดับโมดูลที่ถูกเรียกจากอีกสามสิบจุดทั้งในและนอกคอมโพเนนต์ การส่งตารางแมป
+      เข้าไปทีละจุดคือการรื้อไฟล์ห้าพันบรรทัดโดยไม่ได้อะไรเพิ่ม
+      ตัวที่ทำให้หน้าจอวาดใหม่หลังเติมค่าคือ state ใน useOutletRegistry ไม่ใช่การแก้ object นี้
+
+   ⚠️ เติมได้อย่างเดียว ไม่ลบ — สาขาที่หลุดออกจากทะเบียนต้องยังแปลรหัสได้อยู่
+      ไม่งั้นรายงานย้อนหลังของสาขานั้นจะขึ้นเป็น 'Unknown' ทั้งแถบ                     */
+const OUTLETS = Object.fromEntries(
+  FALLBACK_BRANCHES.filter((b) => b.outletId).map((b) => [b.outletId, b.code]));
+
+const outletListOf = (map) => Object.entries(map)
+  .map(([id, name]) => ({ id: parseInt(id), name }))
+  .sort((a, b) => a.id - b.id);
+
+// dropdown เลือกสาขาของหน้ายอดขาย — รวมสาขาที่ปิดไปแล้วด้วย เพราะยังต้องดูยอดย้อนหลังได้
+let OUTLET_LIST = outletListOf(OUTLETS);
+
+/**
+ * เติมตารางแมปด้านบนจากทะเบียนสาขาจริง แล้วสั่งวาดใหม่เมื่อมีอะไรเปลี่ยน
+ * ยิงไม่ถึง/ตอบเพี้ยน = เงียบไว้แล้วใช้ค่าตั้งต้นต่อ — ตารางแมปนี้ห้ามว่าง
+ * ไม่งั้นทั้งหน้ายอดขายจะขึ้นชื่อสาขาเป็น 'Unknown' หมด
+ */
+function useOutletRegistry() {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/branches')
+      .then((r) => r.json())
+      .then((res) => {
+        if (!alive || !Array.isArray(res?.data)) return;
+        let changed = false;
+        for (const b of res.data) {
+          if (b.outletId && OUTLETS[b.outletId] !== b.code) {
+            OUTLETS[b.outletId] = b.code;
+            changed = true;
+          }
+        }
+        if (changed) {
+          OUTLET_LIST = outletListOf(OUTLETS);
+          bump((n) => n + 1);
+        }
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+}
 
 /* ───────── EXCLUSIONS (ไม่นำมาคำนวณ) ───────── */
 const EXCLUDE_TABLES = [600];                       // โต๊ะที่ตัดออก (500 กลับไปนับต้นทุนจริงแล้ว)
@@ -664,6 +708,9 @@ const GROUP_STYLE = {
 };
 
 export default function App() {
+  // ทะเบียนสาขาคุมชื่อสาขาทุกจุดในหน้านี้ — ดึงตั้งแต่เปิดหน้า ไม่ต้องรอกดค้นหา
+  useOutletRegistry();
+
   const [isMounted, setIsMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'sales', 'dailySale', 'details', 'itemSearch'

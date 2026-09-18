@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Building2, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, AlertTriangle, Info, Save, ArrowRightLeft, UploadCloud } from 'lucide-react';
-import { STATUS_ACTIVE, STATUS_INACTIVE, validateCode, normalizeCode } from '../lib/branches';
+import { Building2, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, AlertTriangle, Info, Save, ArrowRightLeft, UploadCloud, Link2 } from 'lucide-react';
+import {
+  STATUS_ACTIVE, STATUS_INACTIVE, validateCode, normalizeCode,
+  validateAlias, validateAliasTarget,
+} from '../lib/branches';
 
 /*
  * HR — จัดการสาขา: ทะเบียนสาขากลางที่ dropdown ทุกหน้าดึงไปใช้
@@ -10,12 +13,26 @@ import { STATUS_ACTIVE, STATUS_INACTIVE, validateCode, normalizeCode } from '../
  * ⚠️ คนละตัวกับ narai_hr.dbo.hr_branch ของระบบลงตารางงาน (โปรเจกต์ Narai-branch)
  *    ปุ่ม "เทียบกับตารางงาน" มีไว้ดูว่ารหัสสาขาสองที่ยังตรงกันอยู่ไหม
  *
+ * ⭐ ตั้งแต่ยกเป็น "ทะเบียนแม่" (docs/branch-hub.md) หน้านี้คุมสามอย่างในจอเดียว:
+ *      ทะเบียนสาขา  · รหัสพ้อง (รหัสคนละตัวแต่เป็นร้านเดียวกัน) · เป้ายอด/เพดานค่าแรง
+ *    สองอย่างหลังเพิ่งย้ายเข้ามา — รหัสพ้องเคยกระจายอยู่ 5 ไฟล์ใน 3 โปรเจค
+ *    ส่วนเป้ายอดเคยอยู่ที่ narai_hr.dbo.hr_branch ซึ่งไม่มีหน้าจอ ต้องเปิด SSMS แก้เอง
+ *
  * สิ่งที่หน้านี้ทำไม่ได้ (ต้องไปทำที่ระบบปลายทาง):
  *   - ขอรหัสร้าน POS ให้สาขาใหม่ — ต้องได้เลขมาจากฝั่ง POS แล้วเอามากรอกที่นี่
  *   - ตั้ง area_alias บนเครื่องสแกนหน้า ZKBio — ไม่ตั้ง หน้า "ดูสแกนหน้า" จะไม่เห็นสาขานั้น
  */
 
-const EMPTY_FORM = { code: '', name: '', outletId: '', status: STATUS_ACTIVE, note: '', sortOrder: '' };
+const EMPTY_FORM = {
+  code: '', name: '', outletId: '', status: STATUS_ACTIVE, note: '', sortOrder: '',
+  region: '', openedAt: '', closedAt: '', posDbKey: '',
+  dailyTarget: '', monthlyTarget: '', maxWage: '',
+};
+
+const EMPTY_ALIAS = { alias: '', branchCode: '', source: 'login', note: '' };
+
+/** ช่องเงิน: โชว์เป็นตัวเลขอ่านง่าย ว่าง/ศูนย์ = ขีด (ยังไม่ได้ตั้งเป้า ไม่ใช่ตั้งเป้าไว้ที่ศูนย์) */
+const money = (v) => (Number(v) > 0 ? Number(v).toLocaleString('th-TH') : '—');
 
 export default function BranchList() {
   const [branches, setBranches] = useState([]);
@@ -34,6 +51,10 @@ export default function BranchList() {
   const [savingItem, setSavingItem] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [aliases, setAliases] = useState([]);
+  const [aliasReady, setAliasReady] = useState(false);  // false = ยังไม่ได้สร้างตารางรหัสพ้องในฐาน
+  const [aliasForm, setAliasForm] = useState(null);     // { ...EMPTY_ALIAS, isNew }
+  const [savingAlias, setSavingAlias] = useState(false);
 
   // quiet = โหลดใหม่เบื้องหลังหลังกดบันทึก (ตารางเดิมยังอ่านได้ระหว่างรอ)
   // ?t= กันไม่ให้ CDN คืนของที่แคชไว้ก่อนการบันทึกรอบนี้
@@ -45,6 +66,8 @@ export default function BranchList() {
       .then((res) => {
         if (res.status !== 'success') { setError(res.message || 'โหลดทะเบียนสาขาไม่สำเร็จ'); return; }
         setBranches(res.data || []);
+        setAliases(res.aliases || []);
+        setAliasReady(res.aliasReady === true);
         setSource(res.source || 'sql');
         setTableReady(res.tableReady !== false);
         setCanWrite(res.canWrite !== false);
@@ -83,6 +106,7 @@ export default function BranchList() {
       if (!q) return true;
       return b.code.toLowerCase().includes(q)
         || (b.name || '').toLowerCase().includes(q)
+        || (b.region || '').toLowerCase().includes(q)
         || String(b.outletId || '').includes(q);
     });
   }, [branches, search, statusFilter]);
@@ -102,6 +126,14 @@ export default function BranchList() {
       status: b.status || STATUS_ACTIVE,
       note: b.note || '',
       sortOrder: String(b.sortOrder || 0),
+      region: b.region || '',
+      openedAt: b.openedAt || '',
+      closedAt: b.closedAt || '',
+      posDbKey: b.posDbKey || '',
+      // ศูนย์ = ยังไม่ได้ตั้งเป้า ให้ช่องว่างไว้ คนกรอกจะได้ไม่เข้าใจผิดว่าตั้งไว้ที่ 0 จริง
+      dailyTarget: b.dailyTarget ? String(b.dailyTarget) : '',
+      monthlyTarget: b.monthlyTarget ? String(b.monthlyTarget) : '',
+      maxWage: b.maxWage ? String(b.maxWage) : '',
       isNew: false,
     });
     setToast(null);
@@ -125,7 +157,44 @@ export default function BranchList() {
         status: editing.status,
         note: editing.note,
         sortOrder: editing.sortOrder,
+        region: editing.region,
+        openedAt: editing.openedAt,
+        closedAt: editing.closedAt,
+        posDbKey: editing.posDbKey,
       });
+
+      /* เป้ายอดอยู่คนละตาราง (dbo.hr_branch_target) จึงเป็นคำสั่งที่สอง
+         ยิงเฉพาะตอนค่าเปลี่ยนจริง — ไม่งั้นทุกครั้งที่แก้แค่ชื่อสาขา updated_at ของ
+         ตารางเป้าจะขยับตามไปด้วย แล้วดูไม่ออกว่าใครแก้เป้าครั้งสุดท้ายเมื่อไหร่
+
+         ⚠️ ขั้นนี้พังทีหลังได้ (เช่นยังไม่ได้รันสคีมารอบใหม่) ตอนที่ทะเบียนบันทึกไปแล้ว
+            จึงบอกให้ชัดว่าส่วนไหนสำเร็จส่วนไหนไม่ ไม่ใช่ขึ้น error รวม ๆ
+            แล้วคนกดนึกว่าไม่มีอะไรถูกบันทึกเลย                                      */
+      const before = branches.find((b) => normalizeCode(b.code) === code) || {};
+      const num = (v) => Number(String(v ?? '').replace(/,/g, '')) || 0;
+      const targetChanged = !editing.isNew && (
+        num(editing.dailyTarget) !== num(before.dailyTarget)
+        || num(editing.monthlyTarget) !== num(before.monthlyTarget)
+        || num(editing.maxWage) !== num(before.maxWage)
+      );
+      const targetHasValue = num(editing.dailyTarget) || num(editing.monthlyTarget) || num(editing.maxWage);
+
+      if (targetChanged || (editing.isNew && targetHasValue)) {
+        try {
+          await post('saveTarget', {
+            code,
+            dailyTarget: editing.dailyTarget,
+            monthlyTarget: editing.monthlyTarget,
+            maxWage: editing.maxWage,
+          });
+        } catch (err) {
+          setEditing(null);
+          setToast({ ok: false, msg: `บันทึกสาขา ${code} แล้ว แต่บันทึกเป้ายอดไม่สำเร็จ: ${err.message}` });
+          await load({ quiet: true });
+          return;
+        }
+      }
+
       setEditing(null);
       setToast({ ok: true, msg: `บันทึกสาขา ${code} แล้ว` });
       await load({ quiet: true });
@@ -133,6 +202,46 @@ export default function BranchList() {
       setToast({ ok: false, msg: err.message });
     } finally {
       setSavingItem(false);
+    }
+  };
+
+  /* ───────── รหัสพ้อง ───────── */
+
+  const saveAlias = async () => {
+    const alias = normalizeCode(aliasForm.alias);
+    const target = normalizeCode(aliasForm.branchCode);
+    const bad = validateAlias(alias)
+      || validateAliasTarget(alias, branches.map((b) => b.code), target);
+    if (bad) { setToast({ ok: false, msg: bad }); return; }
+    if (aliasForm.isNew && aliases.some((a) => normalizeCode(a.alias) === alias)) {
+      setToast({ ok: false, msg: `มีรหัสพ้อง ${alias} อยู่แล้ว — กดแก้ไขที่แถวนั้นแทน` });
+      return;
+    }
+    setSavingAlias(true);
+    try {
+      await post('saveAlias', {
+        alias, branchCode: target, source: aliasForm.source, note: aliasForm.note,
+      });
+      setAliasForm(null);
+      setToast({ ok: true, msg: `บันทึกรหัสพ้อง ${alias} → ${target} แล้ว` });
+      await load({ quiet: true });
+    } catch (err) {
+      setToast({ ok: false, msg: err.message });
+    } finally {
+      setSavingAlias(false);
+    }
+  };
+
+  const removeAlias = async (alias) => {
+    setSavingAlias(true);
+    try {
+      await post('deleteAlias', { alias });
+      setToast({ ok: true, msg: `ลบรหัสพ้อง ${alias} แล้ว` });
+      await load({ quiet: true });
+    } catch (err) {
+      setToast({ ok: false, msg: err.message });
+    } finally {
+      setSavingAlias(false);
     }
   };
 
@@ -197,6 +306,16 @@ export default function BranchList() {
     });
     await load({ quiet: true });
   };
+
+  /** { SJP: ['ZJP'], ... } — รหัสพ้องที่ชี้มาที่แต่ละสาขา ไว้โชว์ติดกับชื่อในตาราง */
+  const aliasesOf = useMemo(() => {
+    const m = {};
+    for (const a of aliases) {
+      const code = normalizeCode(a.branchCode);
+      (m[code] = m[code] || []).push(normalizeCode(a.alias));
+    }
+    return m;
+  }, [aliases]);
 
   const nameFillable = useMemo(() => {
     const names = compare?.names || {};
@@ -321,7 +440,9 @@ export default function BranchList() {
                 <th className="px-4 py-3 text-right w-16">ลำดับ</th>
                 <th className="px-4 py-3 text-left">รหัสสาขา</th>
                 <th className="px-4 py-3 text-left">ชื่อสาขา</th>
+                <th className="px-4 py-3 text-left">โซน</th>
                 <th className="px-4 py-3 text-right">รหัสร้าน POS</th>
+                <th className="px-4 py-3 text-right">เป้า/วัน</th>
                 <th className="px-4 py-3 text-center">สถานะ</th>
                 <th className="px-4 py-3 text-left">หมายเหตุ</th>
                 <th className="px-4 py-3 text-center">จัดการ</th>
@@ -329,18 +450,25 @@ export default function BranchList() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดทะเบียนสาขา…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">ไม่พบสาขา</td></tr>
+                <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400">ไม่พบสาขา</td></tr>
               ) : filtered.map((b) => (
                 <tr key={b.code} className={`hover:bg-slate-50/60 ${b.status === STATUS_INACTIVE ? 'bg-rose-50/40 text-slate-400' : ''}`}>
                   <td className="px-4 py-2 text-right font-mono text-xs text-slate-400">{b.sortOrder || '—'}</td>
                   <td className="px-4 py-2 font-mono text-sm font-bold text-slate-700 whitespace-nowrap">{b.code}</td>
                   <td className="px-4 py-2 text-slate-700">
                     {b.name || <span className="text-slate-300 italic text-xs">ยังไม่ได้ตั้งชื่อ</span>}
+                    {/* รหัสพ้องที่ชี้มาที่สาขานี้ — โชว์ติดกับชื่อ จะได้เห็นว่ารหัสไหนหมายถึงร้านนี้บ้าง */}
+                    {(aliasesOf[b.code] || []).length > 0 && (
+                      <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-mono text-slate-400">
+                        <Link2 size={10} />{aliasesOf[b.code].join(', ')}
+                      </span>
+                    )}
                   </td>
+                  <td className="px-4 py-2 text-xs text-slate-500">{b.region || '—'}</td>
                   <td className="px-4 py-2 text-right font-mono text-xs">
                     {b.outletId != null ? b.outletId : (
                       <span className="inline-flex items-center gap-1 text-amber-600 font-semibold">
@@ -348,10 +476,14 @@ export default function BranchList() {
                       </span>
                     )}
                   </td>
+                  <td className="px-4 py-2 text-right font-mono text-xs text-slate-500">{money(b.dailyTarget)}</td>
                   <td className="px-4 py-2 text-center">
                     <span className={`inline-block rounded px-2 py-0.5 text-[10px] font-semibold ${
                       b.status === STATUS_INACTIVE ? 'bg-rose-100 text-rose-600' : 'bg-emerald-100 text-emerald-700'
                     }`}>{b.status || STATUS_ACTIVE}</span>
+                    {b.closedAt && (
+                      <div className="text-[10px] text-slate-400 mt-0.5 font-mono">ปิด {b.closedAt}</div>
+                    )}
                   </td>
                   <td className="px-4 py-2 text-xs text-slate-500 max-w-[240px] truncate" title={b.note}>{b.note || '—'}</td>
                   <td className="px-4 py-2">
@@ -375,9 +507,93 @@ export default function BranchList() {
         <div className="p-4 border-t border-slate-100 bg-slate-50/60 text-xs text-slate-500 flex items-start gap-2">
           <Info size={14} className="shrink-0 mt-0.5" />
           <span>
-            รายชื่อนี้คุม dropdown เลือกสาขาของหน้า <b>ดูสแกนหน้า</b>, <b>QC/RD วัตถุดิบ</b> และ <b>ค่าใช้จ่ายอื่นๆ</b> ·
+            ทะเบียนนี้เป็นต้นทางของ dropdown เลือกสาขา<b>ทุกหน้า</b> รวมถึงตารางแมป
+            รหัสร้าน POS ที่รายงานยอดขาย/ต้นทุนใช้ ·
             เปิดสาขาใหม่ให้ใช้ได้จริงต้องขอ <b>รหัสร้าน POS</b> จากฝั่ง POS และตั้ง <b>area_alias</b> ที่เครื่องสแกนหน้าด้วย ·
-            รายงานยอดขาย/ต้นทุนยังใช้ตารางแมป outlet ชุดของตัวเองอยู่ ยังไม่ได้ต่อกับทะเบียนนี้
+            อีกสองระบบ (ลงตารางงาน · สโตร์) ดึงทะเบียนชุดนี้ไปใช้ — แก้ที่นี่ที่เดียว ดู docs/branch-hub.md
+          </span>
+        </div>
+      </div>
+
+      {/* ── รหัสพ้อง: รหัสคนละตัวแต่เป็นร้านเดียวกัน ── */}
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-sky-100 text-sky-600 rounded-xl"><Link2 className="w-5 h-5" /></div>
+            <div>
+              <h3 className="font-bold text-slate-800">รหัสพ้อง</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                รหัสคนละตัวแต่หมายถึงร้านเดียวกัน · {aliases.length} รายการ
+              </p>
+            </div>
+          </div>
+          <button onClick={() => { setAliasForm({ ...EMPTY_ALIAS, isNew: true }); setToast(null); }}
+            disabled={!editable || !aliasReady}
+            title={!aliasReady
+              ? 'ยังไม่มีตารางรหัสพ้องในฐาน — รัน docs/schema-hr-branch.sql ที่เครื่องออฟฟิศก่อน'
+              : 'เพิ่มรหัสพ้องใหม่'}
+            className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+            <Plus size={14} /> เพิ่มรหัสพ้อง
+          </button>
+        </div>
+
+        {!aliasReady ? (
+          <div className="p-5 text-sm text-slate-500 flex items-start gap-2">
+            <Info size={15} className="shrink-0 mt-0.5" />
+            <span>
+              ยังไม่มีตารางรหัสพ้อง (<span className="font-mono text-xs">dbo.hr_branch_alias</span>) ในฐาน —
+              รัน <span className="font-mono text-xs">docs/schema-hr-branch.sql</span> ที่เครื่องออฟฟิศก่อน
+              ระหว่างนี้ระบบใช้คู่ที่ฝังไว้ในโค้ดต่อไป ({aliases.map((a) => `${a.alias}→${a.branchCode}`).join(', ') || 'ไม่มี'})
+            </span>
+          </div>
+        ) : aliases.length === 0 ? (
+          <div className="p-5 text-sm text-slate-400">ยังไม่มีรหัสพ้องในทะเบียน</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500">
+                <tr className="text-xs font-bold uppercase tracking-wide">
+                  <th className="px-4 py-3 text-left">รหัสพ้อง</th>
+                  <th className="px-4 py-3 text-left">หมายถึงสาขา</th>
+                  <th className="px-4 py-3 text-left">มาจากระบบ</th>
+                  <th className="px-4 py-3 text-left">หมายเหตุ</th>
+                  <th className="px-4 py-3 text-center w-24">จัดการ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {aliases.map((a) => (
+                  <tr key={a.alias} className="hover:bg-slate-50/60">
+                    <td className="px-4 py-2 font-mono text-sm font-bold text-slate-700">{a.alias}</td>
+                    <td className="px-4 py-2 font-mono text-sm text-sky-700">{a.branchCode}</td>
+                    <td className="px-4 py-2 text-xs text-slate-500">{a.source || '—'}</td>
+                    <td className="px-4 py-2 text-xs text-slate-500 max-w-[320px] truncate" title={a.note}>{a.note || '—'}</td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => { setAliasForm({ ...a, isNew: false }); setToast(null); }}
+                          disabled={!editable || savingAlias} title="แก้ไขรหัสพ้องนี้"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 disabled:text-slate-200 transition-all">
+                          <Pencil size={14} />
+                        </button>
+                        <button onClick={() => removeAlias(a.alias)}
+                          disabled={!editable || savingAlias} title="ลบรหัสพ้องนี้"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:text-slate-200 transition-all">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="p-4 border-t border-slate-100 bg-slate-50/60 text-xs text-slate-500 flex items-start gap-2">
+          <Info size={14} className="shrink-0 mt-0.5" />
+          <span>
+            ตัวอย่างที่มีจริง: เว็บล็อกอินด้วย <b>zjp</b> แต่ชีท/POS/เครื่องสแกนหน้าเขียนว่า <b>SJP</b> —
+            ทั้งคู่คือร้านเดียวกัน ไม่ผูกไว้ที่นี่ ข้อมูลที่บันทึกด้วยรหัสอีกตัวจะหาไม่เจอ ·
+            ลบได้เมื่อแน่ใจว่าไม่มีข้อมูลเก่าหรือผู้ใช้คนไหนยังใช้รหัสนั้นอยู่แล้วเท่านั้น
           </span>
         </div>
       </div>
@@ -385,7 +601,7 @@ export default function BranchList() {
       {/* ── ฟอร์มเพิ่ม/แก้ไขสาขา ── */}
       {editing && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" onClick={() => !savingItem && setEditing(null)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-slate-800">{editing.isNew ? 'เพิ่มสาขาใหม่' : `แก้ไขสาขา ${editing.code}`}</h3>
               <button onClick={() => setEditing(null)} disabled={savingItem} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100"><X size={18} /></button>
@@ -439,10 +655,76 @@ export default function BranchList() {
                 <p className="text-[11px] text-slate-400 mt-1">ปิดการใช้งาน = ไม่โผล่ใน dropdown ของหน้าอื่น แต่ข้อมูลเก่ายังอ้างรหัสนี้ได้</p>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">วันเปิดสาขา</label>
+                  <input type="date" value={editing.openedAt}
+                    onChange={(e) => setEditing((f) => ({ ...f, openedAt: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">วันปิดสาขา</label>
+                  <input type="date" value={editing.closedAt}
+                    onChange={(e) => setEditing((f) => ({ ...f, closedAt: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-400 -mt-2">
+                ไว้ให้รายงานย้อนหลังแยกออกว่า "ยอดเป็น 0 เพราะขายไม่ได้" กับ "เดือนนั้นยังไม่เปิด/ปิดไปแล้ว" ·
+                ตัวที่ตัดสินว่าสาขายังใช้งานอยู่ไหมคือช่อง<b>สถานะ</b> ไม่ใช่วันที่สองช่องนี้
+              </p>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">โซน / กลุ่มสาขา</label>
+                  <input value={editing.region} onChange={(e) => setEditing((f) => ({ ...f, region: e.target.value }))}
+                    placeholder="เช่น กรุงเทพ-เหนือ"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-500 mb-1">คีย์ฝั่ง POS (ถ้าไม่ใช่ตัวเลข)</label>
+                  <input value={editing.posDbKey} onChange={(e) => setEditing((f) => ({ ...f, posDbKey: e.target.value }))}
+                    placeholder="เว้นว่างไว้ถ้าใช้รหัสร้าน POS ปกติ"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                </div>
+              </div>
+
+              {/* เป้ายอด/เพดานค่าแรง — อยู่คนละตาราง (hr_branch_target) บันทึกเป็นคำสั่งที่สอง
+                  ย้ายมาจาก narai_hr.dbo.hr_branch ที่เมื่อก่อนต้องเปิด SSMS แก้เอง */}
+              <div className="pt-1 border-t border-slate-100">
+                <div className="text-xs font-bold text-slate-600 mt-3 mb-2">เป้ายอดขายและเพดานค่าแรง</div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">เป้า/วัน</label>
+                    <input value={editing.dailyTarget} inputMode="decimal"
+                      onChange={(e) => setEditing((f) => ({ ...f, dailyTarget: e.target.value }))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">เป้า/เดือน</label>
+                    <input value={editing.monthlyTarget} inputMode="decimal"
+                      onChange={(e) => setEditing((f) => ({ ...f, monthlyTarget: e.target.value }))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-500 mb-1">เพดานค่าแรง/วัน</label>
+                    <input value={editing.maxWage} inputMode="decimal"
+                      onChange={(e) => setEditing((f) => ({ ...f, maxWage: e.target.value }))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-amber-500" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  การ์ดบนหน้า "ลงตารางงาน" ของสาขาอ่านค่าชุดนี้ไปแสดง · เว้นว่าง = ยังไม่ได้ตั้งเป้า
+                </p>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-500 mb-1">หมายเหตุ</label>
                 <input value={editing.note} onChange={(e) => setEditing((f) => ({ ...f, note: e.target.value }))}
-                  placeholder="เช่น เปิด 1 ม.ค. 69 / ปิดปรับปรุง"
+                  placeholder="เช่น ปิดปรับปรุง / รอเลข POS"
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
               </div>
 
@@ -463,6 +745,77 @@ export default function BranchList() {
               <button onClick={saveEdit} disabled={savingItem}
                 className="inline-flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-sm px-5 py-2 rounded-xl transition-all">
                 {savingItem ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                บันทึก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+      {/* ── ฟอร์มเพิ่ม/แก้ไขรหัสพ้อง ── */}
+      {aliasForm && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" onClick={() => !savingAlias && setAliasForm(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-slate-800">{aliasForm.isNew ? 'เพิ่มรหัสพ้อง' : `แก้ไขรหัสพ้อง ${aliasForm.alias}`}</h3>
+              <button onClick={() => setAliasForm(null)} disabled={savingAlias} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100"><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">รหัสพ้อง *</label>
+                <input value={aliasForm.alias} disabled={!aliasForm.isNew}
+                  onChange={(e) => setAliasForm((f) => ({ ...f, alias: e.target.value.toUpperCase() }))}
+                  placeholder="เช่น ZJP"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono disabled:bg-slate-50 disabled:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500" />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  {aliasForm.isNew
+                    ? 'ตัวอักษรอังกฤษหรือตัวเลข 2–20 ตัว · ต้องไม่ซ้ำกับรหัสสาขาจริง'
+                    : 'แก้รหัสพ้องไม่ได้ — ลบแล้วเพิ่มใหม่แทน'}
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">หมายถึงสาขา *</label>
+                <select value={aliasForm.branchCode}
+                  onChange={(e) => setAliasForm((f) => ({ ...f, branchCode: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+                  <option value="">— เลือกสาขา —</option>
+                  {branches.map((b) => (
+                    <option key={b.code} value={b.code}>
+                      {b.code}{b.name ? ` — ${b.name}` : ''}{b.status === STATUS_INACTIVE ? ' (ปิดการใช้งาน)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">มาจากระบบไหน</label>
+                <select value={aliasForm.source}
+                  onChange={(e) => setAliasForm((f) => ({ ...f, source: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+                  <option value="login">login — รหัสที่ใช้เข้าเว็บ</option>
+                  <option value="pos">pos — รหัสฝั่งระบบ POS</option>
+                  <option value="zkbio">zkbio — area_alias ของเครื่องสแกนหน้า</option>
+                  <option value="sheet">sheet — รหัสที่เขียนไว้ในชีท</option>
+                  <option value="">อื่นๆ / ไม่ระบุ</option>
+                </select>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  มีไว้ตอบคำถาม "ลบทิ้งได้หรือยัง" — รหัสที่มาจากหน้าล็อกอินลบไม่ได้จนกว่าคนจะเลิกใช้รหัสนั้น
+                </p>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1">หมายเหตุ</label>
+                <input value={aliasForm.note}
+                  onChange={(e) => setAliasForm((f) => ({ ...f, note: e.target.value }))}
+                  placeholder="เช่น ข้อมูลก่อนปี 68 บันทึกด้วยรหัสนี้"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
+              </div>
+            </div>
+            <div className="p-5 border-t border-slate-100 flex justify-end gap-2">
+              <button onClick={() => setAliasForm(null)} disabled={savingAlias}
+                className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
+              <button onClick={saveAlias} disabled={savingAlias}
+                className="inline-flex items-center gap-2 bg-sky-500 hover:bg-sky-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-sm px-5 py-2 rounded-xl transition-all">
+                {savingAlias ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 บันทึก
               </button>
             </div>

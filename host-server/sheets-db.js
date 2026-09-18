@@ -15,6 +15,7 @@
 //    GET  /sheets/expense                  ค่าใช้จ่ายที่บันทึกแล้วทั้งหมด
 //    GET  /sheets/employee                 รายชื่อพนักงาน
 //    GET  /sheets/branch                   ทะเบียนสาขา (dbo.hr_branch)
+//    GET  /sheets/branch-alias             รหัสพ้องสาขา (dbo.hr_branch_alias)
 //    GET  /sheets/stock-items?branch=crm   หน้านับสต๊อก: ยอดนับ/ยอดยกมา/ใบเบิกล่าสุดของสาขานั้น
 //    GET  /sheets/stock-total?endDate=     ยอดคงเหลือรวมทุกสาขา (ไม่ระบุวัน = ล่าสุด)
 //    GET  /sheets/month-end-summary        สรุปรายสาขา: ปิดยอดรอบล่าสุดถึงวันไหน กี่รายการ มูลค่าเท่าไหร่
@@ -157,6 +158,11 @@ function mountSheets(app) {
   // ทะเบียนสาขา — dropdown เลือกสาขาทุกหน้าและตารางแมป outletID ฝั่ง API กินข้อมูลชุดนี้
   app.get('/sheets/branch', (req, res) =>
     send(res, getBranches().then(c => c.readBranches()), 'readBranches'));
+
+  // รหัสพ้อง (dbo.hr_branch_alias) — ตารางเดียวกับที่ตัวแปลรหัสสาขาฝั่ง API ใช้
+  // ฝั่งเขียนไม่ต้องมีเส้นแยก /sheets/save ส่งต่อไปที่ branches.actions ให้อยู่แล้ว
+  app.get('/sheets/branch-alias', (req, res) =>
+    send(res, getBranches().then(c => c.readAliases()), 'readAliases'));
 
   // ข้อมูลปิดรอบเดือน — หน้า "ดูข้อมูลปิดรอบเดือน" (STOCK) ดูอย่างเดียว ไม่มีฝั่งเขียน
   app.get('/sheets/month-end-summary', (req, res) =>

@@ -1,8 +1,13 @@
 // ทะเบียนสาขา — อ่าน/เขียนตาราง InventoryNarai.dbo.hr_branch
 //
-//   GET  /api/branches              -> รายชื่อสาขาทั้งหมด (ใช้เติม dropdown ทุกหน้า)
+//   GET  /api/branches              -> รายชื่อสาขาทั้งหมด + รหัสพ้อง (ใช้เติม dropdown ทุกหน้า)
 //   GET  /api/branches?compare=1    -> แนบผลเทียบกับรายชื่อสาขาของระบบตารางงานมาด้วย
-//   POST /api/branches              -> { action: 'saveBranch' | 'deleteBranch' | 'createTable', ... }
+//   POST /api/branches              -> { action: 'saveBranch' | 'deleteBranch' | 'createTable'
+//                                              | 'saveAlias' | 'deleteAlias' | 'saveTarget', ... }
+//
+// ตารางนี้เป็น "ทะเบียนแม่" ของทั้งสามระบบแล้ว (โปรเจคนี้ · ระบบตารางงาน · ระบบสโตร์)
+// แผนและเหตุผลอยู่ใน docs/branch-hub.md — โปรเจคอื่นดึงผ่าน /api/branch-feed ไม่ใช่เส้นนี้
+// (เส้นนี้อยู่หลังคุกกี้ล็อกอินของคน ส่วนเส้นนั้นใช้กุญแจของระบบ)
 //
 // ⚠️ ตารางนี้คนละตัวกับ narai_hr.dbo.hr_branch ของโปรเจกต์ Narai-branch (ระบบตารางงาน)
 //    เหตุผลที่แยกกันอยู่หัวไฟล์ docs/schema-hr-branch.sql — compare=1 มีไว้ให้เห็นว่าสองที่ยังตรงกันไหม
@@ -22,11 +27,12 @@ import path from 'node:path';
 import { isConfigured as hasDirectDb, runQuery } from '../../lib/qcrdPool';
 import {
   readBranchRegistry, saveBranchRow, deleteBranchRow, sqlRoute, SHEETS_API_BASE,
+  readBranchAliases, saveAliasRow, deleteAliasRow, saveTargetRow,
 } from '../../lib/sheetsSource';
 import { fetchScheduleBranches } from '../../lib/hrSchedule';
 import {
-  FALLBACK_BRANCHES, STATUS_ACTIVE, STATUS_INACTIVE, normalizeCode,
-  normalizeOutletId, validateCode,
+  FALLBACK_BRANCHES, FALLBACK_ALIASES, STATUS_ACTIVE, STATUS_INACTIVE, normalizeCode,
+  normalizeOutletId, validateCode, validateAlias,
 } from '../../lib/branches';
 
 export const config = { maxDuration: 60 };
@@ -46,6 +52,13 @@ const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
  */
 function checkBranchBody(action, body) {
   const code = normalizeCode(body.code);
+  if (action === 'deleteAlias') return validateAlias(body.alias);
+  if (action === 'saveAlias') {
+    const badAlias = validateAlias(body.alias);
+    if (badAlias) return badAlias;
+    return normalizeCode(body.branchCode) ? '' : 'ต้องเลือกสาขาปลายทางที่รหัสพ้องนี้ชี้ไป';
+  }
+  if (action === 'saveTarget') return code ? '' : 'ต้องระบุรหัสสาขา';
   if (action === 'deleteBranch') return code ? '' : 'ต้องระบุรหัสสาขาที่จะลบ';
   const bad = validateCode(code);
   if (bad) return bad;
@@ -63,7 +76,17 @@ const canWrite = () =>
 const fallbackRows = () =>
   FALLBACK_BRANCHES.map((b, i) => ({
     code: b.code, name: '', outletId: b.outletId,
-    status: STATUS_ACTIVE, note: '', sortOrder: i + 1,
+    // สาขาที่ปิดไปแล้วต้องขึ้นว่าปิดแม้ตอนใช้ของสำรอง ไม่งั้นช่วงที่ฐานล่ม
+    // dropdown จะมีสาขาที่เลิกกิจการไปแล้วโผล่ขึ้นมาให้เลือก
+    status: b.status || STATUS_ACTIVE, note: '', sortOrder: i + 1,
+    region: '', openedAt: null, closedAt: null, posDbKey: '',
+    dailyTarget: 0, monthlyTarget: 0, maxWage: 0,
+  }));
+
+/** รหัสพ้องสำรอง ในรูปแบบเดียวกับที่อ่านจากฐาน */
+const fallbackAliases = () =>
+  Object.entries(FALLBACK_ALIASES).map(([alias, branchCode]) => ({
+    alias, branchCode, source: '', note: 'รายการสำรองในโค้ด — ยังอ่านตารางรหัสพ้องจากฐานไม่ได้',
   }));
 
 const isMissingTable = (msg) => /Invalid object name .*hr_branch/i.test(msg || '');
@@ -117,6 +140,12 @@ function explain(err) {
   if (/UQ_hr_branch_outlet|duplicate key.*outlet/i.test(msg)) {
     return 'รหัสร้าน POS นี้ถูกใช้กับสาขาอื่นอยู่แล้ว — เลขนี้ต้องไม่ซ้ำกัน ไม่งั้นยอดขายสองสาขาจะรวมกันมั่ว';
   }
+  if (/FK_hr_branch_alias_branch|FK_hr_branch_target_branch/i.test(msg)) {
+    return 'สาขาปลายทางไม่มีอยู่ในทะเบียน — เพิ่มสาขานั้นก่อน แล้วค่อยผูกรหัสพ้อง/เป้ายอด';
+  }
+  if (/PK_hr_branch_alias|duplicate key.*hr_branch_alias/i.test(msg)) {
+    return 'รหัสพ้องนี้มีอยู่แล้ว — แก้ที่รายการเดิมแทนการเพิ่มใหม่';
+  }
   if (isMissingTable(msg)) {
     return 'ยังไม่ได้สร้างตารางทะเบียนสาขา — กดปุ่ม "สร้างตาราง" ที่หัวหน้านี้ ' +
       'หรือรัน docs/schema-hr-branch.sql ที่เครื่องออฟฟิศ';
@@ -139,6 +168,7 @@ export default async function handler(req, res) {
       const data = fallbackRows();
       return res.status(200).json(await withCompare({
         status: 'success', source: 'fallback', tableReady: false, canWrite: false, data,
+        aliases: fallbackAliases(),
         warning: 'ยังไปถึงฐานทะเบียนสาขาไม่ได้ — ตั้ง QCRD_DB_USER/QCRD_DB_PASSWORD (ต่อ SQL ตรง) ' +
           'หรือ SHEETS_WRITE_KEY ให้ตรงกับเครื่องออฟฟิศ (ผ่าน host API) อย่างใดอย่างหนึ่งบน Vercel ' +
           'ตอนนี้แสดงรายชื่อสาขาสำรองที่ฝังไว้ในโค้ด แก้ไขจากหน้านี้ยังไม่ได้',
@@ -146,11 +176,22 @@ export default async function handler(req, res) {
     }
 
     try {
-      const data = await readBranchRegistry();
+      // รหัสพ้องอ่านไม่ได้ไม่ใช่เหตุให้ทั้งหน้าร่วง — ทะเบียนสาขาคือของหลัก
+      // (ฐานที่ยังไม่ได้รัน DDL รอบใหม่คืน null มาเอง ไม่ได้ throw)
+      const [data, aliasList] = await Promise.all([
+        readBranchRegistry(),
+        readBranchAliases().catch((err) => {
+          console.error('branches: อ่านรหัสพ้องไม่ได้:', err.message);
+          return null;
+        }),
+      ]);
       res.setHeader('Cache-Control', CACHE_OK);
       return res.status(200).json(await withCompare({
         status: 'success', source: 'sql', target: sqlRoute(),
         tableReady: true, canWrite: true, data,
+        aliases: aliasList || [],
+        // ยังไม่มีตารางรหัสพ้อง = หน้าเว็บซ่อนส่วนนั้นไว้ ไม่ใช่โชว์เป็นลิสต์ว่างให้กดแล้วพัง
+        aliasReady: aliasList !== null,
       }, data));
     } catch (err) {
       const missing = isMissingTable(err.message);
@@ -158,6 +199,7 @@ export default async function handler(req, res) {
       const data = fallbackRows();
       return res.status(200).json(await withCompare({
         status: 'success', source: 'fallback', tableReady: false, canWrite: true, data,
+        aliases: fallbackAliases(),
         warning: missing
           ? 'ยังไม่ได้สร้างตารางทะเบียนสาขา — แสดงรายชื่อสำรองไปก่อน กดปุ่ม "สร้างตาราง" เพื่อเริ่มใช้งาน'
           : `อ่านทะเบียนสาขาจากฐานไม่ได้ (${err.message}) — แสดงรายชื่อสำรองที่ฝังไว้ในโค้ดแทน`,
@@ -204,16 +246,20 @@ export default async function handler(req, res) {
     // แก้รหัสสาขาไม่ได้ตั้งใจ — รหัสนี้ถูกอ้างอยู่ในตารางงาน ข้อมูลสแกนหน้า ค่าใช้จ่าย
     // และคอลัมน์ "สาขาที่ใช้" ของวัตถุดิบ เปลี่ยนที่ทะเบียนที่เดียวจะทำให้ข้อมูลเก่ากำพร้าทันที
     // จะเปลี่ยนรหัสจริง ๆ ให้เพิ่มสาขาใหม่แล้วปิดการใช้งานตัวเก่าแทน
-    if (action === 'saveBranch' || action === 'deleteBranch') {
+    /* คำสั่งที่เขียนทะเบียน — ตรวจค่าที่ส่งมาก่อนยิงข้ามเน็ต แล้วส่งต่อให้ lib/sheetsSource.js
+       เลือกทาง (ต่อ SQL ตรง หรือ host API) ตัวเขียนจริงและตัวตรวจซ้ำอยู่ใน lib/branchSql.mjs */
+    const WRITERS = {
+      saveBranch: saveBranchRow,
+      deleteBranch: deleteBranchRow,
+      saveAlias: saveAliasRow,
+      deleteAlias: deleteAliasRow,
+      saveTarget: saveTargetRow,
+    };
+    const write = WRITERS[action];
+    if (write) {
       const bad = checkBranchBody(action, body);
       if (bad) return res.status(200).json({ status: 'error', message: bad });
-    }
-    if (action === 'saveBranch') {
-      const out = await saveBranchRow(body);
-      return res.status(200).json({ status: 'success', data: out });
-    }
-    if (action === 'deleteBranch') {
-      const out = await deleteBranchRow(body);
+      const out = await write(body);
       return res.status(200).json({ status: 'success', data: out });
     }
     return res.status(200).json({ status: 'error', message: `ไม่รู้จักคำสั่ง ${action || '(ว่าง)'}` });

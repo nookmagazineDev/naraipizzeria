@@ -112,6 +112,95 @@ SET @fixed = @@ROWCOUNT;
 IF @fixed > 0 PRINT N'ซ่อมสถานะที่อ่านไม่ออก ' + CAST(@fixed AS NVARCHAR(10)) + N' สาขา';
 GO
 
+/* ===================== ช่องเพิ่มเติมของทะเบียน (Branch Hub) =====================
+   เพิ่มทีหลัง ตอนที่ทะเบียนนี้ถูกยกให้เป็น "ทะเบียนแม่" ของทั้งสามระบบ
+   (โปรเจคนี้ · ระบบตารางงาน Narai-branch · ระบบสโตร์ narai-storefct)
+   เหตุผลและแผนทั้งหมดอยู่ใน docs/branch-hub.md
+
+   ทุกช่องยอมให้ NULL ได้หมด จึงเติมลงตารางที่มีข้อมูลอยู่แล้วได้ทันที ไม่ล็อกนาน
+   และโค้ดเวอร์ชันเก่าที่ยังไม่รู้จักช่องพวกนี้ก็ยังทำงานได้ตามปกติ                */
+IF COL_LENGTH(N'dbo.hr_branch', N'opened_at')  IS NULL
+    ALTER TABLE dbo.hr_branch ADD opened_at DATE NULL;
+IF COL_LENGTH(N'dbo.hr_branch', N'closed_at')  IS NULL
+    ALTER TABLE dbo.hr_branch ADD closed_at DATE NULL;
+IF COL_LENGTH(N'dbo.hr_branch', N'region')     IS NULL
+    ALTER TABLE dbo.hr_branch ADD region NVARCHAR(50) NOT NULL CONSTRAINT DF_hr_branch_region DEFAULT (N'');
+IF COL_LENGTH(N'dbo.hr_branch', N'pos_db_key') IS NULL
+    ALTER TABLE dbo.hr_branch ADD pos_db_key NVARCHAR(50) NULL;
+GO
+
+/* opened_at / closed_at มีไว้ให้รายงานย้อนหลังแยกออกว่า "ยอดเป็น 0 เพราะขายไม่ได้"
+   กับ "ยอดเป็น 0 เพราะเดือนนั้นยังไม่เปิดสาขา/ปิดไปแล้ว" — สองอย่างนี้หน้าตาเหมือนกันเป๊ะ
+   ในกราฟ แต่คนละเรื่องกันสิ้นเชิง ตอนนี้ยังไม่มีอะไรบอกความต่างได้เลย
+
+   ปิดสาขายังคงใช้ status = N'ปิดการใช้งาน' เป็นตัวตัดสินเหมือนเดิม (โค้ดทุกที่อ่านช่องนั้น)
+   closed_at เป็นแค่ "ปิดเมื่อไหร่" ไม่ใช่ "ปิดหรือยัง" — ห้ามเอาไปใช้แทนกัน            */
+
+/* ===================== รหัสพ้อง: รหัสคนละตัวแต่เป็นร้านเดียวกัน =====================
+   เคสจริง: เว็บล็อกอินด้วย zjp แต่ชีท/POS/เครื่องสแกนหน้าเขียนว่า SJP (ทั้งคู่คือ outlet 7)
+   ล็อกอิน zjp แล้วรายชื่อพนักงานขึ้นไม่ครบ เพราะข้อมูลถูกบันทึกไว้ใต้รหัสอีกตัว
+
+   ก่อนมีตารางนี้ กติกาเดียวกันนี้ถูกเขียนซ้ำไว้ 5 ที่ใน 3 โปรเจค และไม่มีอะไรบังคับให้ตรงกัน:
+       naraipizzeria/lib/branchRegistry.js       ALIASES
+       naraipizzeria/pages/api/usage.js          { 'zjp': 'sjp' }
+       Narai-branch/src/utils/branchAlias.js     BRANCH_ALIAS_GROUPS
+       Narai-branch/office-server/hr-session.js  BRANCH_ALIAS_GROUPS (ไฟล์เตือนเองว่า "ต้องแก้ทั้งสองที่")
+       narai-storefct/lib/branches.js            ALIASES
+   เพิ่มคู่ใหม่แล้วลืมที่ใดที่หนึ่ง = อาการ "ข้อมูลขึ้นไม่ครบ" ที่เงียบมากและหายาก
+
+   ⚠️ alias ต้องไม่ซ้ำกับ branch_code ที่มีอยู่จริง — ไม่งั้นรหัสจริงจะถูกแปลไปเป็นสาขาอื่น
+      ฐานบังคับให้ไม่ได้ (คนละตาราง) ตัวตรวจอยู่ฝั่งโค้ดใน lib/branchSql.mjs      */
+IF OBJECT_ID(N'dbo.hr_branch_alias', N'U') IS NULL
+CREATE TABLE dbo.hr_branch_alias (
+    alias       NVARCHAR(20)  NOT NULL,   -- รหัสพ้อง ตัวพิมพ์ใหญ่ (ZJP)
+    branch_code NVARCHAR(10)  NOT NULL,   -- ชี้ไปสาขาจริงในทะเบียน (SJP)
+    source      NVARCHAR(50)  NOT NULL CONSTRAINT DF_hr_branch_alias_source DEFAULT (N''),
+    note        NVARCHAR(255) NOT NULL CONSTRAINT DF_hr_branch_alias_note   DEFAULT (N''),
+    updated_at  DATETIME2(0)  NOT NULL CONSTRAINT DF_hr_branch_alias_upd    DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_hr_branch_alias PRIMARY KEY (alias),
+    CONSTRAINT FK_hr_branch_alias_branch FOREIGN KEY (branch_code)
+        REFERENCES dbo.hr_branch (branch_code)
+);
+GO
+
+/* source = รหัสนี้มาจากระบบไหน ('login' / 'pos' / 'zkbio' / 'sheet')
+   มีไว้เพราะคนที่มาอ่านทีหลังต้องตอบให้ได้ว่า "ลบทิ้งได้หรือยัง" — รหัสพ้องที่มาจากชีท
+   เลิกใช้ได้เมื่อชีทเลิกใช้ ส่วนรหัสที่มาจากหน้าล็อกอินลบไม่ได้จนกว่าคนจะเลิกใช้รหัสนั้นล็อกอิน */
+MERGE dbo.hr_branch_alias AS t
+USING (VALUES
+    (N'ZJP', N'SJP', N'login', N'เว็บล็อกอินด้วย zjp แต่ชีท/POS/เครื่องสแกนหน้าเขียนว่า SJP'),
+    (N'ZIP', N'CRM', N'pos',   N'เคยฝังไว้ใน usage.js และ usagebytable.js — ข้อมูลเก่าบางชุดยังเขียนมาแบบนี้')
+) AS s (alias, branch_code, source, note)
+ON t.alias = s.alias
+WHEN NOT MATCHED BY TARGET
+     -- สาขาปลายทางต้องมีอยู่จริงก่อน ไม่งั้น FK จะเตะทั้ง batch ทิ้ง
+     AND EXISTS (SELECT 1 FROM dbo.hr_branch b WHERE b.branch_code = s.branch_code) THEN
+    INSERT (alias, branch_code, source, note)
+    VALUES (s.alias, s.branch_code, s.source, s.note);
+GO
+
+/* ===================== เป้ายอดขายและเพดานค่าแรงรายสาขา =====================
+   ย้ายมาจาก narai_hr.dbo.hr_branch (โปรเจค Narai-branch) ซึ่งเดิมไม่มีหน้าจอให้แก้เลย
+   ต้องเปิด SSMS แล้ว UPDATE เอง (ดู docs/hr-sql-migration.md ของโปรเจคนั้น)
+   ย้ายมาที่นี่แล้วแก้จากหน้า HR > จัดการสาขา ได้ ส่วนฝั่งตารางงานอ่านกลับไปผ่าน view
+   ที่ join สองตารางนี้เข้าด้วยกัน — ดูขั้นตอนใน docs/migrate-branch-hub.sql
+
+   ⚠️ แยกตาราง ไม่รวมเข้า hr_branch เพราะเป็นของที่เปลี่ยนคนละจังหวะและคนละคนแก้
+      ทะเบียน = งานเปิดสาขา (ปีละไม่กี่ครั้ง) · เป้า/เพดานค่าแรง = งานรายเดือน
+      แยกไว้แล้วให้สิทธิ์แก้คนละชุดได้ และ updated_at ของสองเรื่องไม่ปนกัน       */
+IF OBJECT_ID(N'dbo.hr_branch_target', N'U') IS NULL
+CREATE TABLE dbo.hr_branch_target (
+    branch_code    NVARCHAR(10)  NOT NULL,
+    daily_target   DECIMAL(14,2) NOT NULL CONSTRAINT DF_hr_branch_target_daily   DEFAULT (0),
+    monthly_target DECIMAL(14,2) NOT NULL CONSTRAINT DF_hr_branch_target_monthly DEFAULT (0),
+    max_wage       DECIMAL(14,2) NOT NULL CONSTRAINT DF_hr_branch_target_wage    DEFAULT (0),
+    updated_at     DATETIME2(0)  NOT NULL CONSTRAINT DF_hr_branch_target_upd     DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_hr_branch_target PRIMARY KEY (branch_code),
+    CONSTRAINT FK_hr_branch_target_branch FOREIGN KEY (branch_code)
+        REFERENCES dbo.hr_branch (branch_code)
+);
+GO
+
 /* ===================== ให้สิทธิ์ login ที่แดชบอร์ดใช้ต่อเข้ามา =====================
    ตัวเดียวกับที่ QC/RD ใช้ — ถ้ารัน docs/schema-qcrd.sql ไปแล้วก็ได้สิทธิ์ครบอยู่แล้ว
    ข้ามส่วนนี้ได้ แก้ @login ให้ตรงกับ QCRD_DB_USER (หรือ ZK_DB_USER / HR_DB_USER) ก่อนรัน */
