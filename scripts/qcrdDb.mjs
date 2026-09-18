@@ -41,7 +41,14 @@ export async function loadMssql() {
   }
 }
 
-export async function openPool(dbName = DEFAULT_DB) {
+/**
+ * @param {string} dbName ฐานที่จะต่อเข้าไป
+ * @param {{ maxPool?: number }} opts
+ *   maxPool = 1 บังคับให้ทุกคำสั่งวิ่งผ่านคอนเนกชันเดียว — จำเป็นสำหรับไฟล์ .sql ที่มี
+ *   USE หรือ SET (เช่น SET NOEXEC ON) เพราะค่าพวกนั้นติดอยู่กับ "คอนเนกชัน" ไม่ใช่ pool
+ *   ปล่อยให้ pool แจกคนละเส้น = ชุดคำสั่งถัดไปอาจไปรันผิดฐานหรือหลุด guard แบบเงียบ ๆ
+ */
+export async function openPool(dbName = DEFAULT_DB, { maxPool = 4 } = {}) {
   const mssql = await loadMssql();
   const [host, instance] = RAW_SERVER.split('\\');
   const config = {
@@ -55,7 +62,7 @@ export async function openPool(dbName = DEFAULT_DB) {
       enableArithAbort: true,
       ...(instance ? { instanceName: instance } : {}),
     },
-    pool: { max: 4, min: 0, idleTimeoutMillis: 30000 },
+    pool: { max: maxPool, min: 0, idleTimeoutMillis: 30000 },
     requestTimeout: 180000,
   };
   if (!instance) {

@@ -41,7 +41,11 @@ console.log(`รัน ${file} → ${describeTarget(DB_NAME)} (${batches.length}
 const needsMaster = /CREATE\s+DATABASE|^\s*USE\s+/im.test(text);
 let pool;
 try {
-  pool = await openPool(needsMaster ? 'master' : DB_NAME);
+  // ⚠️ คอนเนกชันเดียวเท่านั้น — USE กับ SET (เช่น SET NOEXEC ON, SET QUOTED_IDENTIFIER)
+  //    ติดอยู่กับคอนเนกชัน ไม่ใช่ pool ปล่อยให้ pool แจกคนละเส้น ชุดคำสั่งถัดจาก
+  //    "USE InventoryNarai" อาจไปรันบนฐาน master แล้วขึ้น Invalid object name
+  //    ส่วนไฟล์ที่ใช้ SET NOEXEC ON เป็นตัวกันไม่ให้รันต่อ จะหลุด guard ไปเงียบ ๆ
+  pool = await openPool(needsMaster ? 'master' : DB_NAME, { maxPool: 1 });
 } catch (err) {
   console.error(`\n❌ ${err.message}`);
   process.exit(1);
