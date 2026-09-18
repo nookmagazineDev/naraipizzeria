@@ -64,7 +64,7 @@ import ChangePasswordModal from '../components/ChangePasswordModal';
 import { MENU_GROUPS, MENU_LABELS, ROLE_ADMIN, firstAllowedMenu, hasPerm } from '../lib/permissions';
 import { FALLBACK_BRANCHES } from '../lib/branches';
 import {
-  OPEN_DATE_BUFFER_DAYS, addDaysStr, dateFromRow, getChunks, normalizeArray, safeFetchJson,
+  OPEN_DATE_BUFFER_DAYS, addDaysStr, dateFromRow, fetchChunkJson, getChunks, normalizeArray,
 } from '../lib/salesFetch';
 import { 
   ResponsiveContainer, 
@@ -921,17 +921,26 @@ export default function App() {
           text: `กำลังดึงข้อมูลช่วง ${chunk.start} ถึง ${chunk.end} (ชุดที่ ${i + 1}/${chunks.length})`
         });
 
-        const [salesRes, detailRes] = await Promise.all([
-          fetch(`/api/sales?start=${chunk.start}&end=${chunk.end}${outletParam}`),
-          fetch(`/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`)
-        ]);
-
         const chunkLabel = `${chunk.start} ถึง ${chunk.end}`;
-        const salesJson = await safeFetchJson(salesRes, 'Sales API', chunkLabel);
-        const detailJson = await safeFetchJson(detailRes, 'Detail API', chunkLabel);
+        // บอกบนแถบความคืบหน้าว่ากำลังลองใหม่อยู่ ไม่ใช่ค้าง (รอบหนึ่งรอได้ถึง 55 วิ)
+        const onRetry = ({ attempt, total, chunkLabel: c }) => setLoadProgress(p => ({
+          current: i, total: chunks.length, ...p,
+          text: `ช่วง ${c} ตอบไม่ทัน กำลังลองใหม่ (ครั้งที่ ${attempt}/${total})...`,
+        }));
 
-        allSales = allSales.concat(normalizeArray(salesJson));
-        allDetails = allDetails.concat(normalizeArray(detailJson));
+        // ยิงบิลกับรายการพร้อมกัน แต่ละตัวลองใหม่เองได้ — ใช้ allSettled เพื่อให้อีกตัว
+        // ที่ยังลองอยู่จบงานของมันก่อน ไม่ทิ้งเป็น unhandled rejection ค้างไว้
+        const [salesR, detailR] = await Promise.allSettled([
+          fetchChunkJson(`/api/sales?start=${chunk.start}&end=${chunk.end}${outletParam}`,
+            'Sales API', chunkLabel, { onRetry }),
+          fetchChunkJson(`/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`,
+            'Detail API', chunkLabel, { onRetry }),
+        ]);
+        if (salesR.status === 'rejected') throw salesR.reason;
+        if (detailR.status === 'rejected') throw detailR.reason;
+
+        allSales = allSales.concat(normalizeArray(salesR.value));
+        allDetails = allDetails.concat(normalizeArray(detailR.value));
       }
 
       // รวมออเดอร์เพิ่มเติมจาก Google Sheet (โต๊ะ 800) ก่อนกรองช่วงวัน
@@ -2303,8 +2312,8 @@ export default function App() {
 
     // Fallback: Fetch from API for that specific day
     try {
-      const res = await fetch(`/api/detail?start=${date}&end=${date}`);
-      const json = await safeFetchJson(res, 'Detail API', date);
+      // ลองใหม่เองได้เหมือนตอนดึงชุดใหญ่ — ป๊อปอัปนี้กดตอนไหนก็ได้ ฐานอาจกำลังยุ่งพอดี
+      const json = await fetchChunkJson(`/api/detail?start=${date}&end=${date}`, 'Detail API', date);
       const list = normalizeArray(json);
       const matched = list.filter(r => String(r.chkCheckID) === String(checkID));
       setModal({ open: true, checkID, rows: matched, loading: false, error: '' });

@@ -82,9 +82,50 @@ const dbConfig = {
 };
 
 // connection pool ใช้ซ้ำ ไม่ต้องต่อใหม่ทุก request
-let poolPromise = sql.connect(dbConfig)
-  .then(pool => { console.log('✅ ต่อ SQL Server สำเร็จ'); return pool; })
-  .catch(err => { console.error('❌ ต่อ SQL Server ไม่ได้:', err.message); throw err; });
+//
+// เดิมต่อครั้งเดียวตอนบูตแล้วเก็บ promise ไว้ตรง ๆ — ถ้าตอนนั้น SQL Server ยังไม่ขึ้น
+// (Windows บูตเสร็จก่อน service ของ SQL · เครื่องเพิ่งตื่นจาก sleep) promise จะค้างสถานะ
+// rejected ถาวร ทุกคำขอหลังจากนั้นพังหมดทั้งวัน จนกว่าคนจะไปรีสตาร์ต host-server เอง
+// → ต่อแบบ lazy + ล้างทิ้งเมื่อพัง เหมือน getZkPool()/QC-RD/Aoringo ให้คำขอถัดไปลองใหม่ได้เอง
+
+/** pool ที่ยังใช้งานได้ไหม (mssql รุ่นที่ไม่มี flag นี้จะได้ undefined = ถือว่าใช้ได้ เท่าพฤติกรรมเดิม) */
+const isPoolUsable = pool => !!pool && (pool.connected !== false || pool.connecting === true);
+
+let poolPromise = null;
+function connectPool() {
+  if (!poolPromise) {
+    const attempt = new sql.ConnectionPool(dbConfig).connect()
+      .then(pool => {
+        console.log('✅ ต่อ SQL Server สำเร็จ');
+        // pool ที่เคยต่อติดแล้วตายทีหลัง (SQL restart · เครื่อง sleep · สาย LAN หลุด)
+        // จะยิง event 'error' ออกมา — ทิ้งตัวที่ตายแล้วเพื่อให้คำขอถัดไปต่อใหม่
+        pool.on('error', err => {
+          console.error('⚠️ pool ของ SQL Server มีปัญหา:', err.message);
+          if (poolPromise === attempt) poolPromise = null;
+        });
+        return pool;
+      })
+      .catch(err => {
+        if (poolPromise === attempt) poolPromise = null;   // ให้ request ถัดไปลองต่อใหม่ได้
+        console.error('❌ ต่อ SQL Server ไม่ได้:', err.message);
+        throw new Error(`ต่อฐานข้อมูล ${dbConfig.server}/${dbConfig.database} ไม่ได้: ${err.message}`);
+      });
+    poolPromise = attempt;
+  }
+  return poolPromise;
+}
+
+/** pool ที่ใช้ได้จริง — ตัวที่ถูกปิดไปแล้วไม่ยิง event 'error' เสมอไป ต้องเช็กเองด้วย */
+async function getPool() {
+  const attempt = connectPool();
+  const pool = await attempt;
+  if (isPoolUsable(pool)) return pool;
+  if (poolPromise === attempt) poolPromise = null;
+  return connectPool();
+}
+
+// ลองต่อตั้งแต่บูตเพื่อให้เห็นผลใน log ทันที (ต่อไม่ติดก็ไม่เป็นไร คำขอแรกจะลองใหม่เอง)
+connectPool().catch(() => {});
 
 // ── ZKBio Time 9 (เครื่องสแกนนิ้ว) — ฐานข้อมูลแยกอีกตัว มักอยู่บน named instance SQLEXPRESS ──
 //    ตั้งค่าผ่าน env:  ZK_DB_SERVER (default localhost\SQLEXPRESS), ZK_DB_NAME (default ZKBio9),
@@ -160,7 +201,7 @@ app.get('/ctranbetweendate', async (req, res) => {
   const { start, end, outlet } = req.query;
   if (!start || !end) return res.status(400).json({ error: 'ต้องมี start และ end' });
   try {
-    const pool = await poolPromise;
+    const pool = await getPool();
     const dbReq = pool.request()
       .input('start', sql.VarChar, start + ' 00:00:00')
       .input('end',   sql.VarChar, end   + ' 23:59:59');
@@ -206,7 +247,7 @@ app.get('/cpaidbetweendate', async (req, res) => {
   const { start, end, outlet } = req.query;
   if (!start || !end) return res.status(400).json({ error: 'ต้องมี start และ end' });
   try {
-    const pool = await poolPromise;
+    const pool = await getPool();
     const dbReq = pool.request()
       .input('start', sql.VarChar, start + ' 00:00:00')
       .input('end',   sql.VarChar, end   + ' 23:59:59');
@@ -276,7 +317,7 @@ app.get('/cpaidbetweendate', async (req, res) => {
 // ── /tables : รายชื่อตารางทั้งหมด (ไว้หา PAID_TABLE) ──
 app.get('/tables', async (req, res) => {
   try {
-    const pool = await poolPromise;
+    const pool = await getPool();
     const result = await pool.request().query(
       "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES " +
       "WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"
@@ -291,7 +332,7 @@ app.get('/tables', async (req, res) => {
 app.get('/columns', async (req, res) => {
   const table = (req.query.table || 'Ctrans').replace(/[^A-Za-z0-9_]/g, '');
   try {
-    const pool = await poolPromise;
+    const pool = await getPool();
     const result = await pool.request()
       .input('t', sql.VarChar, table)
       .query(
@@ -308,7 +349,7 @@ app.get('/columns', async (req, res) => {
 app.get('/sample', async (req, res) => {
   const table = (req.query.table || 'Ctrans').replace(/[^A-Za-z0-9_]/g, '');
   try {
-    const pool = await poolPromise;
+    const pool = await getPool();
     const result = await pool.request().query(`SELECT TOP 1 * FROM dbo.${table}`);
     res.json((result.recordset[0] && mapRow(result.recordset[0])) || {});
   } catch (e) {
