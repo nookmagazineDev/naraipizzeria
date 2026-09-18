@@ -1,4 +1,4 @@
-import { branchOutletMap } from '../../lib/branchRegistry';
+import { branchOutletMap, resolveBranch } from '../../lib/branchRegistry';
 // ดึงข้อมูล "ยอดใช้จากระบบ" จาก Google Sheet (ชีท UsageHistory) แทน API เดิม
 // Spreadsheet: 1TjvtUUxxVi3Dc5q1kvzrt--g_AHQO3z8EF-b3viHIRg
 // คอลัมน์ A: วันที่ | B: เลขสาขา | C: ชื่อสาขา | D: รหัสสินค้า | F: จำนวนที่ใช้ไป
@@ -65,14 +65,11 @@ export default async function handler(req, res) {
   // เพิ่มสาขาใหม่ที่หน้า HR > จัดการสาขา แล้วไฟล์นี้รู้จักเองทันที ไม่ต้องมาแก้โค้ด
   const branchMap = await branchOutletMap();
 
-  // แมปรหัสสาขาในเว็บ -> ชื่อสาขาในชีท (กรณีชื่อไม่ตรงกัน เช่น เว็บใช้ zjp แต่ชีทเป็น SJP)
-  const branchAlias = {
-    'zjp': 'sjp'
-  };
-
   const branchKey = String(branch).toLowerCase().trim();
-  // ชื่อสาขาที่คาดว่าจะอยู่ในชีท (คอลัมน์ C) ใช้ alias ถ้ามี
-  const sheetBranchName = (branchAlias[branchKey] || branchKey).toLowerCase().trim();
+  // ชื่อสาขาที่คาดว่าจะอยู่ในชีท (คอลัมน์ C) — เว็บกับชีทใช้รหัสไม่ตรงกันในบางสาขา
+  // (เช่นเว็บใช้ zjp แต่ชีทเป็น SJP) ตารางรหัสพ้องอยู่ในทะเบียนสาขาแล้ว
+  // เพิ่มคู่ใหม่ที่หน้า HR > จัดการสาขา ไม่ต้องมาแก้ไฟล์นี้
+  const sheetBranchName = await resolveBranch(branchKey);
   const outletId = String(queryOutletId || branchMap[branchKey] || '').trim();
 
   const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(SHEET_NAME)}`;
