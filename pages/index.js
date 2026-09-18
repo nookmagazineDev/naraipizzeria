@@ -48,6 +48,7 @@ import MonthEndList from '../components/MonthEndList';
 import EmployeeList from '../components/EmployeeList';
 import Attendance from '../components/Attendance';
 import BranchList from '../components/BranchList';
+import BranchUserList from '../components/BranchUserList';
 import SalaryReport from '../components/SalaryReport';
 import OtherExpense from '../components/OtherExpense';
 import TaxInvoice from '../components/TaxInvoice';
@@ -670,6 +671,7 @@ const MENU_ICONS = {
   itemSearch: Search, taxInvoice: FileText, otherExpense: DollarSign,
   stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar,
   employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, branchList: Building2,
+  branchUsers: KeyRound,
   qcrdMenu: FileText, qcrdItems: PackageSearch,
   planList: ClipboardList, branchRequisition: PackageOpen,
   fcDashboard: LayoutDashboard, fcReport: FileText, fcDaily: Receipt,
@@ -2535,6 +2537,7 @@ export default function App() {
                 {activeTab === 'employeeList' && <Users size={20} className="text-amber-600" />}
                 {activeTab === 'attendance' && <Fingerprint size={20} className="text-amber-600" />}
                 {activeTab === 'branchList' && <Building2 size={20} className="text-amber-600" />}
+                {activeTab === 'branchUsers' && <KeyRound size={20} className="text-amber-600" />}
                 {activeTab === 'salaryReport' && <Wallet size={20} className="text-amber-600" />}
                 {activeTab === 'taxInvoice' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
@@ -2560,6 +2563,7 @@ export default function App() {
                   : activeTab === 'employeeList' ? 'รายชื่อพนักงาน'
                   : activeTab === 'attendance' ? 'ดูสแกนหน้า (เข้า-ออกงาน)'
                   : activeTab === 'branchList' ? 'จัดการสาขา'
+                  : activeTab === 'branchUsers' ? 'login สาขา (บัญชีที่สาขาใช้เข้าระบบลงตารางงาน)'
                   : activeTab === 'salaryReport' ? 'รายงานเงินเดือน'
                   : activeTab === 'taxInvoice' ? 'ใบกำกับภาษี (เต็มรูป / อย่างย่อ ABB)'
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
@@ -2634,6 +2638,7 @@ export default function App() {
 
             {/* HR: จัดการสาขา — ทะเบียนสาขากลางที่ dropdown ทุกหน้าดึงไปใช้ (InventoryNarai.dbo.hr_branch) */}
             {activeTab === 'branchList' && <BranchList />}
+            {activeTab === 'branchUsers' && <BranchUserList />}
 
             {/* HR: รายงานเงินเดือน — สรุปวันทำงาน/วันลา/OT รายคน ตามสาขาและช่วงวันที่ แล้วสั่งพิมพ์ */}
             {activeTab === 'salaryReport' && <SalaryReport />}

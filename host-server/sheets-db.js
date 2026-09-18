@@ -16,6 +16,7 @@
 //    GET  /sheets/employee                 รายชื่อพนักงาน
 //    GET  /sheets/branch                   ทะเบียนสาขา (dbo.hr_branch)
 //    GET  /sheets/branch-alias             รหัสพ้องสาขา (dbo.hr_branch_alias)
+//    GET  /sheets/branch-user              login ของสาขา (narai_hr.dbo.hr_user — คนละฐาน)
 //    GET  /sheets/stock-items?branch=crm   หน้านับสต๊อก: ยอดนับ/ยอดยกมา/ใบเบิกล่าสุดของสาขานั้น
 //    GET  /sheets/stock-total?endDate=     ยอดคงเหลือรวมทุกสาขา (ไม่ระบุวัน = ล่าสุด)
 //    GET  /sheets/month-end-summary        สรุปรายสาขา: ปิดยอดรอบล่าสุดถึงวันไหน กี่รายการ มูลค่าเท่าไหร่
@@ -61,6 +62,19 @@ function getBranches() {
       .catch(err => { branchPromise = null; throw err; });
   }
   return branchPromise;
+}
+
+// login ของสาขา (narai_hr.dbo.hr_user) — คนละฐาน แต่อยู่บนอินสแตนซ์เดียวกับ InventoryNarai
+// จึงใช้คอนเนกชันเดิมยิงด้วยชื่อสามท่อนได้ ต้องให้สิทธิ์ข้ามฐานก่อน (docs/grant-hr-user.sql)
+// หน้า HR > login สาขา ของแดชบอร์ดออฟฟิศอ่าน/เขียนผ่านทางนี้ — Vercel ต่อฐานนั้นตรงไม่ได้
+let branchUserPromise = null;
+function getBranchUsers() {
+  if (!branchUserPromise) {
+    branchUserPromise = import('../lib/branchUserSql.mjs')
+      .then(m => m.createBranchUsers({ q }))
+      .catch(err => { branchUserPromise = null; throw err; });
+  }
+  return branchUserPromise;
 }
 
 // หน้านับสต๊อกและขอเบิก (dbo.stock_count/stock_balance/stock_request) — ตรรกะอยู่ใน lib/stockCountSql.mjs
@@ -164,6 +178,10 @@ function mountSheets(app) {
   app.get('/sheets/branch-alias', (req, res) =>
     send(res, getBranches().then(c => c.readAliases()), 'readAliases'));
 
+  // login ของสาขา — ไม่เคยคืน password_hash ออกไป (ดู rowToUser ใน lib/branchUserSql.mjs)
+  app.get('/sheets/branch-user', (req, res) =>
+    send(res, getBranchUsers().then(c => c.readBranchUsers()), 'readBranchUsers'));
+
   // ข้อมูลปิดรอบเดือน — หน้า "ดูข้อมูลปิดรอบเดือน" (STOCK) ดูอย่างเดียว ไม่มีฝั่งเขียน
   app.get('/sheets/month-end-summary', (req, res) =>
     send(res, getMonthEnd().then(c => c.readMonthEndSummary()), 'readMonthEndSummary'));
@@ -197,8 +215,10 @@ function mountSheets(app) {
     }
     const body = req.body || {};
     const action = str(body.action);
-    return send(res, Promise.all([getCore(), getScanEdits(), getBranches()]).then(([core, scanEdits, branches]) => {
-      const fn = core.actions[action] || scanEdits.actions[action] || branches.actions[action];
+    return send(res, Promise.all([getCore(), getScanEdits(), getBranches(), getBranchUsers()])
+      .then(([core, scanEdits, branches, branchUsers]) => {
+      const fn = core.actions[action] || scanEdits.actions[action]
+        || branches.actions[action] || branchUsers.actions[action];
       if (!fn) throw Object.assign(new Error(`unknown action: ${action}`), { badRequest: true });
       return fn(body);
     }), action);
