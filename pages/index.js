@@ -64,7 +64,7 @@ import ChangePasswordModal from '../components/ChangePasswordModal';
 import { MENU_GROUPS, MENU_LABELS, ROLE_ADMIN, firstAllowedMenu, hasPerm } from '../lib/permissions';
 import { FALLBACK_BRANCHES } from '../lib/branches';
 import {
-  OPEN_DATE_BUFFER_DAYS, addDaysStr, dateFromRow, getChunks, normalizeArray, safeFetchJson,
+  OPEN_DATE_BUFFER_DAYS, addDaysStr, dateFromRow, fetchChunkJson, getChunks, normalizeArray,
 } from '../lib/salesFetch';
 import { 
   ResponsiveContainer, 
@@ -266,6 +266,23 @@ function isExcludedItem(code) {
   const ic = parseInt(code);
   if (EXCLUDE_ITEMS.indexOf(ic) >= 0) return true;
   return EXCLUDE_ITEM_RANGES.some(r => ic >= r[0] && ic <= r[1]);
+}
+
+/**
+ * ข้อความเตือนเมื่อ "ดึงบิลมาได้ แต่ไม่เหลือสักใบหลังกรองตามช่วงวัน" ('' = ไม่ต้องเตือน)
+ *
+ * เคสนี้กับ "ต้นทางไม่มีข้อมูลของวันนั้น" หน้าตาบนจอเหมือนกันเป๊ะ — ยอด 0 ทุกการ์ด
+ * ไม่มีแถบแดง ไม่มีอะไรฟ้องเลย แต่คนละสาเหตุคนละทางแก้ จึงต้องแยกให้เห็นด้วยตา
+ * (บทเรียนเดียวกับหน้า "ดูสแกนหน้า" ที่ข้อมูลเคยขาดเป็นวัน ๆ โดยไม่มีอะไรบอก)
+ */
+function noteForEmptyResult(fetched, keptCount, startDate, endDate) {
+  if (!fetched.length || keptCount) return '';
+  const seen = [...new Set(fetched.map(dateFromRow))].sort();
+  const shown = seen.slice(0, 6).join(', ') + (seen.length > 6 ? ` และอีก ${seen.length - 6} ค่า` : '');
+  const range = startDate === endDate ? startDate : `${startDate} ถึง ${endDate}`;
+  return `ดึงบิลมาได้ ${fetched.length} ใบ แต่ไม่มีใบไหนที่ "วันเปิดบิล" อยู่ในช่วง ${range} เลย ` +
+    `— วันที่ที่อ่านได้จากข้อมูลคือ ${shown} ` +
+    `(ถ้าค่าเหล่านี้ไม่ใช่วันที่ที่ควรเป็น แปลว่าคอลัมน์ StartTime ที่ฐานไม่ได้เก็บวันที่เต็ม)`;
 }
 
 /* ───────── HELPERS ───────── */
@@ -747,6 +764,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [loadProgress, setLoadProgress] = useState(null); // { current, total, text }
+  const [dataNote, setDataNote] = useState('');          // ดึงมาได้แต่ถูกกรองทิ้งจนหมด
 
   // Tab 2 - Sales filter & states
   const [salesSearch, setSalesSearch] = useState('');
@@ -861,6 +879,7 @@ export default function App() {
 
     setLoading(true);
     setError('');
+    setDataNote('');
     
     // Reset view states
     setSalesSearch('');
@@ -921,17 +940,26 @@ export default function App() {
           text: `กำลังดึงข้อมูลช่วง ${chunk.start} ถึง ${chunk.end} (ชุดที่ ${i + 1}/${chunks.length})`
         });
 
-        const [salesRes, detailRes] = await Promise.all([
-          fetch(`/api/sales?start=${chunk.start}&end=${chunk.end}${outletParam}`),
-          fetch(`/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`)
-        ]);
-
         const chunkLabel = `${chunk.start} ถึง ${chunk.end}`;
-        const salesJson = await safeFetchJson(salesRes, 'Sales API', chunkLabel);
-        const detailJson = await safeFetchJson(detailRes, 'Detail API', chunkLabel);
+        // บอกบนแถบความคืบหน้าว่ากำลังลองใหม่อยู่ ไม่ใช่ค้าง (รอบหนึ่งรอได้ถึง 55 วิ)
+        const onRetry = ({ attempt, total, chunkLabel: c }) => setLoadProgress(p => ({
+          current: i, total: chunks.length, ...p,
+          text: `ช่วง ${c} ตอบไม่ทัน กำลังลองใหม่ (ครั้งที่ ${attempt}/${total})...`,
+        }));
 
-        allSales = allSales.concat(normalizeArray(salesJson));
-        allDetails = allDetails.concat(normalizeArray(detailJson));
+        // ยิงบิลกับรายการพร้อมกัน แต่ละตัวลองใหม่เองได้ — ใช้ allSettled เพื่อให้อีกตัว
+        // ที่ยังลองอยู่จบงานของมันก่อน ไม่ทิ้งเป็น unhandled rejection ค้างไว้
+        const [salesR, detailR] = await Promise.allSettled([
+          fetchChunkJson(`/api/sales?start=${chunk.start}&end=${chunk.end}${outletParam}`,
+            'Sales API', chunkLabel, { onRetry }),
+          fetchChunkJson(`/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`,
+            'Detail API', chunkLabel, { onRetry }),
+        ]);
+        if (salesR.status === 'rejected') throw salesR.reason;
+        if (detailR.status === 'rejected') throw detailR.reason;
+
+        allSales = allSales.concat(normalizeArray(salesR.value));
+        allDetails = allDetails.concat(normalizeArray(detailR.value));
       }
 
       // รวมออเดอร์เพิ่มเติมจาก Google Sheet (โต๊ะ 800) ก่อนกรองช่วงวัน
@@ -952,8 +980,10 @@ export default function App() {
         const d = dateFromRow(r);
         return d >= startDate && d <= endDate;
       };
+      const fetchedSales = allSales;   // ก่อนกรอง — ไว้เทียบว่าหายตอนกรองหรือไม่มีมาแต่แรก
       allSales = allSales.filter(inOpenRange);
       allDetails = allDetails.filter(inOpenRange);
+      setDataNote(noteForEmptyResult(fetchedSales, allSales.length, startDate, endDate));
 
       setLoadProgress({
         current: chunks.length,
@@ -2303,8 +2333,8 @@ export default function App() {
 
     // Fallback: Fetch from API for that specific day
     try {
-      const res = await fetch(`/api/detail?start=${date}&end=${date}`);
-      const json = await safeFetchJson(res, 'Detail API', date);
+      // ลองใหม่เองได้เหมือนตอนดึงชุดใหญ่ — ป๊อปอัปนี้กดตอนไหนก็ได้ ฐานอาจกำลังยุ่งพอดี
+      const json = await fetchChunkJson(`/api/detail?start=${date}&end=${date}`, 'Detail API', date);
       const list = normalizeArray(json);
       const matched = list.filter(r => String(r.chkCheckID) === String(checkID));
       setModal({ open: true, checkID, rows: matched, loading: false, error: '' });
@@ -2616,6 +2646,15 @@ export default function App() {
               <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm flex items-center gap-2">
                 <XCircle size={18} />
                 <span>{error}</span>
+              </div>
+            )}
+
+            {/* ไม่ใช่ error (ทางดึงข้อมูลทำงานปกติ) แต่ต้องเห็นทันทีว่าข้อมูลมาแล้วหายตอนกรอง
+                ไม่งั้นเห็นแค่ยอด 0 ทุกการ์ดแล้วเดาไม่ถูกว่าต้องไปตามหาที่ฝั่งไหน */}
+            {dataNote && !loading && (
+              <div className="p-4 bg-orange-50 border border-orange-200 text-orange-800 rounded-xl text-sm flex items-start gap-2">
+                <AlertTriangle size={18} className="mt-0.5 flex-shrink-0" />
+                <span>{dataNote}</span>
               </div>
             )}
 
