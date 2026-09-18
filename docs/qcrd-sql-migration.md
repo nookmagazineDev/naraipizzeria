@@ -417,6 +417,7 @@ set QCRD_SOURCE=sql
 | `lib/qcrdRows.mjs` | แปลงแถวจาก SQL ให้อยู่ตำแหน่งคอลัมน์เดิมของชีท (ให้เครื่องมือ AI ใช้) |
 | `scripts/test-qcrd-write.mjs` | ตรวจว่าแต่ละ action ลงตารางไหน ด้วยค่าอะไร — ไม่ต่อฐาน รันที่ไหนก็ได้ |
 | `scripts/smoke-qcrd-sql.mjs` | ยิงเข้าฐานจริงแล้วอ่านกลับมาตรวจ (เพิ่ม/แก้/ปิด/ลบ) แล้วลบของทดสอบทิ้ง |
+| `scripts/smoke-qcrd-sql.ps1` | ตัวห่อของตัวบน — โหลดรหัสฐานจาก `host-server\db.env.ps1` ให้ก่อนรัน |
 
 ## 4.5) ทดสอบก่อน/หลังสลับโหมด
 
@@ -425,8 +426,18 @@ set QCRD_SOURCE=sql
 node scripts/test-qcrd-write.mjs
 
 # ต่อฐานจริง — เพิ่มวัตถุดิบ + เมนูทดสอบ แก้ไข ปิดใช้งาน ลบ แล้วอ่านกลับมาตรวจทุกขั้น
-node scripts/smoke-qcrd-sql.mjs          # ลบของทดสอบให้ตอนจบ
-node scripts/smoke-qcrd-sql.mjs --keep   # เก็บไว้ดูในหน้าเว็บก่อน
+# ที่เครื่องออฟฟิศใช้ตัวห่อ .ps1 (โหลดรหัสฐานจาก host-server\db.env.ps1 ให้ก่อน)
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke-qcrd-sql.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\smoke-qcrd-sql.ps1 -Keep   # เก็บของทดสอบไว้ดู
+```
+
+เรียก `node scripts/smoke-qcrd-sql.mjs` ตรง ๆ ได้เหมือนกัน แต่ต้องมีรหัสฐานข้อมูลใน session
+อยู่แล้ว ไม่งั้นจะไปตายที่ `Login failed for user 'sa'` เพราะ `scripts/qcrdDb.mjs` ถอยไปใช้
+`sa` กับรหัสว่างเมื่อไม่เจอ env — โหลดเองก่อนก็ได้:
+
+```powershell
+. .\host-server\db.env.ps1
+node scripts/smoke-qcrd-sql.mjs
 ```
 
 ตัวหลังใช้ตรรกะชุดเดียวกับที่หน้าเว็บใช้ (`lib/qcrdSql.mjs`) จึงเป็นการทดสอบทางเดินจริง
