@@ -418,6 +418,8 @@ set QCRD_SOURCE=sql
 | `scripts/test-qcrd-write.mjs` | ตรวจว่าแต่ละ action ลงตารางไหน ด้วยค่าอะไร — ไม่ต่อฐาน รันที่ไหนก็ได้ |
 | `scripts/smoke-qcrd-sql.mjs` | ยิงเข้าฐานจริงแล้วอ่านกลับมาตรวจ (เพิ่ม/แก้/ปิด/ลบ) แล้วลบของทดสอบทิ้ง |
 | `scripts/smoke-qcrd-sql.ps1` | ตัวห่อของตัวบน — โหลดรหัสฐานจาก `host-server\db.env.ps1` ให้ก่อนรัน |
+| `lib/qcrdPatch.mjs` | อัปเดตตารางเมนูในเครื่องจากผลการบันทึก แทนการโหลดข้อมูลใหม่ทั้งชุด |
+| `scripts/bench-qcrd-refresh.mjs` | วัดว่าวิธีใหม่เร็วขึ้นแค่ไหน (ขนาดข้อมูล + เวลาแกะ JSON) |
 
 ## 4.5) ทดสอบก่อน/หลังสลับโหมด
 
@@ -429,6 +431,12 @@ node scripts/test-qcrd-write.mjs
 # ที่เครื่องออฟฟิศใช้ตัวห่อ .ps1 (โหลดรหัสฐานจาก host-server\db.env.ps1 ให้ก่อน)
 powershell -ExecutionPolicy Bypass -File .\scripts\smoke-qcrd-sql.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\smoke-qcrd-sql.ps1 -Keep   # เก็บของทดสอบไว้ดู
+```
+
+วัดความไวของการอัปเดตตารางหลังกดบันทึก (ไม่ต้องต่อฐาน ไม่ต้องมีเบราว์เซอร์):
+
+```bash
+node scripts/bench-qcrd-refresh.mjs
 ```
 
 เรียก `node scripts/smoke-qcrd-sql.mjs` ตรง ๆ ได้เหมือนกัน แต่ต้องมีรหัสฐานข้อมูลใน session

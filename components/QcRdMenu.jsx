@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save } from 'lucide-react';
 import { apiCall, syncNote, syncOk } from '../lib/qcrdApi';
 import { rcpNameKey, rcpItemKey } from '../lib/rcpMatch';
+import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
 
 /*
  * QC/RD — เมนู: รายชื่อเมนู + สูตร (BOM) ของแต่ละเมนู
@@ -65,30 +66,53 @@ export default function QcRdMenu() {
   // ล็อกการแก้ไขทั้งหน้าไว้ก่อน ไม่งั้นจะเกิดอาการ "บันทึกสำเร็จแต่ข้อมูลไม่เปลี่ยน" เหมือนที่เคยเจอ
   const [degraded, setDegraded] = useState(false);
 
-  // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งหน้า (ใช้หลังกดบันทึก)
-  // ของเดิมพอบันทึกเสร็จจะล้างตารางทิ้งแล้วโหลดใหม่ทั้งสี่ชุด (เมนูห้าพันกว่าแถว + สูตรทั้งชีท)
-  // คนกดจึงเห็นสปินเนอร์ค้างทุกครั้งที่แก้ของนิดเดียว — แบบ quiet ตารางเดิมยังอยู่ให้ทำงานต่อได้
-  // ?t= กันไม่ให้ CDN คืนของที่แคชไว้ก่อนหน้าการบันทึกรอบนี้
-  const loadAll = ({ quiet = false } = {}) => {
+  // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งหน้า
+  // only  = โหลดเฉพาะบางชุด (['bom'] ฯลฯ) — ไม่ระบุ = ทั้งหมด
+  //
+  // ตอนเปิดหน้าต้องโหลดครบทุกชุดอยู่แล้ว แต่หลังกดบันทึกไม่ต้อง — ดู handleSave
+  // การลากสูตรทุกบรรทัดของพันกว่าเมนูกลับมาใหม่เพื่อแก้ตัวเลขไม่กี่ช่องคือเหตุผลเดียว
+  // ที่ตารางอัปเดตช้าเป็นหลายวินาที (แถม ?t= กัน CDN ทำให้เป็น cache MISS ทุกครั้ง)
+  const loadAll = ({ quiet = false, only = null } = {}) => {
     if (!quiet) setLoading(true);
+    const want = (name) => !only || only.includes(name);
     const bust = quiet ? `&t=${Date.now()}` : '';
-    Promise.all([
-      fetch(`/api/qcrd?sheet=menu${bust}`).then(r => r.json()),
-      fetch(`/api/qcrd?sheet=bom${bust}`).then(r => r.json()),
-      fetch(`/api/qcrd?sheet=item${bust}`).then(r => r.json()),
-      fetch(`/api/qcrd?sheet=menugroup${bust}`).then(r => r.json()),
-      // ดัชนีสูตรฝั่ง POS — ล้มก็ไม่เป็นไร หน้าเมนูต้องใช้งานต่อได้จากชีทตามเดิม
-      fetch(`/api/rcp${bust ? `?t=${Date.now()}` : ''}`).then(r => r.json()).catch(() => ({})),
+    const get = (name, url) => (want(name)
+      ? fetch(url).then(r => r.json()).catch(err => ({ status: 'error', message: err.message }))
+      : Promise.resolve(null));
+
+    return Promise.all([
+      get('menu', `/api/qcrd?sheet=menu${bust}`),
+      get('bom', `/api/qcrd?sheet=bom${bust}`),
+      get('item', `/api/qcrd?sheet=item${bust}`),
+      get('menugroup', `/api/qcrd?sheet=menugroup${bust}`),
+      // ดัชนีสูตรฝั่ง POS — ล้มก็ไม่เป็นไร หน้าเมนูต้องใช้งานต่อได้จากข้อมูลหลักตามเดิม
+      want('rcp')
+        ? fetch(`/api/rcp${bust ? `?t=${Date.now()}` : ''}`).then(r => r.json()).catch(() => ({}))
+        : Promise.resolve(null),
     ]).then(([m, b, it, g, rc]) => {
-      if (m.status === 'success') setMenus(m.data || []); else setError(m.message || 'โหลดรายการเมนูไม่สำเร็จ');
+      const loaded = [m, b, it, g].filter(Boolean);
       // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ขึ้นแถบเตือนค้างไว้ + ล็อกการแก้ไข
-      setDegraded([m, b, it, g].some(r => r && r.degraded));
-      if (m.warning) setToast({ ok: false, msg: m.warning });
-      if (b.status === 'success') setBom(b.data || {});
-      if (it.status === 'success') setItems(it.data || []);
-      if (g.status === 'success') setGroups(g.data || []);
-      setRcpIndex(rc && rc.data ? rc.data : {});
-      setRcpWarn(rc && rc.warning ? rc.warning : '');
+      if (loaded.length) setDegraded(loaded.some(r => r.degraded));
+
+      // ชุดไหนพลาดต้องฟ้อง — ของเดิมข้ามเงียบ ๆ (if success เฉย ๆ ไม่มี else) ตารางจึงค้าง
+      // ของเก่าไว้ถาวรโดยไม่มีอะไรบอก แยกจากอาการ "โหลดช้า" ด้วยตาไม่ออกเลย
+      const failed = [];
+      const take = (res, label, apply) => {
+        if (!res) return;
+        if (res.status === 'success') apply(res.data);
+        else failed.push(`${label}${res.message ? ` (${res.message})` : ''}`);
+      };
+      take(m, 'รายการเมนู', d => setMenus(d || []));
+      take(b, 'สูตร BOM', d => setBom(d || {}));
+      take(it, 'วัตถุดิบ', d => setItems(d || []));
+      take(g, 'หมวดหมู่', d => setGroups(d || []));
+      if (rc) { setRcpIndex(rc.data || {}); setRcpWarn(rc.warning || ''); }
+
+      if (m && m.warning) setToast({ ok: false, msg: m.warning });
+      if (failed.length) {
+        const msg = `โหลด${failed.join(' · ')} ไม่สำเร็จ — ตัวเลขที่เห็นอาจยังไม่ใช่ล่าสุด กดรีเฟรชหน้าอีกครั้ง`;
+        if (m && m.status !== 'success') setError(m.message || msg); else setToast({ ok: false, msg });
+      }
     }).catch(err => setError(err.message)).finally(() => { if (!quiet) setLoading(false); });
   };
   useEffect(() => { loadAll(); }, []);
@@ -113,13 +137,17 @@ export default function QcRdMenu() {
     () => [...new Set(items.map(i => i.unit).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
     [items]);
 
+  // จำนวนบรรทัดสูตรของเมนูหนึ่ง — เมนูที่เพิ่งถูกคิดใหม่ตาม (cascade) จะมี count มาก่อน
+  // เพราะบรรทัดชุดใหม่ยังโหลดไม่มา แต่จำนวนกับต้นทุนรู้แล้วจากคำตอบของการบันทึก
+  const bomCount = (code) => bom[code]?.count ?? bom[code]?.items?.length ?? 0;
+
   const disabledIngredients = (code) =>
     (bom[code]?.items || []).filter(r => itemMap[r.itemCode]?.status === 'ปิดการใช้งาน');
 
   // สูตรฝั่ง POS (RcpDtls) ของเมนูนี้ — คืนค่าเฉพาะเมนูที่ "ยังไม่มีสูตรในแท็บ BOM"
   // ชีทต้นทุนเมนูเป็นเจ้าของสูตรเสมอ RcpDtls มาเติมเฉพาะช่องที่ยังว่าง ไม่ทับของเดิม
-  const rcpFor = (m) => (bom[m.code]?.items?.length ? null : (rcpIndex[rcpNameKey(m.name)] || null));
-  const hasRecipe = (m) => Boolean(bom[m.code]?.items?.length) || Boolean(rcpFor(m));
+  const rcpFor = (m) => (bomCount(m.code) ? null : (rcpIndex[rcpNameKey(m.name)] || null));
+  const hasRecipe = (m) => Boolean(bomCount(m.code)) || Boolean(rcpFor(m));
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -349,7 +377,7 @@ export default function QcRdMenu() {
         try { await apiCall('saveItem', { code, unit: String(unit).trim() }); unitSaved++; }
         catch { /* หน่วยบันทึกไม่ผ่านไม่ควรทำให้การบันทึกเมนูล้ม — รายงานรวมท้ายสุด */ }
       }
-      // เมนูอื่นที่ดึงสูตรของเมนูนี้ไปใช้ ถูกคิดยอดใหม่ให้ตามสูตรล่าสุดโดย Apps Script
+      // เมนูอื่นที่ดึงสูตรของเมนูนี้ไปใช้ ถูกคิดต้นทุนใหม่ให้ตามสูตรล่าสุดในรอบเดียวกัน
       const cascaded = res.data?.cascaded || [];
       setToast({
         ok: syncOk(res),
@@ -358,8 +386,36 @@ export default function QcRdMenu() {
           + (cascaded.length ? ` · อัปเดตเมนูที่ผูกไว้ ${cascaded.length} เมนู: ${cascaded.map(c => c.name || c.code).join(', ')}` : '')
           + syncNote(res),
       });
+      // ── อัปเดตตารางทันทีจากคำตอบที่เพิ่งได้ ไม่ต้องโหลดข้อมูลใหม่ทั้งชุด ──
+      // คำตอบบอกครบแล้วว่าอะไรเปลี่ยน (ต้นทุนใหม่ · จำนวนแถวสูตร · เมนูที่ผูกกันซึ่งคิดใหม่ตาม)
+      // จึงแปะทับ state ได้เลย ตารางเด้งพร้อมข้อความ "บันทึกสำเร็จ" ไม่ใช่ตามมาอีกหลายวินาที
+      const patched = patchSavedMenu({ menus, bom }, {
+        code: editMenu.code.trim(),
+        name: editMenu.name.trim(),
+        price: String(editMenu.price ?? '').trim() === '' ? null : Number(editMenu.price),
+        group: res.data?.group ?? (isNewGroup ? undefined : editMenu.group),
+        groupName: isNewGroup
+          ? editMenu.newGroupName.trim()
+          : (groupList.find(g => g.code === editMenu.group)?.name ?? ''),
+        cost: res.data?.totalCost ?? (rows.length ? estCost(rows) : null),
+        yieldQty: String(editMenu.yieldQty ?? '').trim() === '' ? null : Number(editMenu.yieldQty),
+        yieldUnit: String(editMenu.yieldUnit || '').trim(),
+        rows: bomRowsFromForm(rows, priceMap),
+        cascaded,
+      });
+      setMenus(patched.menus);
+      setBom(patched.bom);
       setEditMenu(null);
-      loadAll({ quiet: true });
+
+      // เหลือเฉพาะชุดที่แปะเองไม่ได้จริง ๆ — ปกติไม่มีเลย จึงไม่มีการโหลดอะไรตามมา
+      //   bom       บรรทัดสูตรของเมนูที่ผูกกัน (รู้แค่จำนวนกับต้นทุน ไม่ได้ส่งบรรทัดมาด้วย)
+      //   menugroup เพิ่งสร้างหมวดใหม่
+      //   item      เพิ่งแก้หน่วยของวัตถุดิบไปด้วย
+      const refresh = [];
+      if (patched.staleBom.length) refresh.push('bom');
+      if (isNewGroup) refresh.push('menugroup');
+      if (unitSaved) refresh.push('item');
+      if (refresh.length) loadAll({ quiet: true, only: refresh });
     } catch (err) {
       setFormMsg({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
@@ -516,7 +572,7 @@ export default function QcRdMenu() {
               ) : pageRows.length === 0 ? (
                 <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">ไม่พบเมนู</td></tr>
               ) : pageRows.map(m => {
-                const nIng = bom[m.code]?.items?.length || 0;
+                const nIng = bomCount(m.code);
                 const rcp = nIng ? null : rcpFor(m);     // สูตรฝั่ง POS มาเติมเมื่อไม่มีสูตรในชีท
                 const off = (m.status || 'ใช้งาน') === 'ปิดการใช้งาน';
                 const nDisabled = disabledIngredients(m.code).length;
