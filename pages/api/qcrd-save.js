@@ -15,8 +15,8 @@
 // ในฟิลด์ sync ให้หน้าเว็บบอกผู้ใช้ว่ายังไม่ขึ้นฐาน (กดปุ่ม "อัพขึ้น SQL" ซ้ำได้)
 // ปิดการดันอัตโนมัติ: ตั้ง env QCRD_SYNC_ON_SAVE=off บน Vercel
 //
-// ทาง SQL ฝั่ง "เขียนตรง" ปิดไว้แล้ว (usingSql() คืน false เสมอ ดู lib/qcrdSource.js)
-// โค้ดฝั่งนั้นเก็บไว้เผื่อเปิดใช้อีกรอบ ตอนนี้ไม่ถูกเรียก
+// ทั้งหมดข้างบนคือโหมดชีท (ค่าเริ่มต้น) — ตั้ง env QCRD_SOURCE=sql เมื่อไหร่ ทางนี้จะไม่ถูกใช้
+// เลย: saveQcrdSql() เขียนลงฐานตรง ๆ ไม่แตะชีทและไม่มีขั้นดันขึ้น SQL เพราะเขียนถึงที่อยู่แล้ว
 import { usingSql, saveQcrdSql } from '../../lib/qcrdSource';
 import gasHandler from './qcrd-gas';
 import { syncOneToSql, STEPS_FOR_ACTION } from './qcrd-sync';
