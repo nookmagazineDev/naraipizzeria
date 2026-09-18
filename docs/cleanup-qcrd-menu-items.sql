@@ -182,3 +182,62 @@ GO
       MERGE จะดันแถวพวกนี้กลับเข้ามาใหม่ทั้งชุด แล้วต้องมานั่งลบซ้ำอีกรอบ
       รายชื่อที่ต้องลบในชีท: SELECT menu_code, menu_name FROM dbo.qcrd_menu_backup_itemrows;
    =========================================================================== */
+
+/* ===========================================================================
+   7) รันรวดเดียวจบ — สำรอง + ลบ + COMMIT ในแบตช์เดียว
+
+   ใช้เมื่อดูผลสำรวจข้อ 1 แล้วพอใจ ไม่อยากมานั่งกด COMMIT เองทีหลัง
+   (การลืมกด COMMIT คือสาเหตุที่นับแถวแล้วยังเท่าเดิม — แถวยังไม่ถูกลบจริง
+    และ transaction ที่ค้างจะล็อกตารางไว้จนหน้าเว็บค้างตามไปด้วย)
+
+   ⚠️ ก่อนรัน: ปิดแท็บเก่าที่ยังมี BEGIN TRANSACTION ค้างอยู่ให้หมด
+      (เช็กด้วย SELECT @@TRANCOUNT; ในแท็บนั้น ถ้าได้ > 0 ให้ ROLLBACK ก่อน)
+      ไม่งั้นแบตช์นี้จะรอ lock ของแท็บเก่าไปเรื่อย ๆ ไม่จบสักที
+
+   ห้ามใส่ GO คั่นกลาง — ทั้งก้อนต้องอยู่ใน transaction เดียว
+   =========================================================================== */
+SET XACT_ABORT ON;
+
+BEGIN TRY
+    BEGIN TRANSACTION;
+
+    IF OBJECT_ID(N'dbo.qcrd_menu_backup_itemrows', N'U') IS NOT NULL
+        DROP TABLE dbo.qcrd_menu_backup_itemrows;
+    IF OBJECT_ID(N'dbo.qcrd_bom_backup_itemrows', N'U') IS NOT NULL
+        DROP TABLE dbo.qcrd_bom_backup_itemrows;
+
+    -- เงื่อนไขเดียวกับข้อ 2 — แก้ที่นี่แล้วต้องแก้ข้อ 2 ให้ตรงกันด้วย
+    SELECT m.*
+    INTO dbo.qcrd_menu_backup_itemrows
+    FROM dbo.qcrd_menu m
+    WHERE EXISTS (SELECT 1 FROM dbo.stock_item i WHERE i.item_key = m.menu_key)
+      AND NOT EXISTS (SELECT 1 FROM dbo.qcrd_bom b WHERE b.menu_code = m.menu_code)
+      AND NOT EXISTS (SELECT 1 FROM dbo.qcrd_bom b WHERE b.src_code  = m.menu_code)
+      AND m.price IS NULL;
+
+    SELECT b.*
+    INTO dbo.qcrd_bom_backup_itemrows
+    FROM dbo.qcrd_bom b
+    WHERE b.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
+
+    DELETE b FROM dbo.qcrd_bom b
+    WHERE b.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
+
+    DELETE m FROM dbo.qcrd_menu m
+    WHERE m.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
+
+    COMMIT TRANSACTION;
+
+    SELECT (SELECT COUNT(*) FROM dbo.qcrd_menu_backup_itemrows) AS ลบเมนูไป,
+           (SELECT COUNT(*) FROM dbo.qcrd_bom_backup_itemrows)  AS ลบสูตรไป,
+           (SELECT COUNT(*) FROM dbo.qcrd_menu)                 AS เหลือในทะเบียนเมนู;
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+    THROW;   -- ไม่มีอะไรถูกลบ ข้อมูลเดิมอยู่ครบ
+END CATCH;
+GO
+
+/* --- เช็กว่าลบจริงหรือยัง (รันแท็บไหนก็ได้ ต้องได้ผลตรงกัน) --- */
+-- SELECT COUNT(*) AS เมนูทั้งหมด FROM dbo.qcrd_menu;
+-- SELECT @@TRANCOUNT AS transaction_ค้างอยู่กี่ชั้น;   -- ต้องได้ 0
