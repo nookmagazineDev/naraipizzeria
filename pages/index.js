@@ -268,6 +268,23 @@ function isExcludedItem(code) {
   return EXCLUDE_ITEM_RANGES.some(r => ic >= r[0] && ic <= r[1]);
 }
 
+/**
+ * ข้อความเตือนเมื่อ "ดึงบิลมาได้ แต่ไม่เหลือสักใบหลังกรองตามช่วงวัน" ('' = ไม่ต้องเตือน)
+ *
+ * เคสนี้กับ "ต้นทางไม่มีข้อมูลของวันนั้น" หน้าตาบนจอเหมือนกันเป๊ะ — ยอด 0 ทุกการ์ด
+ * ไม่มีแถบแดง ไม่มีอะไรฟ้องเลย แต่คนละสาเหตุคนละทางแก้ จึงต้องแยกให้เห็นด้วยตา
+ * (บทเรียนเดียวกับหน้า "ดูสแกนหน้า" ที่ข้อมูลเคยขาดเป็นวัน ๆ โดยไม่มีอะไรบอก)
+ */
+function noteForEmptyResult(fetched, keptCount, startDate, endDate) {
+  if (!fetched.length || keptCount) return '';
+  const seen = [...new Set(fetched.map(dateFromRow))].sort();
+  const shown = seen.slice(0, 6).join(', ') + (seen.length > 6 ? ` และอีก ${seen.length - 6} ค่า` : '');
+  const range = startDate === endDate ? startDate : `${startDate} ถึง ${endDate}`;
+  return `ดึงบิลมาได้ ${fetched.length} ใบ แต่ไม่มีใบไหนที่ "วันเปิดบิล" อยู่ในช่วง ${range} เลย ` +
+    `— วันที่ที่อ่านได้จากข้อมูลคือ ${shown} ` +
+    `(ถ้าค่าเหล่านี้ไม่ใช่วันที่ที่ควรเป็น แปลว่าคอลัมน์ StartTime ที่ฐานไม่ได้เก็บวันที่เต็ม)`;
+}
+
 /* ───────── HELPERS ───────── */
 const fmtMoney = v => {
   const n = parseFloat(v);
@@ -747,6 +764,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [loadProgress, setLoadProgress] = useState(null); // { current, total, text }
+  const [dataNote, setDataNote] = useState('');          // ดึงมาได้แต่ถูกกรองทิ้งจนหมด
 
   // Tab 2 - Sales filter & states
   const [salesSearch, setSalesSearch] = useState('');
@@ -861,6 +879,7 @@ export default function App() {
 
     setLoading(true);
     setError('');
+    setDataNote('');
     
     // Reset view states
     setSalesSearch('');
@@ -961,8 +980,10 @@ export default function App() {
         const d = dateFromRow(r);
         return d >= startDate && d <= endDate;
       };
+      const fetchedSales = allSales;   // ก่อนกรอง — ไว้เทียบว่าหายตอนกรองหรือไม่มีมาแต่แรก
       allSales = allSales.filter(inOpenRange);
       allDetails = allDetails.filter(inOpenRange);
+      setDataNote(noteForEmptyResult(fetchedSales, allSales.length, startDate, endDate));
 
       setLoadProgress({
         current: chunks.length,
@@ -2625,6 +2646,15 @@ export default function App() {
               <div className="p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm flex items-center gap-2">
                 <XCircle size={18} />
                 <span>{error}</span>
+              </div>
+            )}
+
+            {/* ไม่ใช่ error (ทางดึงข้อมูลทำงานปกติ) แต่ต้องเห็นทันทีว่าข้อมูลมาแล้วหายตอนกรอง
+                ไม่งั้นเห็นแค่ยอด 0 ทุกการ์ดแล้วเดาไม่ถูกว่าต้องไปตามหาที่ฝั่งไหน */}
+            {dataNote && !loading && (
+              <div className="p-4 bg-orange-50 border border-orange-200 text-orange-800 rounded-xl text-sm flex items-start gap-2">
+                <AlertTriangle size={18} className="mt-0.5 flex-shrink-0" />
+                <span>{dataNote}</span>
               </div>
             )}
 
