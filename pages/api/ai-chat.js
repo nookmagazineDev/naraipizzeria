@@ -11,6 +11,11 @@
 // ค่าใช้จ่ายอื่นๆ / แพลนสั่งของ ย้ายเข้า SQL แล้ว (SHEETS_SOURCE=sql) ส่วนพนักงานยังอยู่ที่ชีท
 // เครื่องมือของ AI ต้องอ่านที่เดียวกับหน้าเว็บ ไม่งั้น AI จะตอบจากข้อมูลคนละที่กับที่หน้าเว็บแสดง
 import { usingSql as usingSheetsSql, readExpenses, readPlan } from '../../lib/sheetsSource';
+// QC/RD ก็เหมือนกัน — พอเปิด QCRD_SOURCE=sql หน้า QC/RD อ่านจาก dbo.qcrd_* แล้ว
+// ถ้า AI ยังอ่านชีทอยู่ AI จะตอบด้วยเมนู/วัตถุดิบที่หน้าเว็บลบหรือแก้ไปแล้ว
+import { usingSql as usingQcrdSql, fetchQcrdSql } from '../../lib/qcrdSource';
+// แปลงแถว SQL ให้อยู่ในตำแหน่งคอลัมน์เดิมของชีท เครื่องมือข้างล่างจึงไม่ต้องรู้ว่าอ่านจากไหน
+import { QCRD_ROW_MAPPERS } from '../../lib/qcrdRows.mjs';
 
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 // GAS ค่าใช้จ่าย/พนักงาน (ตัวเดียวกับ proxy) — ส่วนชีท Google อยู่ในทะเบียน SHEETS ด้านล่าง
@@ -590,6 +595,8 @@ const TOOL_HANDLERS = {
     return {
       sheets: Object.entries(SHEETS).map(([key, s]) => ({
         sheet: key, title: s.title, tabs: Object.keys(s.tabs), about: s.about,
+        // บอกที่มาจริงของรอบนี้ — โหมด SQL อ่านจาก dbo.qcrd_* ผ่านชื่อแท็บเดิม
+        source: key === 'qcrd' && usingQcrdSql() ? 'SQL Server (dbo.qcrd_*) — ชื่อแท็บเดิมใช้อ้างได้ตามปกติ' : 'Google Sheet',
       })),
       note: 'ข้อมูลที่ใช้บ่อยมีเครื่องมือเฉพาะแล้ว (get_menu_costs, get_menu_recipe, get_raw_materials, get_stock_counts, get_purchase_plan, get_branch_requisition, get_material_usage) ให้เลือกใช้ตัวเฉพาะก่อน — read_sheet ไว้ใช้กับข้อมูลที่ไม่มีเครื่องมือรองรับเท่านั้น',
     };
@@ -954,6 +961,21 @@ async function fetchTab(sheetKey, tabName) {
   const key = `${sheetKey}|${tabName}`;
   const hit = sheetCache[key];
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.rows;
+
+  // QC/RD ย้ายเข้า SQL แล้ว -> อ่านจากฐาน ไม่ใช่ชีท
+  // ฐานล่มค่อยถอยไปอ่านชีท: เครื่องมือของ AI อ่านอย่างเดียว การถอยจึงได้แค่ข้อมูลเก่า
+  // ไม่ทำให้ข้อมูลสองที่เพี้ยนแบบฝั่งเขียน (หลักเดียวกับ pickSource() ของ SHEETS_SOURCE)
+  const sqlTab = sheetKey === 'qcrd' && usingQcrdSql() ? QCRD_ROW_MAPPERS[tabName] : null;
+  if (sqlTab) {
+    try {
+      const rows = sqlTab.map(await fetchQcrdSql(sqlTab.kind));
+      sheetCache[key] = { rows, at: Date.now() };
+      return rows;
+    } catch (err) {
+      console.error(`ai-chat: อ่าน QC/RD (${tabName}) จาก SQL ไม่ได้ — ถอยไปอ่านชีท:`, err.message);
+    }
+  }
+
   const gid = src.tabs[tabName];
   const url = gid
     ? `https://docs.google.com/spreadsheets/d/${src.id}/export?format=csv&gid=${gid}`
