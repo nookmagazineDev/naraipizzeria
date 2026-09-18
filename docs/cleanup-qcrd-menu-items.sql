@@ -1,4 +1,4 @@
-/* ============================================================================
+﻿/* ============================================================================
    หน้าเมนู QC/RD มีแถว "วัตถุดิบ" ปนอยู่ — สำรวจ / สำรอง / ลบ
 
    ทำไมถึงมี
@@ -29,7 +29,20 @@
         เพราะ menuStmt ใช้ MERGE (ไม่มี WHEN NOT MATCHED BY SOURCE DELETE)
         ครั้งหน้าที่ใครกด /api/qcrd-migrate แถวที่ลบไปจะถูกดันกลับมาทั้งชุด
 
-   รันที่ SSMS (เลือกฐาน InventoryNarai) หรือ:
+   วิธีรัน
+   ---------------------------------------------------------------------------
+   รันทั้งไฟล์รวดเดียวได้ (SSMS: เลือกฐาน InventoryNarai แล้วกด F5) จะได้
+     ข้อ 1  รายการต้องสงสัยพร้อมคำแนะนำรายแถว (อ่านผลก่อนแล้วค่อยตัดสินใจก็ได้)
+     ข้อ 2  สร้างตารางสำรอง
+     ข้อ 7  สำรอง + ลบ + COMMIT ให้เสร็จในแบตช์เดียว  ← ตรงนี้ลบจริง
+   ข้อ 3/4/5 ปิดคอมเมนต์ไว้ทั้งหมด (เป็นทางเลือก ไม่ทำงานตอนรันทั้งไฟล์)
+   ข้อ 1ข (สแกนยอดขาย POS) ก็ปิดไว้เพราะสแกน Ctrans 7.5 ล้านแถว กินเวลาหลายนาที
+     — อยากเช็กให้ลากไฮไลต์เฉพาะบล็อกนั้น เอา -- ออก แล้วรันแยก
+
+   ถ้าอยากดูผลสำรวจก่อนแล้วค่อยลบ: ลากไฮไลต์เฉพาะข้อ 1 กด F5 อ่านผล
+   แล้วค่อยลากไฮไลต์ข้อ 7 กด F5 ทีหลัง
+
+   หรือจาก command line:
      sqlcmd -S localhost\SQLEXPRESS -E -d InventoryNarai -i docs\cleanup-qcrd-menu-items.sql
    ============================================================================ */
 USE InventoryNarai;
@@ -76,23 +89,23 @@ GO
       รันตอนปิดร้าน หรือข้ามไปถ้ามั่นใจว่ารหัสพวกนี้ไม่เคยขาย
    ItemCode ฝั่ง POS กับรหัสเมนูเขียนไม่ตรงกัน ('00123' กับ '123')
    จึงตัด 0 นำหน้าทั้งสองฝั่งก่อนจับคู่ ให้ผลเหมือน normCode() ใน lib/qcrdSql.mjs */
-WITH pos_sold AS (
-    SELECT DISTINCT LOWER(SUBSTRING(k, PATINDEX('%[^0]%', k + '.'), 50)) AS item_key
-    FROM (
-        SELECT LTRIM(RTRIM(CONVERT(NVARCHAR(50), c.ItemCode))) AS k
-        FROM NaraiPos.dbo.Ctrans c
-        WHERE c.PostTime >= DATEADD(MONTH, -12, GETDATE())
-    ) x
-    WHERE x.k <> N''
-)
-SELECT m.menu_code, m.menu_name, m.cost,
-       CASE WHEN p.item_key IS NULL THEN N'ไม่เคยขาย — ลบได้'
-            ELSE N'⚠️ POS เคยขายรหัสนี้ — ลบแล้วต้นทุนในรายงานขายจะหาย' END AS ยอดขาย12เดือน
-FROM dbo.qcrd_menu m
-INNER JOIN dbo.stock_item i ON i.item_key = m.menu_key
-LEFT JOIN pos_sold p ON p.item_key = m.menu_key
-ORDER BY ยอดขาย12เดือน DESC, m.menu_code;
-GO
+-- WITH pos_sold AS (
+--     SELECT DISTINCT LOWER(SUBSTRING(k, PATINDEX('%[^0]%', k + '.'), 50)) AS item_key
+--     FROM (
+--         SELECT LTRIM(RTRIM(CONVERT(NVARCHAR(50), c.ItemCode))) AS k
+--         FROM NaraiPos.dbo.Ctrans c
+--         WHERE c.PostTime >= DATEADD(MONTH, -12, GETDATE())
+--     ) x
+--     WHERE x.k <> N''
+-- )
+-- SELECT m.menu_code, m.menu_name, m.cost,
+--        CASE WHEN p.item_key IS NULL THEN N'ไม่เคยขาย — ลบได้'
+--             ELSE N'⚠️ POS เคยขายรหัสนี้ — ลบแล้วต้นทุนในรายงานขายจะหาย' END AS ยอดขาย12เดือน
+-- FROM dbo.qcrd_menu m
+-- INNER JOIN dbo.stock_item i ON i.item_key = m.menu_key
+-- LEFT JOIN pos_sold p ON p.item_key = m.menu_key
+-- ORDER BY ยอดขาย12เดือน DESC, m.menu_code;
+-- GO
 
 /* ===========================================================================
    2) สำรองก่อนลบ — เก็บทั้งแถวเมนูและสูตรที่เกี่ยวข้องไว้ในตารางสำรอง
@@ -126,25 +139,30 @@ SELECT COUNT(*) AS จะลบกี่แถว FROM dbo.qcrd_menu_backup_item
 GO
 
 /* ===========================================================================
-   3) ลบจริง — ครอบ transaction ไว้ ดูจำนวนแถวก่อนแล้วค่อยเลือก COMMIT/ROLLBACK
-      ลบสูตรก่อนเมนูเสมอ (ชุดนี้ไม่ควรมีสูตรอยู่แล้ว ใส่ไว้กันตกค้าง)
+   3) ลบแบบทีละขั้น (ปิดไว้ — ใช้ข้อ 7 แทนถ้าไม่ได้อยากคุม transaction เอง)
+
+      ปิดคำสั่งไว้เพราะบล็อกนี้ทิ้ง transaction ค้างไว้ให้กด COMMIT เอง
+      ถ้าเปิดไว้แล้วมีคนรันทั้งไฟล์รวดเดียว จะได้ transaction ค้างที่ล็อกตาราง
+      แล้วข้อ 7 ที่ตามมาจะกลายเป็น transaction ซ้อน — COMMIT ของมันแค่ลดชั้นลง
+      หนึ่งชั้น ไม่ได้ยืนยันอะไรจริง ๆ ผลคือ "ลบแล้วแต่จำนวนเท่าเดิม" เหมือนเดิม
+
+      จะใช้แบบนี้ให้ลากไฮไลต์เฉพาะบล็อกข้างล่าง เอา -- ออก แล้วรันทีละขั้น
    =========================================================================== */
-BEGIN TRANSACTION;
-
-DELETE b
-FROM dbo.qcrd_bom b
-WHERE b.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
-
-DELETE m
-FROM dbo.qcrd_menu m
-WHERE m.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
-
-SELECT @@ROWCOUNT AS ลบเมนูไปกี่แถว;
-
--- ตรวจดูตัวเลขให้พอใจก่อน แล้วรันบรรทัดที่ต้องการทีละบรรทัด:
--- COMMIT TRANSACTION;     -- ยืนยันการลบ
--- ROLLBACK TRANSACTION;   -- ยกเลิก กลับไปเหมือนเดิมทั้งหมด
-GO
+-- BEGIN TRANSACTION;
+--
+-- DELETE b
+-- FROM dbo.qcrd_bom b
+-- WHERE b.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
+--
+-- DELETE m
+-- FROM dbo.qcrd_menu m
+-- WHERE m.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
+--
+-- SELECT @@ROWCOUNT AS ลบเมนูไปกี่แถว;
+--
+-- -- ตรวจดูตัวเลขให้พอใจก่อน แล้วรันบรรทัดที่ต้องการทีละบรรทัด:
+-- -- COMMIT TRANSACTION;     -- ยืนยันการลบ
+-- -- ROLLBACK TRANSACTION;   -- ยกเลิก กลับไปเหมือนเดิมทั้งหมด
 
 /* ===========================================================================
    4) ทางเลือกที่ปลอดภัยกว่า — ไม่ลบ แค่ปิดการใช้งาน
@@ -197,6 +215,17 @@ GO
    ห้ามใส่ GO คั่นกลาง — ทั้งก้อนต้องอยู่ใน transaction เดียว
    =========================================================================== */
 SET XACT_ABORT ON;
+
+/* transaction ค้างจากแท็บ/บล็อกก่อนหน้า = COMMIT ข้างล่างจะแค่ลดชั้นลงหนึ่งชั้น
+   ไม่ได้ยืนยันการลบจริง แล้วจะกลับไปเจออาการ "ลบแล้วแต่จำนวนเท่าเดิม" อีก
+   หยุดตรงนี้ให้รู้ตัวก่อน ดีกว่าปล่อยผ่านแล้วงงทีหลัง
+   ต้องอยู่แบตช์เดียวกับ BEGIN TRY (ห้ามมี GO คั่น) — RAISERROR เฉย ๆ ไม่หยุด
+   แบตช์ถัดไปใน SSMS ต้องมี RETURN ปิดท้ายถึงจะจบจริง */
+IF @@TRANCOUNT > 0
+BEGIN
+    RAISERROR (N'ยังมี transaction ค้างอยู่ใน session นี้ — สั่ง ROLLBACK TRANSACTION; ให้ @@TRANCOUNT เป็น 0 ก่อนแล้วค่อยรันใหม่', 16, 1);
+    RETURN;
+END
 
 BEGIN TRY
     BEGIN TRANSACTION;
