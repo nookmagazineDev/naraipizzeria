@@ -34,7 +34,8 @@
    รันทั้งไฟล์รวดเดียวได้ (SSMS: เลือกฐาน InventoryNarai แล้วกด F5) จะได้
      ข้อ 1  รายการต้องสงสัยพร้อมคำแนะนำรายแถว (อ่านผลก่อนแล้วค่อยตัดสินใจก็ได้)
      ข้อ 2  สร้างตารางสำรอง
-     ข้อ 7  สำรอง + ลบ + COMMIT ให้เสร็จในแบตช์เดียว  ← ตรงนี้ลบจริง
+     ข้อ 7  สำรอง + ลบ แบบ autocommit  ← ตรงนี้ลบจริง ไม่ต้องกด COMMIT เอง
+     ข้อ 8  อ่านตรงนี้ถ้าลบใน SQL แล้วหน้าเว็บยังเหมือนเดิม
    ข้อ 3/4/5 ปิดคอมเมนต์ไว้ทั้งหมด (เป็นทางเลือก ไม่ทำงานตอนรันทั้งไฟล์)
    ข้อ 1ข (สแกนยอดขาย POS) ก็ปิดไว้เพราะสแกน Ctrans 7.5 ล้านแถว กินเวลาหลายนาที
      — อยากเช็กให้ลากไฮไลต์เฉพาะบล็อกนั้น เอา -- ออก แล้วรันแยก
@@ -202,71 +203,65 @@ GO
    =========================================================================== */
 
 /* ===========================================================================
-   7) รันรวดเดียวจบ — สำรอง + ลบ + COMMIT ในแบตช์เดียว
+   7) ลบจริง — แบบ autocommit ไม่มี transaction ให้ลืมกด COMMIT  ← ใช้อันนี้
 
-   ใช้เมื่อดูผลสำรวจข้อ 1 แล้วพอใจ ไม่อยากมานั่งกด COMMIT เองทีหลัง
-   (การลืมกด COMMIT คือสาเหตุที่นับแถวแล้วยังเท่าเดิม — แถวยังไม่ถูกลบจริง
-    และ transaction ที่ค้างจะล็อกตารางไว้จนหน้าเว็บค้างตามไปด้วย)
+   ทุกคำสั่งในบล็อกนี้ยืนยันตัวเองทันทีที่รันเสร็จ (autocommit ของ SQL Server)
+   ไม่มี BEGIN TRANSACTION จึงไม่มีอะไรค้าง ไม่มีอะไรให้ลืม COMMIT
+   และไม่มีทางเกิดอาการ "รันแล้วแต่จำนวนเท่าเดิม" อีก
 
-   ⚠️ ก่อนรัน: ปิดแท็บเก่าที่ยังมี BEGIN TRANSACTION ค้างอยู่ให้หมด
-      (เช็กด้วย SELECT @@TRANCOUNT; ในแท็บนั้น ถ้าได้ > 0 ให้ ROLLBACK ก่อน)
-      ไม่งั้นแบตช์นี้จะรอ lock ของแท็บเก่าไปเรื่อย ๆ ไม่จบสักที
-
-   ห้ามใส่ GO คั่นกลาง — ทั้งก้อนต้องอยู่ใน transaction เดียว
+   แลกมาด้วยความเป็นก้อนเดียว: ถ้าลบสูตรผ่านแล้วลบเมนูพัง จะเหลือครึ่ง ๆ
+   ซึ่งกู้ได้จากตารางสำรองที่สร้างไว้ในข้อ 7.1 (วิธีกู้อยู่ข้อ 5)
+   งานนี้ไม่ใช่งานเงิน ลบผิดแล้วใส่กลับได้ — เอาความชัวร์ว่ามันลบจริงไว้ก่อน
    =========================================================================== */
-SET XACT_ABORT ON;
 
-/* transaction ค้างจากแท็บ/บล็อกก่อนหน้า = COMMIT ข้างล่างจะแค่ลดชั้นลงหนึ่งชั้น
-   ไม่ได้ยืนยันการลบจริง แล้วจะกลับไปเจออาการ "ลบแล้วแต่จำนวนเท่าเดิม" อีก
-   หยุดตรงนี้ให้รู้ตัวก่อน ดีกว่าปล่อยผ่านแล้วงงทีหลัง
-   ต้องอยู่แบตช์เดียวกับ BEGIN TRY (ห้ามมี GO คั่น) — RAISERROR เฉย ๆ ไม่หยุด
-   แบตช์ถัดไปใน SSMS ต้องมี RETURN ปิดท้ายถึงจะจบจริง */
-IF @@TRANCOUNT > 0
-BEGIN
-    RAISERROR (N'ยังมี transaction ค้างอยู่ใน session นี้ — สั่ง ROLLBACK TRANSACTION; ให้ @@TRANCOUNT เป็น 0 ก่อนแล้วค่อยรันใหม่', 16, 1);
-    RETURN;
-END
-
-BEGIN TRY
-    BEGIN TRANSACTION;
-
-    IF OBJECT_ID(N'dbo.qcrd_menu_backup_itemrows', N'U') IS NOT NULL
-        DROP TABLE dbo.qcrd_menu_backup_itemrows;
-    IF OBJECT_ID(N'dbo.qcrd_bom_backup_itemrows', N'U') IS NOT NULL
-        DROP TABLE dbo.qcrd_bom_backup_itemrows;
-
-    -- เงื่อนไขเดียวกับข้อ 2 — แก้ที่นี่แล้วต้องแก้ข้อ 2 ให้ตรงกันด้วย
-    SELECT m.*
-    INTO dbo.qcrd_menu_backup_itemrows
-    FROM dbo.qcrd_menu m
-    WHERE EXISTS (SELECT 1 FROM dbo.stock_item i WHERE i.item_key = m.menu_key)
-      AND NOT EXISTS (SELECT 1 FROM dbo.qcrd_bom b WHERE b.menu_code = m.menu_code)
-      AND NOT EXISTS (SELECT 1 FROM dbo.qcrd_bom b WHERE b.src_code  = m.menu_code)
-      AND m.price IS NULL;
-
-    SELECT b.*
-    INTO dbo.qcrd_bom_backup_itemrows
-    FROM dbo.qcrd_bom b
-    WHERE b.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
-
-    DELETE b FROM dbo.qcrd_bom b
-    WHERE b.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
-
-    DELETE m FROM dbo.qcrd_menu m
-    WHERE m.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
-
-    COMMIT TRANSACTION;
-
-    SELECT (SELECT COUNT(*) FROM dbo.qcrd_menu_backup_itemrows) AS ลบเมนูไป,
-           (SELECT COUNT(*) FROM dbo.qcrd_bom_backup_itemrows)  AS ลบสูตรไป,
-           (SELECT COUNT(*) FROM dbo.qcrd_menu)                 AS เหลือในทะเบียนเมนู;
-END TRY
-BEGIN CATCH
-    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-    THROW;   -- ไม่มีอะไรถูกลบ ข้อมูลเดิมอยู่ครบ
-END CATCH;
+/* ---- 7.1 สำรองก่อน (สร้างใหม่ทุกครั้ง ทับของเดิม) ---- */
+IF OBJECT_ID(N'dbo.qcrd_menu_backup_itemrows', N'U') IS NOT NULL
+    DROP TABLE dbo.qcrd_menu_backup_itemrows;
+GO
+IF OBJECT_ID(N'dbo.qcrd_bom_backup_itemrows', N'U') IS NOT NULL
+    DROP TABLE dbo.qcrd_bom_backup_itemrows;
 GO
 
-/* --- เช็กว่าลบจริงหรือยัง (รันแท็บไหนก็ได้ ต้องได้ผลตรงกัน) --- */
--- SELECT COUNT(*) AS เมนูทั้งหมด FROM dbo.qcrd_menu;
--- SELECT @@TRANCOUNT AS transaction_ค้างอยู่กี่ชั้น;   -- ต้องได้ 0
+/* เงื่อนไข: อยู่ในทะเบียนวัตถุดิบ + ไม่มีสูตรของตัวเอง + ไม่มีเมนูอื่นดึงสูตรไปใช้ + ไม่มีราคาขาย */
+SELECT m.*
+INTO dbo.qcrd_menu_backup_itemrows
+FROM dbo.qcrd_menu m
+WHERE EXISTS (SELECT 1 FROM dbo.stock_item i WHERE i.item_key = m.menu_key)
+  AND NOT EXISTS (SELECT 1 FROM dbo.qcrd_bom b WHERE b.menu_code = m.menu_code)
+  AND NOT EXISTS (SELECT 1 FROM dbo.qcrd_bom b WHERE b.src_code  = m.menu_code)
+  AND m.price IS NULL;
+GO
+
+SELECT b.*
+INTO dbo.qcrd_bom_backup_itemrows
+FROM dbo.qcrd_bom b
+WHERE b.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
+GO
+
+/* ---- 7.2 ลบจริง — ลบสูตรก่อนเมนูเสมอ ---- */
+DELETE b
+FROM dbo.qcrd_bom b
+WHERE b.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
+GO
+
+DELETE m
+FROM dbo.qcrd_menu m
+WHERE m.menu_code IN (SELECT menu_code FROM dbo.qcrd_menu_backup_itemrows);
+GO
+
+/* ---- 7.3 ยืนยันผล — "เหลือในทะเบียนเมนู" ต้องลดลงจากเดิม ---- */
+SELECT (SELECT COUNT(*) FROM dbo.qcrd_menu_backup_itemrows) AS ลบเมนูไป,
+       (SELECT COUNT(*) FROM dbo.qcrd_bom_backup_itemrows)  AS ลบสูตรไป,
+       (SELECT COUNT(*) FROM dbo.qcrd_menu)                 AS เหลือในทะเบียนเมนู;
+GO
+
+/* ===========================================================================
+   8) ลบใน SQL แล้วหน้าเว็บยังเหมือนเดิม — ไม่ใช่เรื่องผิดปกติ
+
+   หน้า QC/RD อ่านจากชีทเป็นค่าเริ่มต้น (lib/qcrdSource.js: QCRD_SOURCE ไม่ได้ตั้ง
+   = 'sheet') ลบใน SQL เท่าไหร่หน้าเมนูก็ไม่ขยับ เพราะมันไม่ได้อ่านจากตารางนี้
+
+   เช็กว่าหน้าเว็บอ่านจากไหน: เปิด /api/qcrd?sheet=menu แล้วดูค่า "source"
+     "sheet" -> ต้องไปลบในชีทด้วย (ดูข้อ 6) ถึงจะหายจากหน้าจอ
+     "sql"   -> รอ 30 วิ แล้วรีเฟรช (API แคช s-maxage=30)
+   =========================================================================== */
