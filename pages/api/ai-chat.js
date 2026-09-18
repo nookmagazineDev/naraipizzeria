@@ -14,6 +14,8 @@ import { usingSql as usingSheetsSql, readExpenses, readPlan } from '../../lib/sh
 // QC/RD ก็เหมือนกัน — พอเปิด QCRD_SOURCE=sql หน้า QC/RD อ่านจาก dbo.qcrd_* แล้ว
 // ถ้า AI ยังอ่านชีทอยู่ AI จะตอบด้วยเมนู/วัตถุดิบที่หน้าเว็บลบหรือแก้ไปแล้ว
 import { usingSql as usingQcrdSql, fetchQcrdSql } from '../../lib/qcrdSource';
+// จำแนก error ของ Gemini + ข้อความสำหรับผู้ใช้ (แยกออกไปเพื่อให้เขียนเทสต์คลุมได้)
+import { classifyGeminiError, friendlyGeminiError } from '../../lib/geminiError.mjs';
 // แปลงแถว SQL ให้อยู่ในตำแหน่งคอลัมน์เดิมของชีท เครื่องมือข้างล่างจึงไม่ต้องรู้ว่าอ่านจากไหน
 import { QCRD_ROW_MAPPERS } from '../../lib/qcrdRows.mjs';
 
@@ -1435,9 +1437,9 @@ export default async function handler(req, res) {
         if (!gr.ok) {
           const err = new Error(gj?.error?.message || `Gemini HTTP ${gr.status}`);
           err.status = gr.status;
-          err.rateLimited = gr.status === 429;
-          // 400 = คำขอไม่ผ่าน (พารามิเตอร์/ประวัติสนทนา), 404 = ไม่มีโมเดลนี้ → ลองรุ่นถัดไปได้
-          err.badRequest = gr.status === 400 || gr.status === 404;
+          // 429 โควตาเต็ม · 400/404 คำขอไม่ผ่าน/ไม่มีโมเดลนี้ · 503/500 ฝั่ง Google โหลดเต็ม
+          // ทั้งสามแบบขยับไปลองโมเดลถัดไปได้ ไม่ใช่เหตุให้เลิกทั้งคำขอ
+          Object.assign(err, classifyGeminiError({ status: gr.status, message: err.message }));
           console.error(`Gemini ${model} HTTP ${gr.status}: ${err.message}`);
           throw err;
         }
@@ -1475,7 +1477,9 @@ export default async function handler(req, res) {
       return { text: 'ขออภัย คำถามนี้ต้องดึงข้อมูลหลายรอบเกินกำหนด (10 รอบ) ลองแบ่งถามเป็นส่วนย่อยครับ', toolCalls };
     }
 
-    // ลองตามลำดับโมเดล — โควตาเต็ม (429) หรือโมเดลไม่รับคำขอ (400/404) ค่อยขยับไปตัวถัดไป
+    // ลองตามลำดับโมเดล — โควตาเต็ม (429) · โมเดลไม่รับคำขอ (400/404) · ฝั่ง Google โหลดเต็ม (503/500)
+    // ค่อยขยับไปตัวถัดไป (ดู classifyGeminiError) เดิมนับแค่ 429/400/404 พอเจอ 503 จึงเลิกตั้งแต่
+    // โมเดลแรกโดยไม่ได้แตะตัวสำรองเลย แล้วส่งข้อความอังกฤษดิบของ Google ออกไปให้ผู้ใช้
     // 400 ครั้งแรกของแต่ละโมเดล ลองซ้ำแบบไม่ส่ง thinkingConfig ก่อน (บางรุ่นปิดโหมดคิดไม่ได้)
     let lastErr = null;
     for (const model of MODEL_CHAIN) {
@@ -1486,31 +1490,15 @@ export default async function handler(req, res) {
         } catch (e) {
           lastErr = e;
           if (e.badRequest && !noThinkingConfig) continue;   // ลองรุ่นเดิมอีกครั้งแบบไม่ปิดโหมดคิด
-          if (e.rateLimited || e.badRequest) break;          // ไปโมเดลถัดไป
+          if (e.tryNextModel) break;                         // ไปโมเดลถัดไป
           throw e;
         }
       }
     }
-    return res.status(502).json({ error: friendlyError(lastErr) });
+    return res.status(502).json({ error: friendlyGeminiError(lastErr) });
   } catch (err) {
     console.error('AI chat error:', err.message);
-    return res.status(502).json({ error: friendlyError(err) });
+    return res.status(502).json({ error: friendlyGeminiError(err) });
   }
 }
 
-// แปลง error ดิบจาก Gemini เป็นข้อความที่ผู้ใช้อ่านแล้วรู้ว่าต้องทำอะไรต่อ
-// (เดิมโชว์ดิบ ๆ อย่าง "Request contains an invalid argument." ซึ่งไม่บอกอะไรเลย)
-function friendlyError(err) {
-  const msg = String(err?.message || 'เกิดข้อผิดพลาดที่ไม่รู้จัก');
-  if (err?.rateLimited || /quota|rate limit|RESOURCE_EXHAUSTED/i.test(msg)) {
-    return 'โควตา AI เต็มชั่วคราวทุกโมเดล — รอสัก 1 นาทีแล้วถามใหม่ครับ';
-  }
-  if (/invalid argument|INVALID_ARGUMENT|400/i.test(msg)) {
-    return 'AI ไม่รับคำขอนี้ (invalid argument) — มักเกิดตอนบทสนทนายาวมากหรือคำตอบก่อนหน้ามีตารางใหญ่ ' +
-      `ลองกด "ล้างบทสนทนา" แล้วถามใหม่เป็นคำถามเดียวจบครับ (รายละเอียด: ${msg})`;
-  }
-  if (/not found|NOT_FOUND|404/i.test(msg)) {
-    return `ไม่พบโมเดล AI ที่ตั้งไว้ — ตรวจค่า GEMINI_MODEL ใน Environment Variables ครับ (รายละเอียด: ${msg})`;
-  }
-  return msg;
-}

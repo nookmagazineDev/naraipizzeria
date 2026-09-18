@@ -9,6 +9,7 @@
 //   node scripts/test-qcrd-write.mjs
 import { createQcrd } from '../lib/qcrdSql.mjs';
 import { QCRD_ROW_MAPPERS } from '../lib/qcrdRows.mjs';
+import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
 
 /* ─────────────── ตัวยิงคำสั่งปลอม: จำทุกคำสั่ง + ตอบค่าที่ตรรกะต้องใช้ ─────────────── */
 function fakeDb({ menus = [], items = {} } = {}) {
@@ -219,6 +220,64 @@ console.log('\nAI อ่าน QC/RD จาก SQL (lib/qcrdRows.mjs)');
       const rows = m.map(m.kind === 'bom' ? {} : []);
       return rows.length === 1 && rows[0].every(c => typeof c === 'string');
     }));
+}
+
+/* ══════════ 5) อัปเดตตารางจากผลการบันทึก โดยไม่โหลดข้อมูลใหม่ ══════════
+   หน้าเมนูเคยโหลดใหม่ทั้ง 5 ชุด (5 MB) ทุกครั้งที่กดบันทึก เพื่อแก้ตัวเลขไม่กี่ช่อง
+   ตอนนี้แปะจากคำตอบตรง ๆ — ตรงนี้ตรวจว่าค่าที่แปะไปตรงกับที่ควรเป็น
+   วัดความไวเทียบกับของเดิมด้วย scripts/bench-qcrd-refresh.mjs */
+console.log('\nอัปเดตตารางหลังบันทึก (lib/qcrdPatch.mjs)');
+{
+  const state = () => ({
+    menus: [
+      { code: 'A1', name: 'เมนูเก่า', group: '1', groupName: 'หมวด 1', price: 100, cost: 5, status: 'ใช้งาน' },
+      { code: 'B2', name: 'เมนูที่ดึงสูตรไปใช้', group: '2', groupName: 'หมวด 2', price: 200, cost: 9, status: 'ใช้งาน' },
+    ],
+    bom: {
+      A1: { name: 'เมนูเก่า', items: [{ seq: '1', itemCode: 'X', qty: 10 }] },
+      B2: { name: 'เมนูที่ดึงสูตรไปใช้', items: [{ seq: '1', itemCode: 'X', qty: 2 }] },
+    },
+  });
+  const rows = bomRowsFromForm([
+    { itemCode: 'X', itemName: 'วัตถุดิบ ก', qty: 50, converter: 1000, tag: 'วัตถุดิบ' },
+    { itemCode: 'Y', itemName: 'วัตถุดิบ ข', qty: 25, converter: 1000, tag: 'วัตถุดิบ' },
+  ], { X: 120, Y: 60 });
+
+  check('bomRowsFromForm → ต้นทุนต่อหน่วยเล็ก = ราคา ÷ ตัวแปลง', rows[0].unitCost === 0.12, `ได้ ${rows[0].unitCost}`);
+  check('bomRowsFromForm → ต้นทุนแถว = ยอดใช้ × ต้นทุนต่อหน่วยเล็ก', rows[0].lineCost === 6, `ได้ ${rows[0].lineCost}`);
+  check('bomRowsFromForm → ไล่ลำดับ 1..n ให้เอง', rows.map(r => r.seq).join(',') === '1,2');
+  check('bomRowsFromForm → วัตถุดิบที่ไม่มีราคาได้ null ไม่ใช่ 0',
+    bomRowsFromForm([{ itemCode: 'Z', qty: 1 }], {})[0].lineCost === null);
+
+  const before = state();
+  const out = patchSavedMenu(before, {
+    code: 'A1', name: 'เมนูแก้แล้ว', price: 149, cost: 7.5, rows, cascaded: [],
+  });
+  const a1 = out.menus.find(m => m.code === 'A1');
+  check('แก้เมนูเดิม → ชื่อ/ราคา/ต้นทุน เปลี่ยนครบ',
+    a1.name === 'เมนูแก้แล้ว' && a1.price === 149 && a1.cost === 7.5);
+  check('แก้เมนูเดิม → สูตรถูกแทนที่ทั้งชุด', out.bom.A1.items.length === 2);
+  check('แก้เมนูเดิม → ไม่แตะ state เดิม (ของเดิมยังเป็น 1 แถว)', before.bom.A1.items.length === 1);
+  check('แก้เมนูเดิม → เมนูอื่นไม่ถูกแตะ', out.menus.find(m => m.code === 'B2').cost === 9);
+
+  const added = patchSavedMenu(state(), { code: 'NEW9', name: 'เมนูใหม่', price: 59, cost: 3, rows, cascaded: [] });
+  check('เมนูใหม่ → ถูกต่อท้ายตาราง', added.menus.at(-1).code === 'NEW9' && added.menus.length === 3);
+  check('เมนูใหม่ → ตั้งสถานะเป็นใช้งาน', added.menus.at(-1).status === 'ใช้งาน');
+
+  const emptied = patchSavedMenu(state(), { code: 'A1', name: 'เมนูเก่า', cost: null, rows: [], cascaded: [] });
+  check('ถอดวัตถุดิบออกหมด → เมนูนั้นไม่มีสูตรแล้ว', !('A1' in emptied.bom));
+
+  const casc = patchSavedMenu(state(), {
+    code: 'A1', name: 'เมนูเก่า', cost: 7.5, rows,
+    cascaded: [{ code: 'B2', name: 'เมนูที่ดึงสูตรไปใช้', rows: 5, cost: 12.34 }],
+  });
+  check('เมนูที่ผูกสูตรกัน → ต้นทุนใหม่ถูกแปะให้ด้วย',
+    casc.menus.find(m => m.code === 'B2').cost === 12.34);
+  check('เมนูที่ผูกสูตรกัน → จำนวนแถวถูกต้องทันที', casc.bom.B2.count === 5);
+  check('เมนูที่ผูกสูตรกัน → ไม่กุบรรทัดปลอมขึ้นมาให้ครบจำนวน', casc.bom.B2.items.length === 1);
+  check('เมนูที่ผูกสูตรกัน → ถูกบอกว่าบรรทัดยังเก่า จะได้โหลดตามทีหลัง',
+    casc.staleBom.join(',') === 'B2');
+  check('ไม่มีเมนูผูกกัน → ไม่ต้องโหลดอะไรตามเลย', out.staleBom.length === 0);
 }
 
 /* ─────────────────────────────── สรุป ─────────────────────────────── */
