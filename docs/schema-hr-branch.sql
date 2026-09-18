@@ -89,7 +89,7 @@ USING (VALUES
     (N'SJP',   7,  1), (N'CRM',  12,  2), (N'XCM',  19,  3), (N'SLR',  37,  4),
     (N'SUM',  51,  5), (N'XUM',  59,  6), (N'SCS',  61,  7), (N'SMP',  63,  8),
     (N'XSB',  67,  9), (N'XHH',  72, 10), (N'HRS',  78, 11), (N'CLK',  79, 12),
-    (N'P90',  80, 13), (N'HPS', 109, 14), (N'ZBW', 400, 15), (N'ZPT', 401, 16),
+    (N'P90',  80, 13), (N'HPS', 902, 14), (N'ZBW', 400, 15), (N'ZPT', 401, 16),
     (N'NPT', 500, 17), (N'WRM', 501, 18), (N'WMT', 503, 19), (N'IPR', 904, 20)
 ) AS s (branch_code, outlet_id, sort_order)
 ON t.branch_code = s.branch_code

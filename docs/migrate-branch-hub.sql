@@ -73,13 +73,8 @@ GO
 /* ===================== ขั้นที่ 2: ปิดสาขาที่เลิกกิจการแล้ว =====================
    HPS · STS · ZK3 ปิดหมดแล้ว (ยืนยันจากเจ้าของระบบ ก.ย. 2026)
 
-   ⚠️ HPS: เลข outlet ของสาขานี้สองระบบไม่ตรงกัน
-       ทะเบียนนี้ + pages/index.js  ->  109
-       narai-storefct/lib/branches.js ->  902
-      ตอนนี้เก็บ 109 ไว้ตามของเดิมของฝั่งนี้ และบันทึกเลขอีกตัวไว้ในช่อง note
-      ต้องยืนยันว่าเลขไหนตรงกับฐาน POS จริง **ก่อน** ทำเฟส 4 (ให้ฝั่งสโตร์มาดึงทะเบียนนี้ไปใช้)
-      ไม่งั้นรายงานย้อนหลังของ HPS ฝั่งสโตร์จะเปลี่ยนไปอ่านอีกร้านทันทีที่สลับ
-      วิธีเช็ก: ดูในฐาน POS ว่า outlet 109 กับ 902 ตัวไหนมีบิลของสาขานี้จริง    */
+   หมายเหตุเรื่อง HPS: เลข outlet ของสาขานี้เคยไม่ตรงกันสองระบบ (ทะเบียนนี้ใช้ 109
+   ส่วน narai-storefct ใช้ 902) ยืนยันแล้วว่า **902 ถูก** — ขั้นที่ 4 ข้างล่างแก้ให้     */
 IF NOT EXISTS (SELECT 1 FROM dbo.hr_branch_migration WHERE step = N'2026-09-close-hps-sts-zk3')
 BEGIN
     DECLARE @closed INT;
@@ -91,11 +86,9 @@ BEGIN
        AND status = N'ใช้งาน';
     SET @closed = @@ROWCOUNT;
 
-    -- บันทึกเลข outlet ที่ขัดกันไว้กับตัวสาขาเอง จะได้ไม่ต้องไปตามหาในเอกสาร
     UPDATE dbo.hr_branch
-       SET note = N'ปิดกิจการแล้ว · ฝั่ง narai-storefct เคยแมปเป็น outlet 902 (ทะเบียนนี้ใช้ 109) — ' +
-                  N'ต้องยืนยันว่าเลขไหนถูกก่อนให้ฝั่งสโตร์มาดึงทะเบียนนี้ไปใช้'
-     WHERE branch_code = N'HPS'
+       SET note = N'ปิดกิจการแล้ว'
+     WHERE branch_code IN (N'HPS', N'STS', N'ZK3')
        AND note = N'';
 
     INSERT dbo.hr_branch_migration (step, note)
@@ -153,6 +146,38 @@ BEGIN
     END
 END
 ELSE PRINT N'ขั้นที่ 3: ข้าม (รันไปแล้ว)';
+GO
+
+/* ===================== ขั้นที่ 4: ซ่อมเลข outlet ของ HPS =====================
+   HPS เคยถูกบันทึกเป็น outlet 109 ในทะเบียนนี้และในโค้ดของระบบตารางงาน
+   ส่วนฝั่งสโตร์ (narai-storefct) ใช้ 902 มาตลอด — ยืนยันกับเจ้าของระบบแล้วว่า **902 ถูก**
+   แปลว่าทุกที่ที่ใช้ 109 อ่านยอดผิดร้านมาตลอด (โค้ดฝั่งนั้นแก้ไปแล้วในรอบเดียวกัน)
+
+   แยกเป็นขั้นของตัวเองไม่ไปรวมกับ seed ในไฟล์สคีมา เพราะ seed เป็น MERGE แบบ
+   "มีอยู่แล้วไม่แตะ" ซึ่งถูกต้องสำหรับ seed แต่แปลว่ามันแก้แถวที่ลงไปแล้วไม่ได้
+
+   ⚠️ เงื่อนไข outlet_id = 109 สำคัญ — ถ้ามีคนไปแก้เป็นเลขอื่นด้วยมือแล้ว
+      ขั้นนี้จะไม่ไปทับของเขา                                                      */
+IF NOT EXISTS (SELECT 1 FROM dbo.hr_branch_migration WHERE step = N'2026-09-fix-hps-outlet')
+BEGIN
+    DECLARE @fixedHps INT;
+
+    UPDATE dbo.hr_branch
+       SET outlet_id = 902, updated_at = SYSDATETIME()
+     WHERE branch_code = N'HPS'
+       AND outlet_id = 109;
+    SET @fixedHps = @@ROWCOUNT;
+
+    INSERT dbo.hr_branch_migration (step, note)
+    VALUES (N'2026-09-fix-hps-outlet',
+            CASE WHEN @fixedHps > 0
+                 THEN N'แก้ outlet ของ HPS จาก 109 เป็น 902'
+                 ELSE N'ไม่ต้องแก้ — HPS ไม่ได้เป็น 109 อยู่แล้ว' END);
+    PRINT N'ขั้นที่ 4: ' + CASE WHEN @fixedHps > 0
+        THEN N'แก้ outlet ของ HPS เป็น 902 แล้ว'
+        ELSE N'ข้าม — HPS ไม่ได้เป็น 109 อยู่แล้ว' END;
+END
+ELSE PRINT N'ขั้นที่ 4: ข้าม (รันไปแล้ว)';
 GO
 
 /* ============================ ตรวจผลหลังรัน ============================
