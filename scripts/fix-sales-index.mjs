@@ -105,15 +105,31 @@ async function indexExists(pool, table, index) {
   return r.recordset.length > 0;
 }
 
-/** จำนวนแถวของตาราง (อ่านจาก metadata — ไม่ต้องสแกนตาราง) */
+/**
+ * จำนวนแถวของตาราง (อ่านจาก metadata — ไม่ต้องสแกนตาราง) · null = อ่านไม่ได้
+ *
+ * ตัวเลขนี้เอาไว้ "โชว์เฉย ๆ" ให้คนอ่านรู้ว่าตารางใหญ่แค่ไหน ไม่ได้ใช้ตัดสินใจอะไรเลย
+ * จึงห้ามทำให้ทั้งสคริปต์ล้มเมื่ออ่านไม่ได้ — ของเดิมใช้ sys.dm_db_partition_stats
+ * ซึ่งเป็น DMV ต้องมีสิทธิ์ VIEW DATABASE STATE ที่ login ของแอป (narai_app) ไม่มี
+ * แม้แต่โหมด --check ที่ไม่แก้อะไรเลยก็ยังตายตั้งแต่บรรทัดแรกด้วย
+ * "The user does not have permission to perform this action."
+ *
+ * sys.partitions เป็น catalog view ธรรมดา — ใครมีสิทธิ์อ่านตารางนั้นก็เห็น metadata ได้
+ * (docs/check-slow-sales.sql ก็ใช้ตัวนี้อยู่แล้ว) และถ้ายังอ่านไม่ได้อีกก็คืน null ไป
+ */
 async function rowCount(pool, table) {
-  const r = await pool.request()
-    .input('t', pool.__mssql.VarChar, table)
-    .query(
-      'SELECT SUM(row_count) AS n FROM sys.dm_db_partition_stats ' +
-      'WHERE object_id = OBJECT_ID(@t) AND index_id IN (0, 1)'
-    );
-  return Number(r.recordset[0]?.n || 0);
+  try {
+    const r = await pool.request()
+      .input('t', pool.__mssql.VarChar, table)
+      .query(
+        'SELECT SUM(rows) AS n FROM sys.partitions ' +
+        'WHERE object_id = OBJECT_ID(@t) AND index_id IN (0, 1)'
+      );
+    const n = r.recordset[0]?.n;
+    return n == null ? null : Number(n);
+  } catch {
+    return null;   // อ่านไม่ได้ก็แค่ไม่โชว์ตัวเลข ไม่ใช่เหตุให้หยุดทั้งสคริปต์
+  }
 }
 
 /** จับเวลา query จริงที่หน้าเว็บใช้ (นับแถวของวันเดียว) */
@@ -136,7 +152,8 @@ try {
   for (const step of PLAN) {
     const exists = await indexExists(pool, step.table, step.index);
     const rows = await rowCount(pool, step.table);
-    console.log(`── ${step.table} (${rows.toLocaleString('en-US')} แถว)`);
+    const rowsText = rows == null ? 'อ่านจำนวนแถวไม่ได้ — ไม่มีสิทธิ์ดู metadata' : `${rows.toLocaleString('en-US')} แถว`;
+    console.log(`── ${step.table} (${rowsText})`);
     console.log(`   ${step.note}`);
     console.log(`   ${step.index}: ${exists ? '✓ มีอยู่แล้ว' : '✗ ยังไม่มี'}`);
 
@@ -166,6 +183,17 @@ try {
   }
 } catch (err) {
   console.error(`\n❌ ${err.message}`);
+  // login ของแอปมีสิทธิ์แค่อ่าน/เขียนข้อมูล การสร้าง index ต้องมี ALTER บนตารางนั้น
+  if (/does not have permission|ALTER permission|permission was denied/i.test(err.message || '')) {
+    console.error(
+      `\nเป็นเรื่องสิทธิ์ของ login "${process.env.DB_USER || 'SA'}" ไม่ใช่คำสั่งผิด — เลือกทางใดทางหนึ่ง:\n` +
+      '  ก) รันสคริปต์นี้ด้วย login ที่เป็น sysadmin (ตั้ง $env:DB_USER / $env:DB_PASSWORD ก่อนรัน)\n' +
+      '  ข) ให้สิทธิ์เท่าที่จำเป็นกับ login เดิม แล้วรันใหม่ (สั่งที่ SSMS ด้วย SA):\n' +
+      `       USE ${DB_NAME};\n` +
+      `       GRANT ALTER ON dbo.Cpaid TO ${process.env.DB_USER || 'narai_app'};\n` +
+      `       GRANT ALTER ON dbo.Ctrans TO ${process.env.DB_USER || 'narai_app'};`
+    );
+  }
   await pool.close();
   process.exit(1);
 }
