@@ -22,7 +22,7 @@ import {
   getZkPool, zkNameMap, queryPunches, ZK_ROW_CAP,
 } from '../../lib/zkDb';
 // ตัวช่วยชุดเดียวกับที่ /api/hr-schedule ใช้ — ทั้งสองฝั่งของหน้านี้เจอปัญหาเพดานแถวเหมือนกัน
-import { dateChunks, capByDay, missingDates, dayOf } from '../../lib/dateRange';
+import { dateChunks, capByDay, missingDates, dayOf, inRange } from '../../lib/dateRange';
 
 // ช่วงกว้างๆ ทุกสาขาใช้เวลาหลายสิบวินาที — เผื่อเวลาให้พอเหมือน /api/sales
 export const config = { maxDuration: 60 };
@@ -207,7 +207,14 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { data: all, source } = await loadPunches({ start, end, branch, emp });
+    const { data: raw, source } = await loadPunches({ start, end, branch, emp });
+
+    // ตัดให้เหลือเฉพาะวันที่ขอ — ต้นทางบางทางส่งวันนอกช่วงติดมาด้วย (ดู inRange ที่ lib/dateRange.js)
+    // ต้องตัดก่อนคิดอย่างอื่น ไม่งั้น count/missing/การตัดตามเพดาน เพี้ยนตามไปทั้งชุด
+    const all = raw.filter((r) => inRange(rowDate(r), start, end));
+    if (all.length !== raw.length) {
+      console.warn(`attendance: ${source} ส่งวันนอกช่วง ${start}..${end} มา ${raw.length - all.length} แถว — ตัดทิ้งแล้ว`);
+    }
 
     // เกินเพดาน = ช่วงวันที่กว้างไป ตัดวันเก่าสุดทิ้งทีละทั้งวันแล้วบอกผู้ใช้ว่าเหลือตั้งแต่วันไหน
     const { data, truncated, from } = capByDay(all, ZK_ROW_CAP, rowDate);

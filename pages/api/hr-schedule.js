@@ -11,7 +11,7 @@
 // ของสาขาใช้ (ตัวพิมพ์เล็ก) จึงเทียบแบบไม่สนตัวพิมพ์ แล้วส่งตัวสะกดที่เก็บจริงไปคิวรี่
 import { fetchScheduleBranches, fetchTimesheet, fetchTimesheetMany } from '../../lib/hrSchedule';
 // ตัวช่วยชุดเดียวกับ /api/attendance — ทั้งสองฝั่งของหน้า "ดูสแกนหน้า" เจอปัญหาเพดานแถวเหมือนกัน
-import { capByDay, missingDates, dayOf } from '../../lib/dateRange';
+import { capByDay, missingDates, dayOf, inRange } from '../../lib/dateRange';
 
 // ยิงทีละสาขาหลายรอบ — เผื่อเวลาให้พอเหมือน /api/attendance
 export const config = { maxDuration: 60 };
@@ -90,9 +90,17 @@ export default async function handler(req, res) {
       });
     }
 
-    const { rows, failed } = resolved.length === 1
+    const { rows: raw, failed } = resolved.length === 1
       ? { rows: await fetchTimesheet({ branch: resolved[0], start, end }), failed: [] }
       : await fetchTimesheetMany({ branches: resolved, start, end });
+
+    // ตัดให้เหลือเฉพาะวันที่ขอ — ตารางงานเก็บเป็นราย "สัปดาห์" ฝั่ง office-server จึงส่งวันที่
+    // อยู่นอกช่วงติดมาได้ (ดู inRange ที่ lib/dateRange.js) ถ้าไม่ตัด หน้า "ดูสแกนหน้า" จะมีแถว
+    // ของวันอื่นโผล่ขึ้นมาปนด้วย เพราะแถวตารางงานที่ไม่มีสแกนถูกดึงขึ้นตารางเองอยู่แล้ว
+    const rows = raw.filter((r) => inRange(rowDate(r), start, end));
+    if (rows.length !== raw.length) {
+      console.warn(`hr-schedule: ต้นทางส่งวันนอกช่วง ${start}..${end} มา ${raw.length - rows.length} แถว — ตัดทิ้งแล้ว`);
+    }
 
     // เรียงใหม่→เก่าก่อนตัด ไม่งั้น "วันเก่าสุด" ที่ capByDay จะตัด ไม่ใช่วันเก่าสุดจริงๆ
     // (แถวมาเรียงตามสาขาที่ตอบก่อน) — เรียงสาขา/ชื่อต่อท้ายให้ผลออกมาเหมือนเดิมทุกครั้ง
