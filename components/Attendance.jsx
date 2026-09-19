@@ -5,7 +5,7 @@ import {
   Building2, Download, AlertCircle, RefreshCw, CalendarClock,
   Pencil, Check, X, CheckCircle
 } from 'lucide-react';
-import { hhmm, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel } from '../lib/attendance';
+import { hhmm, hoursToHm, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 
 /*
@@ -33,7 +33,8 @@ import { useBranches } from '../lib/useBranches';
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const num2 = (v) => (v != null ? v.toFixed(2) : '-');
+/** ชั่วโมงทำงาน -> 'ช:นน' (1 ชม. = 60 นาที) · อยู่บรรทัดเดียวกับเวลาสแกน ทศนิยมจึงอ่านผิดง่าย */
+const hm = (v) => (v != null ? hoursToHm(v) : '-');
 
 /** '2026-09-15' -> '15/9' */
 const shortDay = (ymd) => {
@@ -463,6 +464,11 @@ export default function Attendance() {
       ? [statusText(d), [...(d.plan?.reasons || []), ...chipNotes(d.plan)].join(', ')]
       : []);
     const lateCells = (d) => (showPlan ? [d.lateIn ?? '', d.lateBreakIn ?? '', d.earlyOut ?? ''] : []);
+    // ชั่วโมงทำงานลงไฟล์เป็น "เวลา" ของ Excel (เศษส่วนของวัน) แล้วตั้งรูปแบบ [h]:mm
+    // อ่านได้เหมือนบนหน้าเว็บ และยังรวมยอด/ลบกันในไฟล์ได้จริง ไม่ใช่ข้อความ '9:04' ที่บวกไม่ได้
+    // ปัดเป็นนาทีเต็มก่อนแปลงเป็นเศษส่วนของวัน — Excel ตัดวินาทีทิ้ง ส่วนหน้าเว็บปัดขึ้น/ลง
+    // ไม่ปัดให้ตรงกันก่อน ตัวเลขในไฟล์กับบนหน้าเว็บจะต่างกันได้ 1 นาที
+    const hourCell = (v) => (v != null ? { v: Math.round(v * 60) / (60 * 24), t: 'n', z: '[h]:mm' } : '');
     // ช่องที่แก้เวลาด้วยมือ — เขียนเป็น 'เข้า 11:53→11:30' ให้เห็นในไฟล์ว่าตัวเลขไหนไม่ใช่ของเครื่องสแกน
     const editedCell = (d) => SCAN_SLOTS
       .filter(({ slot }) => d.edits?.[slot])
@@ -471,7 +477,7 @@ export default function Attendance() {
 
     const aoa = view === 'daily'
       ? [
-          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...otHead, ...lateHead, ...statusHead, 'รวม (ชม.)', 'พัก (ชม.)', 'สุทธิ (ชม.)', 'จำนวนสแกน', 'แก้ไขเวลา'],
+          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...otHead, ...lateHead, ...statusHead, 'รวม (ชม.:นาที)', 'พัก (ชม.:นาที)', 'สุทธิ (ชม.:นาที)', 'จำนวนสแกน', 'แก้ไขเวลา'],
           ...daily.map((d) => [
             d.date, d.empCode, d.name, d.branch,
             ...planCells(d),
@@ -479,9 +485,9 @@ export default function Attendance() {
             ...otCells(d),
             ...lateCells(d),
             ...statusCells(d),
-            d.hours != null ? +d.hours.toFixed(2) : '',
-            d.breakHours != null ? +d.breakHours.toFixed(2) : '',
-            d.netHours != null ? +d.netHours.toFixed(2) : '',
+            hourCell(d.hours),
+            hourCell(d.breakHours),
+            hourCell(d.netHours),
             d.count,
             editedCell(d),
           ]),
@@ -752,7 +758,7 @@ export default function Attendance() {
                       {/* สถานะ/ลา ไม่ได้เป็นของฝั่งไหนโดยเฉพาะ (มีทั้งเหตุผลการลาและธง "ไม่มีสแกน")
                           วางไว้ติดกับ "เวลาทำงาน" เพราะอ่านคู่กัน: ชั่วโมงที่ได้มาจากวันแบบไหน (มาทำงาน/หยุด/ลา) */}
                       <th rowSpan={2} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200">สถานะ / ลา</th>
-                      <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200 font-semibold">เวลาทำงาน (ชม.)</th>
+                      <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200 font-semibold">เวลาทำงาน (ชม.:นาที)</th>
                       <th rowSpan={2} className="h-8 px-3 text-right sticky top-0 bg-slate-50 border-b border-l border-slate-200">สแกน</th>
                     </tr>
                     <tr>
@@ -853,9 +859,9 @@ export default function Attendance() {
                       )}
 
                       {/* เวลาทำงาน */}
-                      <td className={`px-3 py-2 text-right font-mono text-slate-500${showPlan ? ' border-l border-slate-200' : ''}`}>{num2(d.hours)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-400">{num2(d.breakHours)}</td>
-                      <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">{num2(d.netHours)}</td>
+                      <td className={`px-3 py-2 text-right font-mono text-slate-500${showPlan ? ' border-l border-slate-200' : ''}`}>{hm(d.hours)}</td>
+                      <td className="px-3 py-2 text-right font-mono text-slate-400">{hm(d.breakHours)}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">{hm(d.netHours)}</td>
                       <td className={`px-3 py-2 text-right font-mono text-slate-400${showPlan ? ' border-l border-slate-200' : ''}`}>{d.count}</td>
                     </tr>
                   ))}
@@ -914,6 +920,7 @@ export default function Attendance() {
                   </p>
                 )}
                 <p>
+                  <span className="font-medium">เวลาทำงาน</span> อ่านเป็น ชม.:นาที (1 ชม. = 60 นาที) เช่น 9:04 คือ 9 ชั่วโมง 4 นาที ·{' '}
                   <span className="font-medium">สุทธิ</span> = ชั่วโมงรวมหักเวลาพักแล้ว
                   {showPlan && ' · จับคู่กับตารางงานด้วยรหัสพนักงานก่อน ถ้ารหัสไม่ตรงจะลองจับด้วยชื่อในวันเดียวกัน'}
                   {showPlan && ' · แถวพื้นเทาคือคนที่มีในตารางงานแต่ไม่มีการสแกนเลย (ปิดปุ่ม "เทียบตารางงาน" เพื่อดูเฉพาะคนที่สแกนจริง)'}
