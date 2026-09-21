@@ -8,6 +8,7 @@ import {
   STATUS_ACTIVE, STATUS_INACTIVE, normalizePerms, normalizeUsername,
   validatePassword, validateUsername,
 } from '../lib/permissions';
+import { branchRegistryQuery } from '../lib/useBranches';
 
 /*
  * ระบบ — จัดการผู้ใช้และสิทธิ์: ใครเข้าระบบได้ และเข้าแล้วเห็นเมนูไหนบ้าง
@@ -83,7 +84,8 @@ export default function UserList({ me }) {
   useEffect(() => {
     load();
     // ทะเบียนสาขาเอาไว้เติม dropdown "ผูกกับสาขา" — ดึงไม่ได้ก็ไม่เป็นไร ช่องนั้นพิมพ์เองได้
-    fetch('/api/branches')
+    // ต่อตราเวลาเหมือน useBranches เพื่อให้เห็นสาขาที่เพิ่งแก้จากหน้าจัดการสาขาทันที
+    fetch(`/api/branches${branchRegistryQuery()}`)
       .then((r) => r.json())
       .then((res) => setBranches(res.status === 'success' ? (res.data || []) : []))
       .catch(() => setBranches([]));

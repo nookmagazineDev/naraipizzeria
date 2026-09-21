@@ -4,6 +4,7 @@ import {
   STATUS_ACTIVE, STATUS_INACTIVE, validateCode, normalizeCode,
   validateAlias, validateAliasTarget,
 } from '../lib/branches';
+import { markBranchRegistryChanged } from '../lib/useBranches';
 
 /*
  * HR — จัดการสาขา: ทะเบียนสาขากลางที่ dropdown ทุกหน้าดึงไปใช้
@@ -97,6 +98,9 @@ export default function BranchList() {
     });
     const res = await r.json();
     if (res.status !== 'success') throw new Error(res.message || 'เกิดข้อผิดพลาดจากเซิร์ฟเวอร์');
+    // ทะเบียนเปลี่ยนแล้ว — ประทับเวลาไว้ให้หน้าอื่นข้ามแคช CDN ที่ยังค้างของเก่าอยู่
+    // (ทุกคำสั่งที่เขียนทะเบียนผ่านทางนี้ทางเดียว จึงดักที่นี่ที่เดียวพอ)
+    markBranchRegistryChanged();
     return res;
   };
 
