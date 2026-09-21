@@ -10,6 +10,7 @@
 //   GET /api/stock-month-end                       -> เดือนล่าสุดที่มีข้อมูล ทุกสาขา
 //   GET /api/stock-month-end?month=2026-08         -> เดือนที่ระบุ ทุกสาขา
 //   GET /api/stock-month-end?month=2026-08&branch=CRM  -> เฉพาะสาขานั้น
+//   GET /api/stock-month-end?month=2026-08&limit=20000 -> ขอแถวเกินเพดานเริ่มต้น 5000 (สูงสุด 20000)
 //
 // คืน: { status:'success', data: { month, months[], branches[], rows[], layout }, meta }
 //   rows = [{ date, branch, itemCode, itemKey, itemName, unit, balance, unitValue, totalValue,
@@ -120,7 +121,12 @@ export default async function handler(req, res) {
       });
     }
 
-    const data = await readMonthEnd({ month, branch: branch.toLowerCase() === 'all' ? '' : branch });
+    // limit: รายงานเทียบต่อหัวขอทุกสาขาในรอบเดียว ซึ่งแถวเยอะกว่าที่หน้าตารางใช้
+    // (เพดานจริงถูกคุมอีกชั้นที่ lib/monthEndSql.mjs — สูงสุด 20000 แถว)
+    const limit = Number(str(req.query.limit)) || 0;
+    const data = await readMonthEnd({
+      month, branch: branch.toLowerCase() === 'all' ? '' : branch, limit: limit > 0 ? limit : undefined,
+    });
 
     // ปิดรอบเดือนที่ปิดไปแล้วไม่เปลี่ยนอีก — ให้ CDN ตอบซ้ำได้สักพัก แต่ยังสั้นพอให้เดือนที่เพิ่งปิดขึ้นเร็ว
     res.setHeader('Cache-Control', 'public, s-maxage=120, stale-while-revalidate=600');

@@ -3,24 +3,48 @@
 // ตอบคำถามเดียว: "วัตถุดิบตัวนี้ แต่ละสาขาใช้ไปเท่าไหร่ และคิดเป็นเท่าไหร่ต่อลูกค้า 1 หัว"
 // เอาไว้จับสาขาที่ใช้เปลืองผิดปกติ โดยเทียบกันได้ตรง ๆ แม้สาขาจะขายไม่เท่ากัน
 //
-// ที่มาของตัวเลข (ไม่มีการคิดสูตรใหม่ในไฟล์นี้ — ใช้ของที่ระบบคิดอยู่แล้วทั้งคู่):
-//   ยอดใช้  = /api/usage-bom → ยอดขายจริง × สูตร BOM (ชุดเดียวกับคอลัมน์ "ยอดใช้จากระบบ"
-//             ของหน้านับสต๊อก รวมกฎกันนับซ้ำใน lib/usageRules.js ครบทุกข้อ)
-//   จำนวนหัว = meta.covers ของคำตอบเดียวกัน — จานบุฟเฟต์ที่จ่ายจริง (ไม่รวมเด็กฟรี)
-//             ยกเว้น WRM/WMT ที่ใช้ Cover All ของบิล (ดู lib/coverRules.js)
-// ยิงสาขาละคำขอเดียวได้ทั้งสองค่า เพราะ /api/usage-bom นับหัวจากรายการขายที่ดึงมาอยู่แล้ว
-import React, { useState, useEffect, useMemo } from 'react';
-import { BarChart3, Search, Loader2, AlertCircle, Download, Users, Package, AlertTriangle, Store, ChevronDown } from 'lucide-react';
+// เลือกได้ว่าจะเอา "ยอดใช้" มาจากไหน — สองขานี้ตอบคนละคำถาม ใช้คู่กันถึงจะเห็นภาพ:
+//
+//   1) ตามสูตร BOM (ของเดิม) = "ควรใช้เท่าไหร่"
+//      ยอดใช้  = /api/usage-bom → ยอดขายจริง × สูตร BOM (ชุดเดียวกับคอลัมน์ "ยอดใช้จากระบบ"
+//                ของหน้านับสต๊อก รวมกฎกันนับซ้ำใน lib/usageRules.js ครบทุกข้อ)
+//      เลือกช่วงวันได้อิสระ
+//
+//   2) จากยอดปิดรอบของสาขา (ใหม่) = "หายไปจากชั้นเท่าไหร่จริง ๆ"
+//      ใช้จริง = ยอดยกมา (ปิดรอบก่อน) + ยอดรับเข้า (/api/orderd) − ยอดปิดรอบนี้
+//      ยอดปิดรอบทั้งสองรอบมาจาก /api/stock-month-end (dbo.stock_month_end) — ชุดเดียวกับ
+//      หน้า "ดูข้อมูลปิดรอบเดือน" ช่วงวันจึงถูกบังคับด้วยวันที่สาขานั้นปิดรอบ ไม่ใช่วันที่เลือกเอง
+//      ดูรายละเอียดกติกาช่วงวัน/รอบเดือนที่ lib/usageClosing.js
+//
+// จำนวนหัว = meta.covers ของ /api/usage-bom — จานบุฟเฟต์ที่จ่ายจริง (ไม่รวมเด็กฟรี)
+//            ยกเว้น WRM/WMT ที่ใช้ Cover All ของบิล (ดู lib/coverRules.js)
+//            โหมดปิดรอบก็ยิงตัวนี้ด้วย เพราะต้องรู้จำนวนหัวของ "ช่วงรอบ" ไม่ใช่ช่วงที่พิมพ์เอง
+//            ของแถมคือได้ยอดตามสูตรของช่วงเดียวกันมาเทียบกับที่ใช้จริงได้ฟรี ๆ ในคำขอเดียว
+//
+// ไม่มีการคิดสูตรใหม่ในไฟล์นี้ — ทุกตัวเลขมาจาก API ที่ระบบคิดอยู่แล้วทั้งหมด
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import {
+  BarChart3, Search, Loader2, AlertCircle, Download, Users, Package, AlertTriangle,
+  Store, ChevronDown, Calculator, ClipboardCheck, Truck, CalendarRange, Info,
+} from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
 import { apiRead } from '../lib/stockApi';
+import { shiftMonth, closingByBranch, cycleWindow, branchFlow, monthLabel, dateLabel } from '../lib/usageClosing';
 
 // ต้องตรงกับ normalizeId ใน /api/usage-bom เป๊ะ ไม่งั้นคีย์รหัสสินค้าจับคู่กันไม่ติด
 const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
 // ยิงทีละชุดแทนการยิงทุกสาขาพร้อมกัน — เหตุผลเดียวกับหน้า "ดูยอดรวมทุกสาขา"
 // (host API ช้าลงมากเมื่อโดนหลายสาขาพร้อมกัน และเบราว์เซอร์คิวเกิน ~6 คำขอต่อโดเมนอยู่แล้ว)
+// โหมดปิดรอบยิงสาขาละ 2 คำขอ (ยอดรับ + จำนวนหัว) จึงลดขนาดชุดลงครึ่งหนึ่ง
 const BRANCH_BATCH = 5;
+const BRANCH_BATCH_CLOSING = 3;
+
+// แถวปิดรอบที่ขอต่อหนึ่งรอบ — หน้านี้ขอทุกสาขาในคำขอเดียว จึงต้องยกเพดานจากค่าเริ่มต้น 5000
+// ของ /api/stock-month-end (ที่ตั้งไว้พอสำหรับตารางหน้าปิดรอบ) ขึ้นมาเป็นเพดานสูงสุดที่ฐานยอมให้
+// แตะเพดานเมื่อไหร่ = แถวถูกตัด ยอดยกมาของสาขาท้าย ๆ จะหาย จึงต้องเตือนให้เห็น ไม่ใช่เงียบ ๆ
+const CYCLE_ROW_LIMIT = 20000;
 
 /** ต่างจากค่ากลางเกินกี่ % ถึงจะทาสีเตือน */
 const DEVIATION_PCT = 15;
@@ -28,6 +52,35 @@ const DEVIATION_PCT = 15;
 const fmtUsage = v => Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtPerHead = v => Number(v).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 const fmtInt = v => Number(v).toLocaleString();
+
+/** สองแหล่งที่มาของ "ยอดใช้" — ปุ่มสลับอยู่ใต้หัวเรื่อง */
+const SOURCES = [
+  {
+    id: 'bom',
+    label: 'ยอดใช้ตามสูตร (BOM)',
+    hint: 'ยอดขายจริง × สูตร = ควรใช้เท่าไหร่',
+    Icon: Calculator,
+    ring: 'border-fuchsia-500 bg-fuchsia-50 ring-1 ring-fuchsia-300',
+    chip: 'bg-fuchsia-600 text-white',
+  },
+  {
+    id: 'closing',
+    label: 'ยอดใช้จากการปิดรอบ',
+    hint: 'ยกมา + รับเข้า − ปิดรอบ = ใช้จริงจากการนับของ',
+    Icon: ClipboardCheck,
+    ring: 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-300',
+    chip: 'bg-indigo-600 text-white',
+  },
+];
+
+/** คอลัมน์ย่อยของแต่ละสาขา — ชุดไหนถูกแสดงขึ้นกับโหมดดูที่เลือก */
+const BRANCH_COLS = {
+  opening:  { label: 'ยกมา',   head: 'text-indigo-600 bg-indigo-50/40', title: 'ยอดปิดรอบก่อนหน้า = ของที่มีอยู่ตอนเริ่มรอบ' },
+  received: { label: 'รับเข้า', head: 'text-teal-700 bg-teal-50/50',     title: 'ของที่รับเข้าสาขาระหว่างรอบ (ใบรับ TRF/RCV จากคลัง)' },
+  closing:  { label: 'ปิดรอบ',  head: 'text-indigo-600 bg-indigo-50/40', title: 'ยอดที่สาขานับได้ตอนปิดรอบนี้' },
+  usage:    { label: 'ยอดใช้',  head: 'text-purple-600 bg-purple-50/40', title: '' },
+  perHead:  { label: 'ต่อหัว',  head: 'text-purple-600 bg-purple-50/40', title: 'ยอดใช้ ÷ จำนวนหัวลูกค้าของสาขานั้น' },
+};
 
 export default function StockUsagePerHead() {
   const [items, setItems] = useState([]);          // ทะเบียนสินค้า (ชื่อ/หน่วย/หมวด) จากยอดรวมทุกสาขา
@@ -43,13 +96,21 @@ export default function StockUsagePerHead() {
   // สาขาที่เอามาเทียบกัน — ค่าเริ่มต้นคือทุกสาขาที่มี outletId (ติ๊กออกได้ทีละสาขา)
   const [selectedKeys, setSelectedKeys] = useState([]);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
-  const [viewMode, setViewMode] = useState('both'); // 'both' | 'perHead' | 'usage'
+  const [viewMode, setViewMode] = useState('both'); // 'both' | 'perHead' | 'usage' | 'flow'
   const [onlyUsed, setOnlyUsed] = useState(true);   // ซ่อนไอเทมที่ช่วงนี้ไม่มีการใช้เลย
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
+  // ── แหล่งที่มาของยอดใช้ ──
+  const [source, setSource] = useState('bom');      // 'bom' | 'closing'
+  const [cycle, setCycle] = useState('');           // รอบเดือนที่เลือก 'YYYY-MM' (โหมดปิดรอบ)
+  const [months, setMonths] = useState([]);         // รอบที่มีข้อมูลปิดรอบ (ใหม่ก่อน)
+  const [monthsLoading, setMonthsLoading] = useState(false);
+  const [monthsError, setMonthsError] = useState('');
+  const cycleRowsRef = useRef({});                  // { 'YYYY-MM': แถวปิดรอบ } — เปลี่ยนรอบไปมาไม่ต้องยิงซ้ำ
+
   // ผลการคำนวณรอบล่าสุด — เก็บช่วงวันที่ที่ใช้คำนวณไว้ด้วย จะได้ไม่โชว์เลขเก่าคู่กับวันที่ใหม่
-  const [report, setReport] = useState(null); // { from, to, branches: [...], usage: {branch: {id: qty}} }
+  const [report, setReport] = useState(null); // { mode, from, to, branches: [...], usage, flow }
   const [detailItem, setDetailItem] = useState(null);
   const [showHotSpots, setShowHotSpots] = useState(false);  // กดการ์ด "จุดที่ใช้เกินค่ากลาง" แล้วไล่ดูทีละจุด
 
@@ -89,17 +150,84 @@ export default function StockUsagePerHead() {
     }
   };
 
-  const fetchReport = async () => {
-    if (!startDate || !endDate) { toast.error('กรุณาระบุช่วงวันที่ให้ครบถ้วน'); return; }
-    if (startDate > endDate) { toast.error('วันที่เริ่มต้นอยู่หลังวันที่สิ้นสุด'); return; }
-    // ดึงเฉพาะสาขาที่ติ๊กไว้ — เลือกน้อยลงก็รอสั้นลงจริง ไม่ใช่ดึงหมดแล้วมาซ่อนทีหลัง
+  /** แตะเพดานแถว = ข้อมูลบางสาขาถูกตัดทิ้ง ตัวเลขที่ออกมาจะผิดแบบเงียบ ๆ ต้องบอกให้รู้ */
+  const warnIfTruncated = (rows, month) => {
+    if (rows.length >= CYCLE_ROW_LIMIT) {
+      toast.error(`ข้อมูลปิด${monthLabel(month)} มีเกิน ${fmtInt(CYCLE_ROW_LIMIT)} แถว — ถูกตัดที่เพดาน `
+        + 'ยอดยกมา/ยอดปิดของบางสาขาอาจไม่ครบ ให้ติ๊กเลือกเฉพาะสาขาที่ต้องดู', { duration: 12000 });
+    }
+    return rows;
+  };
+
+  /** รายชื่อรอบเดือนที่มีข้อมูลปิดรอบ — โหลดครั้งแรกที่สลับมาโหมดปิดรอบ */
+  const loadMonths = async () => {
+    if (monthsLoading || months.length) return;
+    setMonthsLoading(true);
+    setMonthsError('');
+    try {
+      // ไม่ระบุเดือน = ต้นทางเลือกรอบล่าสุดให้ พร้อมรายชื่อรอบทั้งหมด — เก็บแถวที่ได้ไว้ใช้เลย
+      const res = await fetch(`/api/stock-month-end?limit=${CYCLE_ROW_LIMIT}`).then(r => r.json());
+      if (res.status !== 'success') throw new Error(res.message || 'ดึงข้อมูลปิดรอบไม่สำเร็จ');
+      const list = res.data?.months || [];
+      setMonths(list);
+      if (res.data?.month) {
+        cycleRowsRef.current[res.data.month] = warnIfTruncated(res.data.rows || [], res.data.month);
+        setCycle(prev => prev || res.data.month);
+      }
+      if (!list.length) setMonthsError('ยังไม่มีข้อมูลปิดรอบในระบบ');
+    } catch (err) {
+      setMonthsError(err.message);
+      toast.error('โหลดรายชื่อรอบเดือนไม่สำเร็จ: ' + err.message, { duration: 8000 });
+    } finally {
+      setMonthsLoading(false);
+    }
+  };
+
+  /** แถวปิดรอบของรอบหนึ่ง (ทุกสาขา) — จำไว้ในหน่วยความจำ เปลี่ยนรอบไปมาไม่ต้องยิงซ้ำ */
+  const getCycleRows = async (month) => {
+    if (!month) return [];
+    if (cycleRowsRef.current[month]) return cycleRowsRef.current[month];
+    const res = await fetch(`/api/stock-month-end?month=${encodeURIComponent(month)}&limit=${CYCLE_ROW_LIMIT}`)
+      .then(r => r.json());
+    if (res.status !== 'success') throw new Error(res.message || 'ดึงข้อมูลปิดรอบไม่สำเร็จ');
+    const rows = warnIfTruncated(res.data?.rows || [], month);
+    cycleRowsRef.current[month] = rows;
+    return rows;
+  };
+
+
+  const switchSource = (next) => {
+    if (next === source) return;
+    setSource(next);
+    // เลขของอีกโหมดไม่ใช่ของโหมดนี้ — ล้างทิ้งดีกว่าปล่อยให้อ่านคู่กับป้ายที่เปลี่ยนไปแล้ว
+    setReport(null);
+    setShowHotSpots(false);
+    setDetailItem(null);
+    if (next === 'bom' && viewMode === 'flow') setViewMode('both');
+    if (next === 'closing') loadMonths();
+  };
+
+  /** สาขาที่ติ๊กไว้และยิงข้อมูลได้จริง (ต้องมี outletId) — ตัวตั้งต้นของทั้งสองโหมด */
+  const pickTargets = () => {
     const targets = branches.filter(b => b.outletId && selectedKeys.includes(String(b.name).toLowerCase()));
     if (targets.length === 0) {
       toast.error(branches.some(b => b.outletId)
         ? 'ยังไม่ได้เลือกสาขาที่จะเทียบ — กดปุ่ม “สาขาที่เทียบ” แล้วติ๊กอย่างน้อย 1 สาขา'
         : 'ไม่พบสาขาที่มีรหัส outlet — ดึงยอดใช้ไม่ได้');
-      return;
+      return null;
     }
+    return targets;
+  };
+
+  const fetchReport = () => (source === 'closing' ? fetchClosingReport() : fetchBomReport());
+
+  // ── โหมดที่ 1: ยอดใช้ตามสูตร BOM ในช่วงวันที่ที่เลือกเอง ──
+  const fetchBomReport = async () => {
+    if (!startDate || !endDate) { toast.error('กรุณาระบุช่วงวันที่ให้ครบถ้วน'); return; }
+    if (startDate > endDate) { toast.error('วันที่เริ่มต้นอยู่หลังวันที่สิ้นสุด'); return; }
+    // ดึงเฉพาะสาขาที่ติ๊กไว้ — เลือกน้อยลงก็รอสั้นลงจริง ไม่ใช่ดึงหมดแล้วมาซ่อนทีหลัง
+    const targets = pickTargets();
+    if (!targets) return;
 
     setIsFetching(true);
     setProgress({ done: 0, total: targets.length });
@@ -127,6 +255,7 @@ export default function StockUsagePerHead() {
             covers: covers === null || covers === undefined ? null : Number(covers),
             coversSource: ok && res.meta ? res.meta.coversSource : '',
             error: ok ? '' : (res.message || 'ดึงข้อมูลไม่สำเร็จ'),
+            window: { from: startDate, to: endDate },
           });
           const map = {};
           if (ok) Object.entries(res.data || {}).forEach(([id, u]) => { map[id] = Number(u.total) || 0; });
@@ -136,7 +265,7 @@ export default function StockUsagePerHead() {
       }
 
       stats.sort((a, b) => a.name.localeCompare(b.name));
-      setReport({ from: startDate, to: endDate, branches: stats, usage });
+      setReport({ mode: 'bom', from: startDate, to: endDate, branches: stats, usage, flow: {} });
 
       // บอกให้ชัดว่าสาขาไหนไม่ได้ข้อมูล — ค่ากลางที่คิดได้จะไม่รวมสาขาพวกนั้น
       const failed = stats.filter(s => !s.ok).map(s => s.name.toUpperCase());
@@ -158,6 +287,128 @@ export default function StockUsagePerHead() {
       setProgress(null);
     }
   };
+
+  // ── โหมดที่ 2: ใช้จริงจากยอดปิดรอบ = ยกมา + รับเข้า − ปิดรอบ ──
+  //
+  // ช่วงวันของแต่ละสาขาไม่เท่ากัน (ใครปิดรอบวันไหนก็ยึดวันนั้น) จึงต้องยิงยอดรับกับจำนวนหัว
+  // เป็นรายสาขาตามช่วงของสาขานั้น ไม่ใช่ยิงช่วงเดียวกันทั้งหมด — ดูเหตุผลเต็มที่ lib/usageClosing.js
+  const fetchClosingReport = async () => {
+    if (!cycle) { toast.error('ยังไม่ได้เลือกรอบเดือน — เลือกรอบที่จะดูก่อน'); return; }
+    const targets = pickTargets();
+    if (!targets) return;
+
+    const prevCycle = shiftMonth(cycle, -1);
+    setIsFetching(true);
+    setProgress({ done: 0, total: targets.length });
+    try {
+      const [curRows, prevRows] = await Promise.all([getCycleRows(cycle), getCycleRows(prevCycle)]);
+      const cur = closingByBranch(curRows);
+      const prev = closingByBranch(prevRows);
+
+      const stats = [];
+      const usage = {};
+      const flow = {};
+
+      // แยกก่อนว่าสาขาไหนมียอดปิดรอบครบทั้งสองรอบ — ที่เหลือไม่ต้องเสียเที่ยวยิงยอดรับ
+      const runnable = [];
+      targets.forEach(b => {
+        const key = String(b.name).toLowerCase();
+        const curEntry = cur[key];
+        const prevEntry = prev[key];
+        const win = cycleWindow(prevEntry, curEntry);
+        if (win) { runnable.push({ b, key, win, curEntry, prevEntry }); return; }
+        usage[key] = {};
+        stats.push({
+          name: String(b.name), key, outletId: b.outletId, ok: false, covers: null, coversSource: '',
+          error: !curEntry ? `ยังไม่มียอดปิด${monthLabel(cycle)}ของสาขานี้`
+            : !prevEntry ? `ไม่มียอดปิด${monthLabel(prevCycle)} — ไม่มียอดยกมาให้ตั้งต้น`
+            : 'วันที่ปิดรอบสองรอบไม่เรียงกัน — คิดช่วงของรอบไม่ได้',
+          window: null, closingDate: curEntry?.date || '', prevDate: prevEntry?.date || '',
+        });
+      });
+      setProgress({ done: targets.length - runnable.length, total: targets.length });
+
+      let done = targets.length - runnable.length;
+      for (let i = 0; i < runnable.length; i += BRANCH_BATCH_CLOSING) {
+        const chunk = runnable.slice(i, i + BRANCH_BATCH_CLOSING);
+        const results = await Promise.all(chunk.map(async t => {
+          const qs = `branch=${encodeURIComponent(t.b.name)}&outletId=${encodeURIComponent(t.b.outletId)}`
+            + `&startDate=${encodeURIComponent(t.win.from)}&endDate=${encodeURIComponent(t.win.to)}`;
+          const [recv, bom] = await Promise.all([
+            fetch(`/api/orderd?${qs}`).then(r => r.json()).catch(err => ({ status: 'error', message: err.message })),
+            fetch(`/api/usage-bom?${qs}`).then(r => r.json()).catch(err => ({ status: 'error', message: err.message })),
+          ]);
+          return { t, recv, bom };
+        }));
+
+        results.forEach(({ t, recv, bom }) => {
+          const receivedMap = {};
+          if (recv.status === 'success') {
+            Object.entries(recv.data || {}).forEach(([id, v]) => { receivedMap[normalizeId(id)] = Number(v.total) || 0; });
+          }
+          const bomMap = {};
+          if (bom.status === 'success') {
+            Object.entries(bom.data || {}).forEach(([id, v]) => { bomMap[normalizeId(id)] = Number(v.total) || 0; });
+          }
+          const covers = bom.status === 'success' && bom.meta ? Number(bom.meta.covers) : null;
+
+          const built = branchFlow({
+            opening: t.prevEntry.items, received: receivedMap, closing: t.curEntry.items, bom: bomMap,
+          });
+          usage[t.key] = built.usage;
+          flow[t.key] = built.flow;
+
+          // ยอดรับดึงไม่ได้ = ตัวตั้งขาดไปทั้งก้อน ยอดใช้จะต่ำกว่าจริงแบบเงียบ ๆ
+          // ปล่อยให้เข้าค่ากลางไม่ได้เด็ดขาด — ตัดออกไปเลยแล้วบอกเหตุผลที่ป้ายสาขา
+          const recvOk = recv.status === 'success';
+          stats.push({
+            name: String(t.b.name), key: t.key, outletId: t.b.outletId,
+            ok: recvOk,
+            covers: covers === null || !Number.isFinite(covers) ? null : covers,
+            coversSource: bom.status === 'success' && bom.meta ? bom.meta.coversSource : '',
+            error: recvOk ? '' : `ดึงยอดรับเข้าไม่สำเร็จ (${recv.message || 'ไม่ทราบสาเหตุ'}) — คิดใช้จริงไม่ได้`,
+            coversError: bom.status === 'success' ? '' : (bom.message || 'ดึงจำนวนหัวไม่สำเร็จ'),
+            window: t.win, closingDate: t.curEntry.date, prevDate: t.prevEntry.date,
+            receivedItems: Object.keys(receivedMap).length,
+            countedItems: Object.keys(t.curEntry.items).length,
+          });
+        });
+
+        done += chunk.length;
+        setProgress({ done, total: targets.length });
+      }
+
+      stats.sort((a, b) => a.name.localeCompare(b.name));
+      setReport({
+        mode: 'closing', cycle, prevCycle,
+        from: stats.reduce((a, s) => (s.window && (!a || s.window.from < a) ? s.window.from : a), ''),
+        to: stats.reduce((a, s) => (s.window && s.window.to > a ? s.window.to : a), ''),
+        branches: stats, usage, flow,
+      });
+
+      const noClosing = stats.filter(s => !s.ok && !s.window).map(s => s.name.toUpperCase());
+      const failed = stats.filter(s => !s.ok && s.window).map(s => s.name.toUpperCase());
+      const noCovers = stats.filter(s => s.ok && !s.covers).map(s => s.name.toUpperCase());
+      if (!noClosing.length && !failed.length && !noCovers.length) {
+        toast.success(`คำนวณจากยอดปิด${monthLabel(cycle)} ครบ ${stats.length} สาขา`);
+      } else if (stats.every(s => !s.ok)) {
+        toast.error(`คิดใช้จริงไม่ได้สักสาขา — ตรวจว่าปิดรอบ${monthLabel(cycle)} และ${monthLabel(prevCycle)} ครบหรือยัง`, { duration: 9000 });
+      } else {
+        const parts = [];
+        if (noClosing.length) parts.push(`ไม่มียอดปิดรอบ ${noClosing.length} สาขา (${noClosing.slice(0, 4).join(', ')}${noClosing.length > 4 ? '…' : ''})`);
+        if (failed.length) parts.push(`ดึงยอดรับไม่สำเร็จ ${failed.length} สาขา (${failed.slice(0, 4).join(', ')}${failed.length > 4 ? '…' : ''})`);
+        if (noCovers.length) parts.push(`ไม่มีจำนวนหัว ${noCovers.length} สาขา (${noCovers.slice(0, 4).join(', ')}${noCovers.length > 4 ? '…' : ''}) — คิดต่อหัวไม่ได้`);
+        toast(parts.join(' · '), { icon: '⚠️', duration: 9000 });
+      }
+    } catch (err) {
+      toast.error('เกิดข้อผิดพลาดในการคำนวณ: ' + err.message, { duration: 8000 });
+    } finally {
+      setIsFetching(false);
+      setProgress(null);
+    }
+  };
+
+  const isClosing = report?.mode === 'closing';
 
   /** สาขาที่อยู่ในผลคำนวณ และยังติ๊กอยู่ — ติ๊กออกทีหลังจะซ่อนคอลัมน์และคิดค่ากลางใหม่ทันที
       โดยไม่ต้องยิงข้อมูลซ้ำ (ของที่ดึงมาแล้วยังอยู่ครบ) */
@@ -182,19 +433,39 @@ export default function StockUsagePerHead() {
   const rows = useMemo(() => {
     if (!report) return [];
     const cols = activeBranches;
+    const closingMode = report.mode === 'closing';
 
     return items.map(item => {
       const id = normalizeId(item.productId);
       let totalUsage = 0;         // ยอดใช้รวมทุกสาขาที่ดึงได้
       let usableUsage = 0;        // เฉพาะสาขาที่เข้าเกณฑ์ค่ากลาง
       let usableCovers = 0;
+      let usableBom = 0;
+      let hasBom = false;
+      let hasData = false;
+
       const cells = cols.map(b => {
-        const qty = b.ok ? (report.usage[b.key]?.[id] || 0) : null;
-        if (qty) totalUsage += qty;
+        const raw = b.ok ? report.usage[b.key]?.[id] : undefined;
+        // โหมดปิดรอบ: ไม่มีคีย์ = สาขานี้ไม่มีไอเทมนี้ในรอบเลย (ขีด) ไม่ใช่ใช้ไป 0
+        // โหมด BOM: ไม่มีคีย์ = ขายเมนูที่ใช้ของตัวนี้ 0 จาน ซึ่งคือใช้ไป 0 จริง ๆ
+        const qty = !b.ok ? null : raw === undefined ? (closingMode ? null : 0) : Number(raw);
+        const f = closingMode ? (report.flow[b.key]?.[id] || null) : null;
+        if (qty) { totalUsage += qty; hasData = true; }
         // นับเข้าค่ากลางเฉพาะสาขาที่ "ใช้ของตัวนี้จริง" — สาขาที่ไม่ได้สต๊อกไอเทมนี้เลย
         // ถ้าเอาจำนวนหัวไปรวมในตัวหารด้วย ค่ากลางจะถูกเจือจางจนสาขาที่ใช้จริงขึ้นแดงกันหมด
-        if (b.covers > 0 && qty) { usableUsage += qty; usableCovers += b.covers; }
-        return { branch: b, usage: qty, perHead: b.covers > 0 && qty !== null ? qty / b.covers : null };
+        // (ยอดติดลบจากการนับคลาดเคลื่อนก็ไม่นับ ไม่งั้นค่ากลางถูกดึงลงจนสาขาอื่นเด้งแดงตาม)
+        if (b.covers > 0 && qty > 0) {
+          usableUsage += qty;
+          usableCovers += b.covers;
+          if (f && f.bom !== null) { usableBom += f.bom; hasBom = true; }
+        }
+        return {
+          branch: b, usage: qty, flow: f,
+          perHead: b.covers > 0 && qty !== null ? qty / b.covers : null,
+          bomPerHead: f && f.bom !== null && b.covers > 0 ? f.bom / b.covers : null,
+          // ใช้จริงต่างจากที่สูตรบอกกี่ % — บวก = ใช้เกินสูตร (ตักเกิน/ของหาย/ตัดสต๊อกไม่ครบ)
+          bomDiffPct: f && f.bom > 0 && qty !== null ? (qty - f.bom) / f.bom * 100 : null,
+        };
       });
 
       // ค่ากลาง = ยอดใช้รวม ÷ จำนวนหัวรวม (ถ่วงน้ำหนักตามขนาดสาขา)
@@ -204,15 +475,19 @@ export default function StockUsagePerHead() {
         c.diffPct = mean && c.perHead !== null ? (c.perHead - mean) / mean * 100 : null;
       });
       const overCount = cells.filter(c => c.diffPct !== null && c.diffPct > DEVIATION_PCT).length;
+      const overBomCount = cells.filter(c => c.bomDiffPct !== null && c.bomDiffPct > DEVIATION_PCT).length;
 
-      return { item, id, cells, totalUsage, mean, overCount };
+      return {
+        item, id, cells, totalUsage, mean, overCount, overBomCount, hasData,
+        bomMean: hasBom && usableCovers > 0 ? usableBom / usableCovers : null,
+      };
     });
   }, [items, report, activeBranches]);
 
   const visibleRows = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     let result = rows.filter(r => {
-      if (onlyUsed && !r.totalUsage) return false;
+      if (onlyUsed && !r.hasData) return false;
       if (!term) return true;
       return String(r.item.productId || '').toLowerCase().includes(term)
         || String(r.item.name || '').toLowerCase().includes(term)
@@ -222,6 +497,7 @@ export default function StockUsagePerHead() {
     result.sort((a, b) => {
       if (sortBy === 'usage') return b.totalUsage - a.totalUsage;
       if (sortBy === 'deviation') return b.overCount - a.overCount || b.totalUsage - a.totalUsage;
+      if (sortBy === 'bomDeviation') return b.overBomCount - a.overBomCount || b.totalUsage - a.totalUsage;
       if (sortBy === 'productId') return String(a.item.productId || '').localeCompare(String(b.item.productId || ''));
       if (sortBy === 'name') return String(a.item.name || '').localeCompare(String(b.item.name || ''), 'th');
       return String(a.item.storageCat || '').localeCompare(String(b.item.storageCat || ''), 'th')
@@ -239,7 +515,7 @@ export default function StockUsagePerHead() {
         if (c.diffPct === null || c.diffPct <= DEVIATION_PCT) return;
         out.push({
           row: r, branch: c.branch, perHead: c.perHead, usage: c.usage,
-          mean: r.mean, diffPct: c.diffPct,
+          mean: r.mean, diffPct: c.diffPct, cell: c,
           // ใช้เกินค่ากลางไปกี่หน่วยในช่วงนี้ = (ต่อหัวที่ใช้จริง - ค่ากลาง) x จำนวนหัวของสาขานั้น
           // เป็นตัวเรียงที่ตรงกับ "เสียหายจริง" มากกว่า % เพราะของที่ใช้น้อยมาก ๆ เกิน 300% ก็ยังไม่กี่กรัม
           excessQty: (c.perHead - r.mean) * c.branch.covers,
@@ -249,6 +525,19 @@ export default function StockUsagePerHead() {
     return out.sort((a, b) => b.excessQty - a.excessQty);
   }, [rows]);
 
+  /** จุดที่ "ใช้จริงเกินสูตร" — มีเฉพาะโหมดปิดรอบ (ต้องมีทั้งของจริงและของตามสูตรถึงเทียบได้) */
+  const bomSpots = useMemo(() => {
+    if (!isClosing) return [];
+    const out = [];
+    rows.forEach(r => {
+      r.cells.forEach(c => {
+        if (c.bomDiffPct === null || c.bomDiffPct <= DEVIATION_PCT) return;
+        out.push({ row: r, branch: c.branch, cell: c, diffPct: c.bomDiffPct, excessQty: c.usage - c.flow.bom });
+      });
+    });
+    return out.sort((a, b) => b.excessQty - a.excessQty);
+  }, [rows, isClosing]);
+
   const summary = useMemo(() => {
     if (!report) return null;
     const okCount = activeBranches.filter(b => b.ok).length;
@@ -256,10 +545,12 @@ export default function StockUsagePerHead() {
       okCount,
       total: activeBranches.length,
       covers: usableBranches.reduce((s, b) => s + b.covers, 0),
-      usedItems: rows.filter(r => r.totalUsage > 0).length,
+      usedItems: rows.filter(r => r.hasData).length,
       hotSpots: hotSpots.length,
+      bomSpots: bomSpots.length,
+      receivedItems: activeBranches.reduce((s, b) => s + (b.receivedItems || 0), 0),
     };
-  }, [report, rows, usableBranches, activeBranches, hotSpots]);
+  }, [report, rows, usableBranches, activeBranches, hotSpots, bomSpots]);
 
   /** ค่าตั้งเบิกของทุกสาขา — ทะเบียนเดียวกับคอลัมน์ "ค่าเฉลี่ย" ของหน้านับสต๊อก
       getStockItems ของสาขาไหนก็คืน calcBranches ของ "ทุกสาขา" มาให้ จึงยิงสาขาเดียวพอ */
@@ -292,15 +583,32 @@ export default function StockUsagePerHead() {
     setSelectedKeys(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
   };
 
-  // ── Export Excel: แถว = ไอเทม · สาขาละ 2 คอลัมน์ (ยอดใช้ / ต่อหัว) ──
+  /** คอลัมน์ย่อยของแต่ละสาขาตามโหมดดูที่เลือก */
+  const branchCols = useMemo(() => {
+    if (viewMode === 'flow' && isClosing) return ['opening', 'received', 'closing', 'usage', 'perHead'];
+    if (viewMode === 'perHead') return ['perHead'];
+    if (viewMode === 'usage') return ['usage'];
+    return ['usage', 'perHead'];
+  }, [viewMode, isClosing]);
+
+  // ── Export Excel: แถว = ไอเทม · สาขาละหลายคอลัมน์ตามโหมด (โหมดปิดรอบใส่ที่มาให้ครบทุกช่อง) ──
   const exportExcel = () => {
     if (!report || visibleRows.length === 0) { toast.error('ไม่มีรายการให้ export'); return; }
     const cols = activeBranches;
+    const sub = isClosing ? ['opening', 'received', 'closing', 'usage', 'perHead'] : ['usage', 'perHead'];
+    const perHeadIdx = new Set();  // คอลัมน์ที่ต้องโชว์ 4 ตำแหน่ง
+
     const h1 = ['รหัส', 'ชื่อสินค้า', 'หมวดจัดเก็บ', 'หน่วย', 'ยอดใช้รวม', 'ต่อหัว (ค่ากลาง)'];
     const h2 = ['', '', '', '', '', ''];
+    perHeadIdx.add(5);
     cols.forEach(b => {
-      h1.push(`${b.name.toUpperCase()} (${b.covers ? fmtInt(b.covers) : '-'} หัว)`, '');
-      h2.push('ยอดใช้', 'ต่อหัว');
+      const head = `${b.name.toUpperCase()} (${b.covers ? fmtInt(b.covers) : '-'} หัว`
+        + (isClosing && b.window ? ` · ${b.window.from} ถึง ${b.window.to}` : '') + ')';
+      sub.forEach((c, i) => {
+        h1.push(i === 0 ? head : '');
+        h2.push(BRANCH_COLS[c].label);
+        if (c === 'perHead') perHeadIdx.add(h2.length - 1);
+      });
     });
     const aoa = [h1, h2];
     visibleRows.forEach(r => {
@@ -309,19 +617,27 @@ export default function StockUsagePerHead() {
         Number(r.totalUsage.toFixed(2)), r.mean === null ? '' : Number(r.mean.toFixed(6)),
       ];
       r.cells.forEach(c => {
-        line.push(c.usage === null ? '' : Number(c.usage.toFixed(2)));
-        line.push(c.perHead === null ? '' : Number(c.perHead.toFixed(6)));
+        sub.forEach(col => {
+          if (col === 'usage') line.push(c.usage === null ? '' : Number(c.usage.toFixed(2)));
+          else if (col === 'perHead') line.push(c.perHead === null ? '' : Number(c.perHead.toFixed(6)));
+          else {
+            const v = c.flow ? c.flow[col] : null;
+            line.push(v === null || v === undefined ? '' : Number(v.toFixed(2)));
+          }
+        });
       });
       aoa.push(line);
     });
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!merges'] = cols.map((_, i) => ({ s: { r: 0, c: 6 + i * 2 }, e: { r: 0, c: 7 + i * 2 } }));
+    ws['!merges'] = cols.map((_, i) => ({
+      s: { r: 0, c: 6 + i * sub.length }, e: { r: 0, c: 5 + (i + 1) * sub.length },
+    }));
     ws['!cols'] = [{ wch: 12 }, { wch: 42 }, { wch: 16 }, { wch: 8 }, { wch: 12 }, { wch: 14 },
-      ...cols.flatMap(() => [{ wch: 11 }, { wch: 11 }])];
+      ...cols.flatMap(() => sub.map(() => ({ wch: 11 })))];
     const header = {
       font: { name: 'Tahoma', sz: 10, bold: true, color: { rgb: 'FFFFFF' } },
-      fill: { patternType: 'solid', fgColor: { rgb: '7E22CE' } },
+      fill: { patternType: 'solid', fgColor: { rgb: isClosing ? '4338CA' : '7E22CE' } },
       alignment: { vertical: 'center', horizontal: 'center', wrapText: true },
     };
     const range = XLSX.utils.decode_range(ws['!ref']);
@@ -336,13 +652,14 @@ export default function StockUsagePerHead() {
       for (let c = 4; c <= range.e.c; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r, c })];
         if (!cell) continue;
-        const isPerHead = c === 5 || (c >= 6 && (c - 6) % 2 === 1);
-        cell.z = isPerHead ? '0.0000' : '0.00';
+        cell.z = perHeadIdx.has(c) ? '0.0000' : '0.00';
       }
     }
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'ใช้ต่อหัวรายสาขา');
-    XLSX.writeFile(wb, `usage_per_head_${report.from}_${report.to}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, isClosing ? 'ใช้จริงต่อหัวรายสาขา' : 'ใช้ต่อหัวรายสาขา');
+    XLSX.writeFile(wb, isClosing
+      ? `usage_per_head_closing_${report.cycle}.xlsx`
+      : `usage_per_head_${report.from}_${report.to}.xlsx`);
     toast.success('Export สำเร็จ');
   };
 
@@ -353,23 +670,100 @@ export default function StockUsagePerHead() {
     return { text: 'text-slate-700', pill: 'bg-slate-100 text-slate-500' };
   };
 
-  const showUsage = viewMode !== 'perHead';
-  const showPerHead = viewMode !== 'usage';
-  const colSpanPerBranch = (showUsage ? 1 : 0) + (showPerHead ? 1 : 0);
+  /** ช่องหนึ่งช่องในตารางหลัก — แยกออกมาเพราะคอลัมน์ย่อยของสาขาเปลี่ยนไปตามโหมดดู */
+  const renderCell = (col, c, first) => {
+    const edge = first ? 'border-l-2 border-purple-100' : '';
+    if (col === 'perHead') {
+      const tone = cellTone(c.diffPct);
+      return (
+        <td className={`px-3 py-2 text-center whitespace-nowrap ${edge}`}>
+          {c.perHead === null ? <span className="text-gray-300 text-sm">-</span>
+            : !c.usage ? <span className="text-gray-300 text-sm" title="ช่วงนี้สาขานี้ไม่ได้ใช้ไอเทมนี้เลย — ไม่นำไปคิดค่ากลาง">0</span> : (
+            <>
+              <div className={`text-[12px] font-bold ${tone.text}`}>{fmtPerHead(c.perHead)}</div>
+              {c.diffPct !== null && (
+                <span className={`inline-block mt-0.5 px-1.5 rounded-full text-[9px] font-semibold ${tone.pill}`}>
+                  {c.diffPct > 0 ? '+' : ''}{c.diffPct.toFixed(1)}%
+                </span>
+              )}
+            </>
+          )}
+        </td>
+      );
+    }
+    if (col === 'usage') {
+      // ติดลบ = นับได้มากกว่ายกมา+รับ (นับพลาด/รับของยังไม่ลงระบบ) — ทาสีไว้ให้สังเกตเห็น
+      const neg = c.usage !== null && c.usage < 0;
+      return (
+        <td className={`px-3 py-2 text-center text-[12px] whitespace-nowrap ${neg ? 'text-amber-600 font-semibold' : 'text-slate-600'} ${edge}`}
+          title={neg ? 'ติดลบ = ยอดที่นับได้มากกว่ายอดยกมา + ยอดรับ' : ''}>
+          {c.usage === null ? <span className="text-gray-300">-</span> : c.usage ? fmtUsage(c.usage) : '0'}
+        </td>
+      );
+    }
+    const v = c.flow ? c.flow[col] : null;
+    const tint = col === 'received' ? 'text-teal-700 bg-teal-50/30' : 'text-indigo-700 bg-indigo-50/20';
+    return (
+      <td className={`px-3 py-2 text-center text-[11.5px] whitespace-nowrap ${tint} ${edge}`}>
+        {v === null || v === undefined ? <span className="text-gray-300">-</span> : v ? fmtUsage(v) : '0'}
+      </td>
+    );
+  };
+
+  // หัวเรื่องเปลี่ยนสีตามแหล่งที่มา — กันอ่านเลขผิดโหมดตอนสลับไปมา
+  const headTone = source === 'closing' ? 'bg-indigo-100 text-indigo-600' : 'bg-fuchsia-100 text-fuchsia-600';
 
   return (
     <div className="max-w-full mx-auto pb-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="mb-6">
+      <div className="mb-4">
         <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
-          <div className="p-2 bg-fuchsia-100 text-fuchsia-600 rounded-xl">
+          <div className={`p-2 rounded-xl ${headTone}`}>
             <BarChart3 className="w-6 h-6" />
           </div>
           รายงานการใช้วัตถุดิบต่อหัว ของสาขา
         </h1>
         <p className="text-gray-500 mt-1 ml-11 text-sm">
-          ยอดใช้ = ยอดขายจริง × สูตร BOM (ชุดเดียวกับ “ยอดใช้จากระบบ”) · ต่อหัว = ยอดใช้ ÷ จำนวนหัวลูกค้าของสาขานั้นในช่วงที่เลือก
+          {source === 'closing'
+            ? 'ใช้จริง = ยอดยกมา + ยอดรับเข้า − ยอดปิดรอบ · ต่อหัว = ใช้จริง ÷ จำนวนหัวลูกค้าของสาขานั้นในช่วงรอบเดียวกัน'
+            : 'ยอดใช้ = ยอดขายจริง × สูตร BOM (ชุดเดียวกับ “ยอดใช้จากระบบ”) · ต่อหัว = ยอดใช้ ÷ จำนวนหัวลูกค้าของสาขานั้นในช่วงที่เลือก'}
         </p>
       </div>
+
+      {/* เลือกแหล่งที่มาของยอดใช้ — ตัวเลขทั้งหน้าเปลี่ยนความหมายตามปุ่มนี้ จึงวางไว้บนสุด */}
+      <div className="mb-4 grid sm:grid-cols-2 gap-2 bg-white border border-gray-200 rounded-2xl p-2">
+        {SOURCES.map(s => {
+          const active = source === s.id;
+          return (
+            <button key={s.id} type="button" onClick={() => switchSource(s.id)}
+              className={`text-left rounded-xl border px-3 py-2.5 flex items-start gap-3 transition-colors ${
+                active ? s.ring : 'border-transparent hover:bg-gray-50'}`}>
+              <span className={`mt-0.5 p-1.5 rounded-lg ${active ? s.chip : 'bg-gray-100 text-gray-400'}`}>
+                <s.Icon className="w-4 h-4" />
+              </span>
+              <span className="min-w-0">
+                <span className={`block text-sm font-semibold ${active ? 'text-gray-800' : 'text-gray-500'}`}>
+                  {s.label}
+                </span>
+                <span className="block text-[11px] text-gray-400 leading-snug">{s.hint}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* กติกาของโหมดปิดรอบ — ไม่บอกไว้ คนดูจะงงว่าทำไมเลือกวันที่เองไม่ได้ */}
+      {source === 'closing' && (
+        <div className="mb-4 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-xs text-indigo-900 flex items-start gap-2">
+          <Info size={14} className="mt-0.5 shrink-0" />
+          <span className="leading-relaxed">
+            ยอดใช้มาจากของที่สาขานับเอง : <b>ยอดปิดรอบก่อนหน้า (ยกมา) + ยอดรับเข้าจากคลัง − ยอดปิดรอบที่เลือก</b> ·
+            ช่วงวันจึงถูกบังคับตาม <b>วันที่แต่ละสาขาปิดรอบ</b> (สาขาปิด 31 ส.ค. กับปิด 3 ก.ย. ได้ช่วงไม่เท่ากัน แต่เป็นรอบเดียวกัน)
+            เลือกวันเองไม่ได้ · จำนวนหัวลูกค้าก็ดึงตามช่วงเดียวกันนี้ ตัวเลขต่อหัวจึงเทียบกันได้ตรง ๆ
+            <br />
+            เทียบกับโหมดสูตร BOM แล้วส่วนต่างคือของที่ <b>หายไปเกินสูตร</b> — ตักเกิน ของเสีย ของหาย หรือตัดสต๊อกไม่ครบ
+          </span>
+        </div>
+      )}
 
       {/* แถบเครื่องมือ */}
       <div className="flex flex-col xl:flex-row gap-3 mb-4">
@@ -387,6 +781,7 @@ export default function StockUsagePerHead() {
             className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500 text-gray-700">
             <option value="usage">เรียงตามยอดใช้รวม (มาก→น้อย)</option>
             <option value="deviation">เรียงตามจำนวนสาขาที่ใช้เกินค่ากลาง</option>
+            {source === 'closing' && <option value="bomDeviation">เรียงตามจำนวนสาขาที่ใช้เกินสูตร</option>}
             <option value="storageCat">เรียงตามหมวดจัดเก็บ</option>
             <option value="productId">เรียงตามรหัสสินค้า</option>
             <option value="name">เรียงตามชื่อสินค้า</option>
@@ -394,7 +789,8 @@ export default function StockUsagePerHead() {
         </div>
 
         <div className="flex bg-white border border-gray-200 rounded-xl overflow-hidden text-sm">
-          {[['both', 'ต่อหัว + ยอดใช้'], ['perHead', 'ต่อหัวอย่างเดียว'], ['usage', 'ยอดใช้อย่างเดียว']].map(([v, label]) => (
+          {[['both', 'ต่อหัว + ยอดใช้'], ['perHead', 'ต่อหัวอย่างเดียว'], ['usage', 'ยอดใช้อย่างเดียว'],
+            ...(source === 'closing' ? [['flow', 'ไล่ที่มา (ยกมา/รับ/ปิด)']] : [])].map(([v, label]) => (
             <button key={v} onClick={() => setViewMode(v)}
               className={`px-3 py-3 whitespace-nowrap transition-colors ${viewMode === v ? 'bg-fuchsia-600 text-white font-semibold' : 'text-gray-600 hover:bg-gray-50'}`}>
               {label}
@@ -462,20 +858,40 @@ export default function StockUsagePerHead() {
           )}
         </div>
 
-        <div className="flex items-center gap-2 bg-gradient-to-r from-fuchsia-50 to-pink-50 border border-fuchsia-100 p-2 rounded-xl">
-          <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap">วันที่ :</span>
-          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-            className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
-          <span className="text-gray-500 text-sm">-</span>
-          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-            className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
-          <button onClick={fetchReport} disabled={isFetching || loading}
-            className="px-4 py-1.5 bg-fuchsia-600 text-white text-sm rounded-lg hover:bg-fuchsia-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
-            {isFetching
-              ? <><Loader2 className="w-4 h-4 animate-spin" />{progress ? `${progress.done}/${progress.total} สาขา` : 'กำลังคำนวณ'}</>
-              : 'คำนวณรายงาน'}
-          </button>
-        </div>
+        {source === 'closing' ? (
+          <div className="flex items-center gap-2 bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-100 p-2 rounded-xl">
+            <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap flex items-center gap-1.5">
+              <CalendarRange className="w-4 h-4 text-indigo-500" /> รอบ :
+            </span>
+            <select value={cycle} onChange={e => setCycle(e.target.value)} disabled={monthsLoading || !months.length}
+              className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50 min-w-[9.5rem]">
+              {monthsLoading && <option>กำลังโหลดรอบ…</option>}
+              {!monthsLoading && !months.length && <option>{monthsError || 'ไม่มีข้อมูลปิดรอบ'}</option>}
+              {months.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+            <button onClick={fetchReport} disabled={isFetching || loading || !cycle}
+              className="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
+              {isFetching
+                ? <><Loader2 className="w-4 h-4 animate-spin" />{progress ? `${progress.done}/${progress.total} สาขา` : 'กำลังคำนวณ'}</>
+                : 'คำนวณรายงาน'}
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 bg-gradient-to-r from-fuchsia-50 to-pink-50 border border-fuchsia-100 p-2 rounded-xl">
+            <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap">วันที่ :</span>
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+              className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
+            <span className="text-gray-500 text-sm">-</span>
+            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+              className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
+            <button onClick={fetchReport} disabled={isFetching || loading}
+              className="px-4 py-1.5 bg-fuchsia-600 text-white text-sm rounded-lg hover:bg-fuchsia-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
+              {isFetching
+                ? <><Loader2 className="w-4 h-4 animate-spin" />{progress ? `${progress.done}/${progress.total} สาขา` : 'กำลังคำนวณ'}</>
+                : 'คำนวณรายงาน'}
+            </button>
+          </div>
+        )}
 
         <div className="flex items-center gap-2 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 p-2 rounded-xl">
           <button onClick={exportExcel} disabled={!report || visibleRows.length === 0}
@@ -502,22 +918,32 @@ export default function StockUsagePerHead() {
       {/* การ์ดสรุป + จำนวนหัวรายสาขา */}
       {summary && (
         <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+          <div className={`grid grid-cols-2 gap-3 mb-3 ${isClosing ? 'lg:grid-cols-5' : 'lg:grid-cols-4'}`}>
             <div className="bg-white border border-fuchsia-100 rounded-2xl p-3">
               <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Package className="w-3.5 h-3.5" /> สาขาที่ดึงข้อมูลได้</div>
               <div className="text-xl font-bold text-fuchsia-600 mt-1">{summary.okCount} / {summary.total}</div>
-              <div className="text-[10px] text-gray-400 mt-0.5">{report.from} ถึง {report.to}</div>
+              <div className="text-[10px] text-gray-400 mt-0.5">
+                {isClosing ? `ยอดปิด${monthLabel(report.cycle)}` : `${report.from} ถึง ${report.to}`}
+              </div>
             </div>
             <div className="bg-white border border-purple-100 rounded-2xl p-3">
               <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Users className="w-3.5 h-3.5" /> จำนวนหัวลูกค้ารวม</div>
               <div className="text-xl font-bold text-purple-700 mt-1">{fmtInt(summary.covers)}</div>
               <div className="text-[10px] text-gray-400 mt-0.5">เฉพาะสาขาที่นับหัวได้ ({usableBranches.length} สาขา)</div>
             </div>
-            <div className="bg-white border border-blue-100 rounded-2xl p-3">
-              <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Package className="w-3.5 h-3.5" /> วัตถุดิบที่มีการใช้</div>
-              <div className="text-xl font-bold text-blue-700 mt-1">{fmtInt(summary.usedItems)}</div>
-              <div className="text-[10px] text-gray-400 mt-0.5">จากทั้งหมด {fmtInt(items.length)} รายการ</div>
-            </div>
+            {isClosing ? (
+              <div className="bg-white border border-teal-100 rounded-2xl p-3">
+                <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Truck className="w-3.5 h-3.5" /> รายการที่รับเข้าในรอบ</div>
+                <div className="text-xl font-bold text-teal-700 mt-1">{fmtInt(summary.receivedItems)}</div>
+                <div className="text-[10px] text-gray-400 mt-0.5">นับรวมทุกสาขา (ใบรับจากคลัง)</div>
+              </div>
+            ) : (
+              <div className="bg-white border border-blue-100 rounded-2xl p-3">
+                <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Package className="w-3.5 h-3.5" /> วัตถุดิบที่มีการใช้</div>
+                <div className="text-xl font-bold text-blue-700 mt-1">{fmtInt(summary.usedItems)}</div>
+                <div className="text-[10px] text-gray-400 mt-0.5">จากทั้งหมด {fmtInt(items.length)} รายการ</div>
+              </div>
+            )}
             {/* การ์ดเดียวในแถวที่กดได้ — เป็นตัวเลขที่คนดูอยากรู้ต่อเสมอว่า "จุดไหนบ้าง"
                 ทำเป็นปุ่มจริง ๆ (ไม่ใช่ div ที่ผูก onClick) จะได้กด Tab/Enter ได้ด้วย */}
             <button
@@ -538,23 +964,54 @@ export default function StockUsagePerHead() {
                   : '1 จุด = 1 ไอเทมของ 1 สาขา'}
               </div>
             </button>
+            {isClosing && (
+              <div className="bg-white border border-orange-100 rounded-2xl p-3">
+                <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Calculator className="w-3.5 h-3.5" /> จุดที่ใช้เกินสูตร &gt;{DEVIATION_PCT}%</div>
+                <div className="text-xl font-bold text-orange-600 mt-1">{fmtInt(summary.bomSpots)} จุด</div>
+                <div className="text-[10px] text-gray-400 mt-0.5">ใช้จริงมากกว่าที่ BOM บอกในช่วงเดียวกัน</div>
+              </div>
+            )}
           </div>
 
           <div className="bg-white border border-fuchsia-100 rounded-2xl px-3 py-2.5 mb-3 flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] font-semibold text-gray-500 mr-1">จำนวนหัวลูกค้าที่ใช้หาร :</span>
+            <span className="text-[11px] font-semibold text-gray-500 mr-1">
+              {isClosing ? 'ช่วงรอบ · จำนวนหัว · ของที่รับเข้า :' : 'จำนวนหัวลูกค้าที่ใช้หาร :'}
+            </span>
             {activeBranches.map(b => (
-              <span key={b.key}
-                title={b.ok
-                  ? (b.covers ? `นับจาก${b.coversSource === 'coverAll' ? ' Cover All ของบิล' : 'จานบุฟเฟต์ที่จ่ายจริง'}` : 'ดึงยอดใช้ได้ แต่ไม่มีจำนวนหัว — คิดต่อหัวไม่ได้')
-                  : b.error}
-                className={`rounded-full px-2.5 py-0.5 text-[11px] border ${
-                  !b.ok ? 'border-red-200 bg-red-50 text-red-700'
-                    : b.covers ? 'border-purple-200 bg-purple-50 text-purple-700'
-                    : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
-                {b.name.toUpperCase()}{' '}
-                <b>{!b.ok ? 'ดึงไม่ได้' : b.covers ? fmtInt(b.covers) : 'ไม่มีหัว'}</b>
-                {b.ok && b.covers ? ' หัว' : ''}
-              </span>
+              isClosing ? (
+                <span key={b.key}
+                  title={b.error || (b.coversError ? `จำนวนหัว: ${b.coversError}` : '')
+                    || `นับจาก${b.coversSource === 'coverAll' ? ' Cover All ของบิล' : 'จานบุฟเฟต์ที่จ่ายจริง'}`}
+                  className={`rounded-xl px-2.5 py-1 text-[11px] border leading-tight ${
+                    !b.ok ? 'border-red-200 bg-red-50 text-red-700'
+                      : b.covers ? 'border-indigo-200 bg-indigo-50 text-indigo-800'
+                      : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                  <b className="font-mono">{b.name.toUpperCase()}</b>
+                  {b.window
+                    ? <span className="ml-1 text-[10px] opacity-80">{dateLabel(b.window.from)} – {dateLabel(b.window.to)} ({b.window.days} วัน)</span>
+                    : <span className="ml-1 text-[10px]">ไม่มียอดปิดรอบ</span>}
+                  {b.ok && (
+                    <span className="ml-1">
+                      · {b.covers ? <b>{fmtInt(b.covers)} หัว</b> : <b>ไม่มีหัว</b>}
+                      {' · '}<span className="text-teal-700">รับเข้า {fmtInt(b.receivedItems || 0)} รายการ</span>
+                    </span>
+                  )}
+                  {!b.ok && b.window && <span className="ml-1">· ดึงยอดรับไม่ได้</span>}
+                </span>
+              ) : (
+                <span key={b.key}
+                  title={b.ok
+                    ? (b.covers ? `นับจาก${b.coversSource === 'coverAll' ? ' Cover All ของบิล' : 'จานบุฟเฟต์ที่จ่ายจริง'}` : 'ดึงยอดใช้ได้ แต่ไม่มีจำนวนหัว — คิดต่อหัวไม่ได้')
+                    : b.error}
+                  className={`rounded-full px-2.5 py-0.5 text-[11px] border ${
+                    !b.ok ? 'border-red-200 bg-red-50 text-red-700'
+                      : b.covers ? 'border-purple-200 bg-purple-50 text-purple-700'
+                      : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                  {b.name.toUpperCase()}{' '}
+                  <b>{!b.ok ? 'ดึงไม่ได้' : b.covers ? fmtInt(b.covers) : 'ไม่มีหัว'}</b>
+                  {b.ok && b.covers ? ' หัว' : ''}
+                </span>
+              )
             ))}
           </div>
         </>
@@ -569,8 +1026,20 @@ export default function StockUsagePerHead() {
         ) : !report ? (
           <div className="py-20 text-center text-gray-400">
             <BarChart3 className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-            <p className="text-sm">เลือกสาขาที่จะเทียบ ตั้งช่วงวันที่ แล้วกด “คำนวณรายงาน”</p>
-            <p className="text-xs mt-1 text-gray-400">ยิงทีละ {BRANCH_BATCH} สาขา · เลือกสาขาน้อยลงจะเร็วขึ้นตามจำนวนที่เลือก</p>
+            {source === 'closing' ? (
+              <>
+                <p className="text-sm">เลือกสาขาที่จะเทียบ เลือกรอบเดือน แล้วกด “คำนวณรายงาน”</p>
+                <p className="text-xs mt-1 text-gray-400">
+                  ยิงทีละ {BRANCH_BATCH_CLOSING} สาขา (สาขาละ 2 คำขอ : ยอดรับเข้า + จำนวนหัว) ·
+                  สาขาที่ยังไม่ปิดรอบจะขึ้นเหตุผลไว้ให้ ไม่ถูกเอาไปคิดค่ากลาง
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm">เลือกสาขาที่จะเทียบ ตั้งช่วงวันที่ แล้วกด “คำนวณรายงาน”</p>
+                <p className="text-xs mt-1 text-gray-400">ยิงทีละ {BRANCH_BATCH} สาขา · เลือกสาขาน้อยลงจะเร็วขึ้นตามจำนวนที่เลือก</p>
+              </>
+            )}
           </div>
         ) : activeBranches.length === 0 ? (
           <div className="py-20 text-center text-gray-400">
@@ -598,22 +1067,29 @@ export default function StockUsagePerHead() {
                     <th rowSpan={2} className="px-3 py-2 text-left text-[10px] font-semibold text-gray-500 uppercase">หน่วย</th>
                     <th colSpan={2} className="px-3 py-2 text-center text-[10px] font-semibold text-blue-700 uppercase bg-blue-50/60 whitespace-nowrap">รวมทุกสาขา</th>
                     {activeBranches.map(b => (
-                      <th key={b.key} colSpan={colSpanPerBranch}
+                      <th key={b.key} colSpan={branchCols.length}
                         className="px-3 py-2 text-center text-[10px] font-semibold text-purple-700 uppercase bg-purple-50/50 border-l-2 border-purple-100 whitespace-nowrap">
                         {b.name.toUpperCase()}
                         <div className="font-normal text-[9px] text-purple-400 normal-case">
                           {b.ok ? (b.covers ? `${fmtInt(b.covers)} หัว` : 'ไม่มีจำนวนหัว') : 'ดึงไม่ได้'}
+                          {isClosing && b.window ? ` · ${dateLabel(b.window.from)}–${dateLabel(b.window.to)}` : ''}
                         </div>
                       </th>
                     ))}
                   </tr>
                   <tr>
-                    <th className="px-3 py-2 text-center text-[10px] font-semibold text-blue-700 uppercase bg-blue-50/60 whitespace-nowrap">ยอดใช้</th>
+                    <th className="px-3 py-2 text-center text-[10px] font-semibold text-blue-700 uppercase bg-blue-50/60 whitespace-nowrap">
+                      {isClosing ? 'ใช้จริงรวม' : 'ยอดใช้'}
+                    </th>
                     <th className="px-3 py-2 text-center text-[10px] font-semibold text-violet-700 uppercase bg-violet-50/60 whitespace-nowrap">ต่อหัว (ค่ากลาง)</th>
                     {activeBranches.map(b => (
                       <React.Fragment key={b.key}>
-                        {showUsage && <th className="px-3 py-2 text-center text-[10px] font-semibold text-purple-600 uppercase bg-purple-50/40 border-l-2 border-purple-100 whitespace-nowrap">ยอดใช้</th>}
-                        {showPerHead && <th className={`px-3 py-2 text-center text-[10px] font-semibold text-purple-600 uppercase bg-purple-50/40 whitespace-nowrap ${showUsage ? '' : 'border-l-2 border-purple-100'}`}>ต่อหัว</th>}
+                        {branchCols.map((col, i) => (
+                          <th key={col} title={BRANCH_COLS[col].title}
+                            className={`px-3 py-2 text-center text-[10px] font-semibold uppercase whitespace-nowrap ${BRANCH_COLS[col].head} ${i === 0 ? 'border-l-2 border-purple-100' : ''}`}>
+                            {col === 'usage' && isClosing ? 'ใช้จริง' : BRANCH_COLS[col].label}
+                          </th>
+                        ))}
                       </React.Fragment>
                     ))}
                   </tr>
@@ -621,7 +1097,7 @@ export default function StockUsagePerHead() {
                 <tbody className="bg-white divide-y divide-gray-100">
                   {visibleRows.length === 0 ? (
                     <tr>
-                      <td colSpan={5 + activeBranches.length * colSpanPerBranch} className="px-6 py-12 text-center text-gray-400">
+                      <td colSpan={5 + activeBranches.length * branchCols.length} className="px-6 py-12 text-center text-gray-400">
                         <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                         ไม่พบรายการสินค้าที่ตรงเงื่อนไข
                       </td>
@@ -640,33 +1116,13 @@ export default function StockUsagePerHead() {
                       <td className="px-3 py-2 text-center text-sm font-bold text-violet-700 bg-violet-50/40 whitespace-nowrap">
                         {r.mean ? fmtPerHead(r.mean) : '-'}
                       </td>
-                      {r.cells.map((c, i) => {
-                        const tone = cellTone(c.diffPct);
-                        return (
-                          <React.Fragment key={i}>
-                            {showUsage && (
-                              <td className="px-3 py-2 text-center text-[12px] text-slate-600 border-l-2 border-purple-100 whitespace-nowrap">
-                                {c.usage === null ? <span className="text-gray-300">-</span> : c.usage ? fmtUsage(c.usage) : '0'}
-                              </td>
-                            )}
-                            {showPerHead && (
-                              <td className={`px-3 py-2 text-center whitespace-nowrap ${showUsage ? '' : 'border-l-2 border-purple-100'}`}>
-                                {c.perHead === null ? <span className="text-gray-300 text-sm">-</span>
-                                  : !c.usage ? <span className="text-gray-300 text-sm" title="ช่วงนี้สาขานี้ไม่ได้ใช้ไอเทมนี้เลย — ไม่นำไปคิดค่ากลาง">0</span> : (
-                                  <>
-                                    <div className={`text-[12px] font-bold ${tone.text}`}>{fmtPerHead(c.perHead)}</div>
-                                    {c.diffPct !== null && (
-                                      <span className={`inline-block mt-0.5 px-1.5 rounded-full text-[9px] font-semibold ${tone.pill}`}>
-                                        {c.diffPct > 0 ? '+' : ''}{c.diffPct.toFixed(1)}%
-                                      </span>
-                                    )}
-                                  </>
-                                )}
-                              </td>
-                            )}
-                          </React.Fragment>
-                        );
-                      })}
+                      {r.cells.map((c, i) => (
+                        <React.Fragment key={i}>
+                          {branchCols.map((col, j) => (
+                            <React.Fragment key={col}>{renderCell(col, c, j === 0)}</React.Fragment>
+                          ))}
+                        </React.Fragment>
+                      ))}
                     </tr>
                   ))}
                 </tbody>
@@ -677,6 +1133,7 @@ export default function StockUsagePerHead() {
               <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded bg-red-100 inline-block" /> ใช้ต่อหัวสูงกว่าค่ากลาง &gt; {DEVIATION_PCT}%</span>
               <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded bg-cyan-100 inline-block" /> ต่ำกว่าค่ากลาง &gt; {DEVIATION_PCT}%</span>
               <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded bg-slate-100 inline-block" /> ใกล้เคียงค่ากลาง</span>
+              {isClosing && <span className="flex items-center gap-1.5 text-amber-600"><i className="w-2.5 h-2.5 rounded bg-amber-100 inline-block" /> ใช้จริงติดลบ = นับได้มากกว่ายกมา + รับเข้า</span>}
               <span className="ml-auto">ค่ากลาง = ยอดใช้รวม ÷ จำนวนหัวรวม ของสาขาที่ใช้ไอเทมนั้น (ถ่วงน้ำหนักตามขนาดสาขา)</span>
             </div>
           </>
@@ -717,6 +1174,7 @@ export default function StockUsagePerHead() {
  */
 function HotSpotModal({ spots, report, deviationPct, onPick, onClose }) {
   const [branchFilter, setBranchFilter] = useState('');
+  const isClosing = report?.mode === 'closing';
 
   // สาขาไหนมีจุดเกินกี่จุด — เรียงจากมากไปน้อย ใช้เป็นทั้งสรุปและปุ่มกรอง
   const byBranch = useMemo(() => {
@@ -737,13 +1195,13 @@ function HotSpotModal({ spots, report, deviationPct, onPick, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-6xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b border-red-100 bg-red-50/50">
           <h3 className="font-bold text-red-900 flex items-center gap-2">
             <AlertTriangle className="w-4 h-4" />
             จุดที่ใช้เกินค่ากลาง &gt;{deviationPct}%
             <span className="font-normal text-[11px] text-red-500">
-              {fmtInt(spots.length)} จุด · {report?.from} ถึง {report?.to}
+              {fmtInt(spots.length)} จุด · {isClosing ? `ยอดปิด${monthLabel(report?.cycle)}` : `${report?.from} ถึง ${report?.to}`}
             </span>
           </h3>
           <button onClick={onClose} className="text-red-400 hover:text-red-700 font-bold text-xl leading-none">&times;</button>
@@ -786,6 +1244,15 @@ function HotSpotModal({ spots, report, deviationPct, onPick, onClose }) {
                     <th className="px-3 py-2 text-right text-[10px] font-bold text-red-800 uppercase whitespace-nowrap"
                       title="(ใช้ต่อหัว − ค่ากลาง) × จำนวนหัวของสาขานั้น = ใช้เกินไปกี่หน่วยในช่วงนี้">เกินไป (หน่วย)</th>
                     <th className="px-3 py-2 text-right text-[10px] font-bold text-red-800 uppercase whitespace-nowrap">ยอดใช้รวม</th>
+                    {isClosing && (
+                      <>
+                        <th className="px-3 py-2 text-right text-[10px] font-bold text-teal-800 uppercase whitespace-nowrap bg-teal-50/60"
+                          title="ของที่รับเข้าสาขาระหว่างรอบ">รับเข้า</th>
+                        <th className="px-3 py-2 text-right text-[10px] font-bold text-orange-800 uppercase whitespace-nowrap bg-orange-50/60"
+                          title="ยอดที่สูตร BOM บอกว่าควรใช้ในช่วงเดียวกัน">ตามสูตร</th>
+                        <th className="px-3 py-2 text-right text-[10px] font-bold text-orange-800 uppercase whitespace-nowrap bg-orange-50/60">ต่างจากสูตร</th>
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -813,6 +1280,24 @@ function HotSpotModal({ spots, report, deviationPct, onPick, onClose }) {
                       </td>
                       <td className="px-3 py-2 text-right font-mono font-semibold text-red-700 whitespace-nowrap">{fmtUsage(sp.excessQty)}</td>
                       <td className="px-3 py-2 text-right font-mono text-gray-500 whitespace-nowrap">{fmtUsage(sp.usage)}</td>
+                      {isClosing && (
+                        <>
+                          <td className="px-3 py-2 text-right font-mono text-teal-700 whitespace-nowrap bg-teal-50/30">
+                            {sp.cell?.flow && sp.cell.flow.received !== null ? fmtUsage(sp.cell.flow.received) : '-'}
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-gray-500 whitespace-nowrap bg-orange-50/30">
+                            {sp.cell?.flow && sp.cell.flow.bom !== null ? fmtUsage(sp.cell.flow.bom) : '-'}
+                          </td>
+                          <td className="px-3 py-2 text-right whitespace-nowrap bg-orange-50/30">
+                            {sp.cell?.bomDiffPct === null || sp.cell?.bomDiffPct === undefined
+                              ? <span className="text-gray-300">-</span>
+                              : <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                                  sp.cell.bomDiffPct > deviationPct ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-500'}`}>
+                                  {sp.cell.bomDiffPct > 0 ? '+' : ''}{sp.cell.bomDiffPct.toFixed(0)}%
+                                </span>}
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -828,8 +1313,9 @@ function HotSpotModal({ spots, report, deviationPct, onPick, onClose }) {
             ค่ากลาง = ยอดใช้รวม ÷ จำนวนหัวรวม ของสาขาที่ใช้ไอเทมนั้น
           </p>
           <p className="text-[11px] text-gray-400 mt-1.5 leading-relaxed">
-            เกินค่ากลางไม่ได้แปลว่าผิดเสมอไป — สูตรที่ต่างกัน เมนูขายดีคนละตัว หรือสาขาที่เพิ่งเปิด
-            ก็ทำให้ต่างได้ ใช้เป็นจุดตั้งต้นในการไปดูหน้างานว่าตักเกินสูตร ของหาย หรือตัดสต๊อกไม่ครบ
+            {isClosing
+              ? 'โหมดปิดรอบ: เกินค่ากลางแปลว่าสาขานี้ “ของหายไปจากชั้น” ต่อหัวมากกว่าเพื่อน — ดูคอลัมน์ ต่างจากสูตร ควบคู่ไปด้วย ถ้าเกินทั้งสองตัวคือใช้เกินสูตรจริง ไม่ใช่แค่ขายเมนูคนละแบบ · ยอดที่นับพลาดหรือใบรับที่ยังไม่ลงระบบก็ทำให้เพี้ยนได้ ควรเช็กยอดรับเข้ากับใบรับก่อนสรุป'
+              : 'เกินค่ากลางไม่ได้แปลว่าผิดเสมอไป — สูตรที่ต่างกัน เมนูขายดีคนละตัว หรือสาขาที่เพิ่งเปิด ก็ทำให้ต่างได้ ใช้เป็นจุดตั้งต้นในการไปดูหน้างานว่าตักเกินสูตร ของหาย หรือตัดสต๊อกไม่ครบ'}
           </p>
         </div>
 
@@ -850,6 +1336,7 @@ function HotSpotModal({ spots, report, deviationPct, onPick, onClose }) {
 /** หน้าต่างเทียบทุกสาขาของไอเทมเดียว — เรียงจากใช้ต่อหัวมากสุด + แท่งเทียบค่ากลาง */
 function DetailModal({ row, report, settings, loadingSettings, onClose }) {
   const mean = row.mean;
+  const isClosing = report?.mode === 'closing';
   // เอาเฉพาะสาขาที่ใช้ไอเทมนี้จริง — สาขาที่ไม่ได้ใช้เลยไม่ได้เข้าค่ากลาง จะโชว์ -100% ให้ตกใจเล่น ๆ
   const lines = row.cells
     .filter(c => c.perHead !== null && c.usage > 0)
@@ -864,7 +1351,7 @@ function DetailModal({ row, report, settings, loadingSettings, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-6xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b border-fuchsia-100 bg-fuchsia-50/50">
           <h3 className="font-bold text-fuchsia-900">
             {row.item.name}
@@ -876,16 +1363,29 @@ function DetailModal({ row, report, settings, loadingSettings, onClose }) {
         </div>
 
         <div className="p-4 max-h-[72vh] overflow-y-auto">
-          <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className={`grid gap-3 mb-4 ${isClosing ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-3'}`}>
             <div className="border border-purple-100 bg-purple-50/50 rounded-xl p-3">
               <div className="text-[10px] text-purple-600">ค่ากลางต่อหัว (ทุกสาขา)</div>
               <div className="text-lg font-bold text-purple-900">{mean ? fmtPerHead(mean) : '-'}</div>
               <div className="text-[10px] text-purple-400">{row.item.unit || 'หน่วย'}/หัว</div>
             </div>
+            {isClosing && (
+              <div className="border border-orange-100 bg-orange-50/50 rounded-xl p-3">
+                <div className="text-[10px] text-orange-600">ค่ากลางต่อหัว ตามสูตร BOM</div>
+                <div className="text-lg font-bold text-orange-900">{row.bomMean ? fmtPerHead(row.bomMean) : '-'}</div>
+                <div className="text-[10px] text-orange-400">
+                  {row.bomMean && mean
+                    ? `ใช้จริง${mean >= row.bomMean ? 'มากกว่า' : 'น้อยกว่า'}สูตร ${Math.abs((mean - row.bomMean) / row.bomMean * 100).toFixed(1)}%`
+                    : 'เทียบกับสูตรไม่ได้'}
+                </div>
+              </div>
+            )}
             <div className="border border-blue-100 bg-blue-50/50 rounded-xl p-3">
-              <div className="text-[10px] text-blue-600">ยอดใช้รวม</div>
+              <div className="text-[10px] text-blue-600">{isClosing ? 'ใช้จริงรวม' : 'ยอดใช้รวม'}</div>
               <div className="text-lg font-bold text-blue-900">{fmtUsage(row.totalUsage)}</div>
-              <div className="text-[10px] text-blue-400">{report.from} ถึง {report.to}</div>
+              <div className="text-[10px] text-blue-400">
+                {isClosing ? `ยอดปิด${monthLabel(report.cycle)}` : `${report.from} ถึง ${report.to}`}
+              </div>
             </div>
             <div className="border border-red-100 bg-red-50/50 rounded-xl p-3">
               <div className="text-[10px] text-red-600">สาขาที่เกินค่ากลาง &gt;{DEVIATION_PCT}%</div>
@@ -900,17 +1400,34 @@ function DetailModal({ row, report, settings, loadingSettings, onClose }) {
             <div className="text-center py-10 text-gray-400 text-sm">ช่วงนี้ไม่มีสาขาไหนคิดต่อหัวได้ (ไม่มียอดใช้ หรือไม่มีจำนวนหัว)</div>
           ) : (
             <div className="grid lg:grid-cols-2 gap-5">
-              <div>
-                <h4 className="text-xs font-bold text-slate-600 mb-2">เทียบทุกสาขา (เรียงจากใช้ต่อหัวมากสุด)</h4>
-                <div className="border border-gray-100 rounded-xl overflow-hidden">
+              <div className={isClosing ? 'lg:col-span-2' : ''}>
+                <h4 className="text-xs font-bold text-slate-600 mb-2">
+                  เทียบทุกสาขา (เรียงจากใช้ต่อหัวมากสุด)
+                  {isClosing && <span className="font-normal text-gray-400"> · ยกมา + รับเข้า − ปิดรอบ = ใช้จริง</span>}
+                </h4>
+                <div className="border border-gray-100 rounded-xl overflow-hidden overflow-x-auto">
                   <table className="min-w-full text-[11.5px]">
                     <thead className="bg-gray-50">
                       <tr>
                         <th className="px-2.5 py-2 text-left font-bold text-gray-500 uppercase text-[9.5px]">สาขา</th>
                         <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]">จำนวนหัว</th>
-                        <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]">ยอดใช้</th>
+                        {isClosing && (
+                          <>
+                            <th className="px-2.5 py-2 text-right font-bold text-indigo-500 uppercase text-[9.5px] bg-indigo-50/40">ยกมา</th>
+                            <th className="px-2.5 py-2 text-right font-bold text-teal-600 uppercase text-[9.5px] bg-teal-50/40">รับเข้า</th>
+                            <th className="px-2.5 py-2 text-right font-bold text-indigo-500 uppercase text-[9.5px] bg-indigo-50/40">ปิดรอบ</th>
+                          </>
+                        )}
+                        <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]">{isClosing ? 'ใช้จริง' : 'ยอดใช้'}</th>
                         <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]">ใช้ต่อหัว</th>
                         <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]">ต่างจากค่ากลาง</th>
+                        {isClosing && (
+                          <>
+                            <th className="px-2.5 py-2 text-right font-bold text-orange-600 uppercase text-[9.5px] bg-orange-50/40"
+                              title="ยอดที่สูตร BOM บอกว่าควรใช้ในช่วงเดียวกัน">ตามสูตร</th>
+                            <th className="px-2.5 py-2 text-right font-bold text-orange-600 uppercase text-[9.5px] bg-orange-50/40">ต่างจากสูตร</th>
+                          </>
+                        )}
                         <th className="px-2.5 py-2 text-right font-bold text-gray-500 uppercase text-[9.5px]" title="ค่าเฉลี่ยต่อหัวที่สาขาตั้งไว้ในหน้านับสต๊อก">ค่าที่ตั้งไว้</th>
                       </tr>
                     </thead>
@@ -924,8 +1441,28 @@ function DetailModal({ row, report, settings, loadingSettings, onClose }) {
                         const setOff = setVal ? Math.abs(l.perHead - setVal) / setVal * 100 > DEVIATION_PCT : false;
                         return (
                           <tr key={i}>
-                            <td className="px-2.5 py-1.5 font-bold font-mono text-slate-700">{l.branch.name.toUpperCase()}</td>
+                            <td className="px-2.5 py-1.5 font-bold font-mono text-slate-700">
+                              {l.branch.name.toUpperCase()}
+                              {isClosing && l.branch.window && (
+                                <div className="font-normal text-[9px] text-gray-400">
+                                  {dateLabel(l.branch.window.from)} – {dateLabel(l.branch.window.to)}
+                                </div>
+                              )}
+                            </td>
                             <td className="px-2.5 py-1.5 text-right text-slate-500">{fmtInt(l.branch.covers)}</td>
+                            {isClosing && (
+                              <>
+                                <td className="px-2.5 py-1.5 text-right text-indigo-700 bg-indigo-50/20">
+                                  {l.flow && l.flow.opening !== null ? fmtUsage(l.flow.opening) : '-'}
+                                </td>
+                                <td className="px-2.5 py-1.5 text-right text-teal-700 bg-teal-50/20">
+                                  {l.flow && l.flow.received !== null ? fmtUsage(l.flow.received) : '-'}
+                                </td>
+                                <td className="px-2.5 py-1.5 text-right text-indigo-700 bg-indigo-50/20">
+                                  {l.flow && l.flow.closing !== null ? fmtUsage(l.flow.closing) : '-'}
+                                </td>
+                              </>
+                            )}
                             <td className="px-2.5 py-1.5 text-right text-slate-600">{fmtUsage(l.usage)}</td>
                             <td className={`px-2.5 py-1.5 text-right font-bold ${over ? 'text-red-600' : under ? 'text-cyan-700' : 'text-slate-700'}`}>
                               {fmtPerHead(l.perHead)}
@@ -936,6 +1473,22 @@ function DetailModal({ row, report, settings, loadingSettings, onClose }) {
                                 {l.diffPct > 0 ? '+' : ''}{l.diffPct.toFixed(1)}%
                               </span>
                             </td>
+                            {isClosing && (
+                              <>
+                                <td className="px-2.5 py-1.5 text-right text-slate-500 bg-orange-50/20">
+                                  {l.flow && l.flow.bom !== null ? fmtUsage(l.flow.bom) : '-'}
+                                </td>
+                                <td className="px-2.5 py-1.5 text-right bg-orange-50/20">
+                                  {l.bomDiffPct === null ? <span className="text-gray-300">-</span> : (
+                                    <span className={`inline-block px-1.5 rounded-full text-[9.5px] font-semibold ${
+                                      l.bomDiffPct > DEVIATION_PCT ? 'bg-orange-100 text-orange-700'
+                                        : l.bomDiffPct < -DEVIATION_PCT ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-500'}`}>
+                                      {l.bomDiffPct > 0 ? '+' : ''}{l.bomDiffPct.toFixed(1)}%
+                                    </span>
+                                  )}
+                                </td>
+                              </>
+                            )}
                             <td className="px-2.5 py-1.5 text-right text-fuchsia-700">
                               {loadingSettings ? <Loader2 className="w-3 h-3 animate-spin inline text-fuchsia-300" />
                                 : setVal ? <>{setVal}{setOff && <span title="ใช้จริงต่างจากค่าที่ตั้งไว้เกินเกณฑ์"> ⚠️</span>}</>
@@ -983,13 +1536,50 @@ function DetailModal({ row, report, settings, loadingSettings, onClose }) {
                   • แท่งฟ้า = ต่ำกว่าค่ากลางเกิน {DEVIATION_PCT}% (อาจขายส่วนผสมอื่นแทน หรือสูตร BOM ไม่ตรงของจริง)
                 </div>
               </div>
+
+              {isClosing && (
+                <div>
+                  <h4 className="text-xs font-bold text-slate-600 mb-2">ใช้จริง เทียบ ตามสูตร BOM (ต่อหัว)</h4>
+                  <div className="space-y-1.5">
+                    {lines.map((l, i) => {
+                      const maxPair = Math.max(l.perHead, l.bomPerHead || 0) || 1;
+                      return (
+                        <div key={i} className="flex items-center gap-2">
+                          <span className="w-11 text-[11px] font-bold font-mono text-slate-600">{l.branch.name.toUpperCase()}</span>
+                          <span className="flex-1 space-y-0.5">
+                            <span className="block relative h-2.5 bg-slate-50 rounded-full" title={`ใช้จริง ${fmtPerHead(l.perHead)}`}>
+                              <span className="absolute left-0 top-0 h-2.5 rounded-full bg-indigo-400"
+                                style={{ width: `${Math.min(100, l.perHead / maxPair * 100)}%` }} />
+                            </span>
+                            <span className="block relative h-2.5 bg-slate-50 rounded-full"
+                              title={l.bomPerHead ? `ตามสูตร ${fmtPerHead(l.bomPerHead)}` : 'ไม่มีสูตรของช่วงนี้'}>
+                              <span className="absolute left-0 top-0 h-2.5 rounded-full bg-orange-300"
+                                style={{ width: `${Math.min(100, (l.bomPerHead || 0) / maxPair * 100)}%` }} />
+                            </span>
+                          </span>
+                          <span className="w-14 text-right text-[10.5px] font-semibold text-slate-600">
+                            {l.bomDiffPct === null ? '-' : `${l.bomDiffPct > 0 ? '+' : ''}${l.bomDiffPct.toFixed(0)}%`}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-3 text-[10.5px] text-gray-400 leading-relaxed">
+                    • แท่งน้ำเงิน = ใช้จริงจากการนับของ · แท่งส้ม = ที่สูตรบอกว่าควรใช้ในช่วงเดียวกัน<br />
+                    • ตัวเลขขวาสุด = ใช้จริงมากกว่าสูตรกี่ % (บวกมาก ๆ = ตักเกินสูตร ของเสีย ของหาย หรือตัดสต๊อกไม่ครบ)<br />
+                    • ติดลบมาก ๆ มักแปลว่าสูตร BOM ไม่ตรงของจริง หรือนับของรอบนี้/รอบก่อนคลาดเคลื่อน
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
 
         <div className="p-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
           <span className="text-[10.5px] text-gray-400">
-            ยอดใช้ = ยอดขายจริง × สูตร BOM · จำนวนหัว = จานบุฟเฟต์ที่จ่ายจริง (WRM/WMT ใช้ Cover All)
+            {isClosing
+              ? 'ใช้จริง = ยอดปิดรอบก่อน + ยอดรับเข้า (ใบรับ TRF/RCV) − ยอดปิดรอบนี้ · จำนวนหัว = จานบุฟเฟต์ที่จ่ายจริง (WRM/WMT ใช้ Cover All)'
+              : 'ยอดใช้ = ยอดขายจริง × สูตร BOM · จำนวนหัว = จานบุฟเฟต์ที่จ่ายจริง (WRM/WMT ใช้ Cover All)'}
           </span>
           <button className="px-4 py-2 bg-fuchsia-100 text-fuchsia-700 rounded-lg text-sm font-medium hover:bg-fuchsia-200 transition-colors"
             onClick={onClose}>ปิดหน้าต่าง</button>
