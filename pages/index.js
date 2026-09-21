@@ -269,20 +269,44 @@ function isExcludedItem(code) {
 }
 
 /**
- * ข้อความเตือนเมื่อ "ดึงบิลมาได้ แต่ไม่เหลือสักใบหลังกรองตามช่วงวัน" ('' = ไม่ต้องเตือน)
+ * ข้อความเตือนใต้แถบค้นหา — บอกว่าตัวเลขบนหน้ารอบนี้ "มาจากไหน" ('' = ปกติ ไม่ต้องเตือน)
  *
- * เคสนี้กับ "ต้นทางไม่มีข้อมูลของวันนั้น" หน้าตาบนจอเหมือนกันเป๊ะ — ยอด 0 ทุกการ์ด
- * ไม่มีแถบแดง ไม่มีอะไรฟ้องเลย แต่คนละสาเหตุคนละทางแก้ จึงต้องแยกให้เห็นด้วยตา
- * (บทเรียนเดียวกับหน้า "ดูสแกนหน้า" ที่ข้อมูลเคยขาดเป็นวัน ๆ โดยไม่มีอะไรบอก)
+ * ⚠️ ต้องนับบิลจาก POS แยกจากออเดอร์เพิ่มเติมในชีท (โต๊ะ 800) เสมอ
+ *    ของเดิมนับรวมกันแล้วถามแค่ว่า "ยังเหลือแถวไหม" ซึ่งกลบอาการที่เจอมาแล้วจริง:
+ *    POS ไม่ส่งบิลมาเลยสักใบ แต่ชีทมี 87 ใบ หน้าจึงขึ้นยอดขาย ฿7,499 เหมือนทุกอย่างปกติ
+ *    ทั้งที่ต้นทุน · จำนวนลูกค้า · ต้นทุนโต๊ะเตรียม · รายการไม่นับคำนวณ เป็น 0 หมด
+ *    (รายการจากชีทใช้รหัสสังเคราะห์ X8xxxx ที่ไม่มีในตารางต้นทุนและไม่ใช่ไอเทมบุฟเฟต์
+ *     ดู pages/api/extra-orders.js) — ไม่มีอะไรบนจอบอกเลยว่าต้นทางฝั่ง POS เงียบไป
+ *
+ * สามเคสที่ต้องแยกให้เห็นด้วยตา เพราะหน้าตาบนจอเหมือนกันเป๊ะแต่คนละทางแก้:
+ *   1) POS ส่งบิลมา แต่ไม่เหลือสักใบหลังกรองช่วงวัน → คอลัมน์ StartTime ที่ฐานใช้เทียบวันไม่ได้
+ *   2) POS ไม่ส่งอะไรมาเลย แต่ชีทมี                → ต้นทางฝั่ง POS/host เงียบ
+ *   3) ไม่มีทั้งคู่                                  → ช่วงวัน/สาขาที่เลือกไม่มีข้อมูลจริง
  */
-function noteForEmptyResult(fetched, keptCount, startDate, endDate) {
-  if (!fetched.length || keptCount) return '';
-  const seen = [...new Set(fetched.map(dateFromRow))].sort();
-  const shown = seen.slice(0, 6).join(', ') + (seen.length > 6 ? ` และอีก ${seen.length - 6} ค่า` : '');
+function salesSourceNote(posRows, posKept, sheetKept, startDate, endDate) {
   const range = startDate === endDate ? startDate : `${startDate} ถึง ${endDate}`;
-  return `ดึงบิลมาได้ ${fetched.length} ใบ แต่ไม่มีใบไหนที่ "วันเปิดบิล" อยู่ในช่วง ${range} เลย ` +
-    `— วันที่ที่อ่านได้จากข้อมูลคือ ${shown} ` +
-    `(ถ้าค่าเหล่านี้ไม่ใช่วันที่ที่ควรเป็น แปลว่าคอลัมน์ StartTime ที่ฐานไม่ได้เก็บวันที่เต็ม)`;
+
+  if (posRows.length && !posKept) {
+    const seen = [...new Set(posRows.map(dateFromRow))].sort();
+    const shown = seen.slice(0, 6).join(', ') + (seen.length > 6 ? ` และอีก ${seen.length - 6} ค่า` : '');
+    return `ดึงบิลจาก POS มาได้ ${posRows.length} ใบ แต่ไม่มีใบไหนที่ "วันเปิดบิล" อยู่ในช่วง ${range} เลย ` +
+      `— วันที่ที่อ่านได้จากข้อมูลคือ ${shown} ` +
+      `(ถ้าค่าเหล่านี้ไม่ใช่วันที่ที่ควรเป็น แปลว่าคอลัมน์ StartTime ที่ฐานไม่ได้เก็บวันที่เต็ม)`;
+  }
+
+  if (!posRows.length && sheetKept) {
+    return `ไม่มีบิลจาก POS เลยสักใบในช่วง ${range} — ตัวเลขทุกการ์ดบนหน้านี้มาจาก ` +
+      `"ออเดอร์เพิ่มเติม" ในชีท (โต๊ะ 800) ${sheetKept} ใบเท่านั้น จึงไม่ใช่ยอดขายจริงของทั้งบริษัท ` +
+      `และต้นทุน · จำนวนลูกค้า · ต้นทุนโต๊ะเตรียม จะเป็น 0 เสมอ เพราะรายการในชีทไม่มีรหัสสินค้าของ POS ` +
+      `— ให้ตรวจว่าเครื่องออฟฟิศยังส่งข้อมูล POS ขึ้นฐานอยู่ไหม`;
+  }
+
+  if (!posRows.length && !sheetKept) {
+    return `ไม่พบข้อมูลของช่วง ${range} ตามเงื่อนไขที่เลือกเลย ทั้งบิลจาก POS และออเดอร์เพิ่มเติมในชีท ` +
+      `— ถ้าช่วงนี้ควรมียอดขาย ให้ไปตรวจต้นทางฝั่ง POS ก่อน ไม่ใช่อาการของตัวหน้าเว็บ`;
+  }
+
+  return '';
 }
 
 /* ───────── HELPERS ───────── */
@@ -934,36 +958,58 @@ export default function App() {
 
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
-        setLoadProgress({
+        const chunkLabel = `${chunk.start} ถึง ${chunk.end}`;
+        // บอกบนแถบความคืบหน้าว่ากำลังดึงอะไรอยู่ — ยิงทีละตัวแล้วแต่ละก้อนใช้เวลานานขึ้น
+        // ถ้าไม่บอกว่าถึงไหนแล้ว คนดูจะนึกว่าค้าง
+        const say = (what) => setLoadProgress({
           current: i,
           total: chunks.length,
-          text: `กำลังดึงข้อมูลช่วง ${chunk.start} ถึง ${chunk.end} (ชุดที่ ${i + 1}/${chunks.length})`
+          text: `กำลังดึง${what}ช่วง ${chunk.start} ถึง ${chunk.end} (ชุดที่ ${i + 1}/${chunks.length})`
         });
-
-        const chunkLabel = `${chunk.start} ถึง ${chunk.end}`;
         // บอกบนแถบความคืบหน้าว่ากำลังลองใหม่อยู่ ไม่ใช่ค้าง (รอบหนึ่งรอได้ถึง 55 วิ)
         const onRetry = ({ attempt, total, chunkLabel: c }) => setLoadProgress(p => ({
           current: i, total: chunks.length, ...p,
           text: `ช่วง ${c} ตอบไม่ทัน กำลังลองใหม่ (ครั้งที่ ${attempt}/${total})...`,
         }));
 
-        // ยิงบิลกับรายการพร้อมกัน แต่ละตัวลองใหม่เองได้ — ใช้ allSettled เพื่อให้อีกตัว
-        // ที่ยังลองอยู่จบงานของมันก่อน ไม่ทิ้งเป็น unhandled rejection ค้างไว้
-        const [salesR, detailR] = await Promise.allSettled([
-          fetchChunkJson(`/api/sales?start=${chunk.start}&end=${chunk.end}${outletParam}`,
-            'Sales API', chunkLabel, { onRetry }),
-          fetchChunkJson(`/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`,
-            'Detail API', chunkLabel, { onRetry }),
-        ]);
-        if (salesR.status === 'rejected') throw salesR.reason;
-        if (detailR.status === 'rejected') throw detailR.reason;
+        // ── ยิงบิลก่อน แล้วค่อยรายการ ไม่ยิงพร้อมกัน ──
+        //
+        // ฐานที่ร้านไม่มี index ตามวันที่ (Cpaid 3.4 แสนแถว · Ctrans 7.5 ล้านแถว —
+        // ดู docs/fix-slow-sales-index.sql) ทุกคำขอจึงเท่ากับสแกนทั้งตาราง บนเครื่อง
+        // 2 คอร์ RAM 4 GB ที่แคชได้ ~1.4 GB แต่ฐานใหญ่ 4.6 GB — ยิงสองคำขอพร้อมกัน
+        // คือปล่อยให้สแกนคู่ขนานสองชุดแย่งซีพียูและแคชกันเอง ทั้งคู่ช้าลงพร้อมกัน
+        // แล้วไปชนเพดาน 55 วิของฝั่ง Vercel พร้อมกัน = อาการ "ดึงแล้วมาบ้างไม่มาบ้าง"
+        //
+        // ยิงทีละตัวแล้วตอนฐานว่างจะรวมช้ากว่าเดิม แต่ตอนฐานหนัก (ซึ่งเป็นตอนที่พังจริง)
+        // แต่ละคำขอได้เครื่องทั้งเครื่อง และตัวที่สองมักได้แคชที่ตัวแรกเพิ่งอุ่นไว้
+        // หลักเดียวกับที่ fetchChunkJson หน่วงก่อนลองใหม่แทนที่จะยิงซ้ำทันที
+        //
+        // ⚠️ นี่เป็นแค่การลดอาการ ต้นเหตุคือ index ที่ยังไม่ได้สร้างที่เครื่องออฟฟิศ
+        //    (node scripts/fix-sales-index.mjs — ขั้น Ctrans ต้องทำตอนปิดร้าน)
+        //
+        // ไม่ต้องใช้ allSettled แล้ว เพราะมีคำขอเดียวลอยอยู่ ณ เวลาหนึ่ง พังเมื่อไหร่
+        // await โยนออกไปเอง ไม่มี promise ตัวอื่นค้างเป็น unhandled rejection
+        say('บิล');
+        const salesJson = await fetchChunkJson(
+          `/api/sales?start=${chunk.start}&end=${chunk.end}${outletParam}`,
+          'Sales API', chunkLabel, { onRetry });
 
-        allSales = allSales.concat(normalizeArray(salesR.value));
-        allDetails = allDetails.concat(normalizeArray(detailR.value));
+        say('รายการ');
+        const detailJson = await fetchChunkJson(
+          `/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`,
+          'Detail API', chunkLabel, { onRetry });
+
+        allSales = allSales.concat(normalizeArray(salesJson));
+        allDetails = allDetails.concat(normalizeArray(detailJson));
       }
 
       // รวมออเดอร์เพิ่มเติมจาก Google Sheet (โต๊ะ 800) ก่อนกรองช่วงวัน
       // ถ้าเลือกสาขาเดียว กรองออเดอร์เพิ่มเติมให้เหลือเฉพาะสาขานั้น (API คืนมาทุกสาขา)
+      //
+      // ⚠️ จับแถวของ POS แยกไว้ก่อนรวม — ตัวเตือนท้ายบล็อกนี้ต้องนับสองต้นทางแยกกัน
+      //    (ดู salesSourceNote) ไม่งั้นแถวจากชีทกลบอาการ "POS ไม่ส่งบิลมาเลย" จนไม่มีใครเห็น
+      //    concat คืน array ใหม่เสมอ posSales จึงถือแถวของ POS ล้วน ๆ ต่อไปได้
+      const posSales = allSales;
       const extra = await extraPromise;
       const extraSales = selectedOutlet
         ? (extra.sales || []).filter(r => String(r.outletID) === String(selectedOutlet))
@@ -980,10 +1026,12 @@ export default function App() {
         const d = dateFromRow(r);
         return d >= startDate && d <= endDate;
       };
-      const fetchedSales = allSales;   // ก่อนกรอง — ไว้เทียบว่าหายตอนกรองหรือไม่มีมาแต่แรก
+      // นับแยกก่อนกรองรวม — ไว้เทียบว่า "หายตอนกรอง" หรือ "ไม่มีมาแต่แรก" และของใครหาย
+      const posKept = posSales.filter(inOpenRange).length;
+      const sheetKept = extraSales.filter(inOpenRange).length;
       allSales = allSales.filter(inOpenRange);
       allDetails = allDetails.filter(inOpenRange);
-      setDataNote(noteForEmptyResult(fetchedSales, allSales.length, startDate, endDate));
+      setDataNote(salesSourceNote(posSales, posKept, sheetKept, startDate, endDate));
 
       setLoadProgress({
         current: chunks.length,
