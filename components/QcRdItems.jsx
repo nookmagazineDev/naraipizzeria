@@ -53,6 +53,11 @@ export default function QcRdItems() {
   const [posFilter, setPosFilter] = useState('');     // '' = ทุกรายการ, NO_POS, DUP_POS
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null); // { ok, msg }
+  // ข้อความผลการบันทึก/ลบ "ในกล่อง" — กล่องเป็น fixed inset-0 z-50 คลุมทั้งจอพร้อมฉากดำ
+  // แถบเตือนของหน้า (toast) จึงไปอยู่ข้างหลังกล่อง คนกดไม่เห็นเลยว่าบันทึกไม่ผ่านเพราะอะไร
+  // อาการที่เจอคือ "กดบันทึกแล้วเงียบ ไม่ไปไหน" ทั้งที่มีเหตุผลรออ่านอยู่
+  // (หน้าเมนู QC/RD ใช้ formMsg แบบนี้อยู่แล้ว — ดู components/QcRdMenu.jsx)
+  const [formMsg, setFormMsg] = useState(null); // { ok, msg }
   const [editItem, setEditItem] = useState(null); // { code, name, status, subs[] }
   const [savingItem, setSavingItem] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null); // { code, name, row }
@@ -213,43 +218,50 @@ export default function QcRdItems() {
     }
   };
 
-  const openEdit = (i) => setEditItem({
-    isNew: false,
-    // _row = เลขแถวจริงในชีท — ส่งไปกับตอนบันทึกด้วย ไม่งั้นรหัสที่ซ้ำกันจะถูกเขียนลงแถวแรกเสมอ
-    // (ผู้ใช้แก้แถวที่สอง กดบันทึกขึ้นว่าสำเร็จ แต่แถวที่แก้ไม่เปลี่ยน เพราะของไปลงแถวแรกแทน)
-    row: i._row,
-    code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])],
-    // หน่วยที่ระบบวิเคราะห์เองยังไม่ได้อยู่ในชีท — ใส่ให้เป็นค่าตั้งต้นในช่อง กดบันทึกแล้วจะลงชีทจริง
-    price: i.price ?? '', unit: i.unit || '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
-    // itemID/หน่วยเบิก — ตั้งต้นจากค่าที่อ่านมาเสมอ (โหมด SQL = ค่าจาก dbo.stock_item)
-    // ถ้าไม่เติมตรงนี้ กดบันทึกทีเดียวจะกลายเป็นส่งค่าว่างไปล้างของเดิมในฐานทิ้ง
-    posItemId: i.posItemId || '', requestUnit: i.requestUnit || '',
-    storeCategory: i.storeCategory || '', addingNewStore: false,
-    itemType: i.itemType === PACKAGING ? PACKAGING : MATERIAL, usedWhen: i.usedWhen || '',
-  });
+  const openEdit = (i) => {
+    setFormMsg(null);   // ข้อความจากการบันทึกครั้งก่อนต้องไม่ค้างมาที่กล่องใหม่
+    setEditItem({
+      isNew: false,
+      // _row = เลขแถวจริงในชีท — ส่งไปกับตอนบันทึกด้วย ไม่งั้นรหัสที่ซ้ำกันจะถูกเขียนลงแถวแรกเสมอ
+      // (ผู้ใช้แก้แถวที่สอง กดบันทึกขึ้นว่าสำเร็จ แต่แถวที่แก้ไม่เปลี่ยน เพราะของไปลงแถวแรกแทน)
+      row: i._row,
+      code: i.code, name: i.name, status: i.status || 'ใช้งาน', subs: [...(i.subs || [])],
+      // หน่วยที่ระบบวิเคราะห์เองยังไม่ได้อยู่ในชีท — ใส่ให้เป็นค่าตั้งต้นในช่อง กดบันทึกแล้วจะลงชีทจริง
+      price: i.price ?? '', unit: i.unit || '', converter: i.converter ?? '', branches: [...(i.usedBranches || [])],
+      // itemID/หน่วยเบิก — ตั้งต้นจากค่าที่อ่านมาเสมอ (โหมด SQL = ค่าจาก dbo.stock_item)
+      // ถ้าไม่เติมตรงนี้ กดบันทึกทีเดียวจะกลายเป็นส่งค่าว่างไปล้างของเดิมในฐานทิ้ง
+      posItemId: i.posItemId || '', requestUnit: i.requestUnit || '',
+      storeCategory: i.storeCategory || '', addingNewStore: false,
+      itemType: i.itemType === PACKAGING ? PACKAGING : MATERIAL, usedWhen: i.usedWhen || '',
+    });
+  };
 
-  const openNew = () => setEditItem({
-    isNew: true,
-    code: '', name: '', status: 'ใช้งาน', subs: [],
-    price: '', unit: '', converter: '', branches: [], posItemId: '', requestUnit: '',
-    storeCategory: '', addingNewStore: false,
-    itemType: MATERIAL, usedWhen: '',
-  });
+  const openNew = () => {
+    setFormMsg(null);   // ข้อความจากการบันทึกครั้งก่อนต้องไม่ค้างมาที่กล่องใหม่
+    setEditItem({
+      isNew: true,
+      code: '', name: '', status: 'ใช้งาน', subs: [],
+      price: '', unit: '', converter: '', branches: [], posItemId: '', requestUnit: '',
+      storeCategory: '', addingNewStore: false,
+      itemType: MATERIAL, usedWhen: '',
+    });
+  };
 
   const toggleBranch = (b) => setEditItem(m => ({
     ...m, branches: m.branches.includes(b) ? m.branches.filter(x => x !== b) : [...m.branches, b],
   }));
 
   const saveItem = async () => {
-    if (degraded) { setToast({ ok: false, msg: LOCK_HINT }); return; }
+    if (degraded) { setFormMsg({ ok: false, msg: LOCK_HINT }); return; }
     const code = String(editItem.code || '').trim();
-    if (editItem.isNew && !code) { setToast({ ok: false, msg: 'กรุณากรอกรหัสวัตถุดิบ' }); return; }
+    if (editItem.isNew && !code) { setFormMsg({ ok: false, msg: 'กรุณากรอกรหัสวัตถุดิบ' }); return; }
     if (editItem.isNew && items.some(i => String(i.code).trim() === code)) {
-      setToast({ ok: false, msg: `มีรหัส ${code} อยู่แล้วในรายการ` }); return;
+      setFormMsg({ ok: false, msg: `มีรหัส ${code} อยู่แล้วในรายการ — ถ้าจะแก้ตัวเดิม ให้ปิดกล่องนี้แล้วกด "แก้ไข" ที่แถวนั้นแทน` }); return;
     }
-    if (!editItem.name.trim()) { setToast({ ok: false, msg: 'กรุณากรอกชื่อวัตถุดิบ' }); return; }
+    if (!editItem.name.trim()) { setFormMsg({ ok: false, msg: 'กรุณากรอกชื่อวัตถุดิบ' }); return; }
     setSavingItem(true);
     setToast(null);
+    setFormMsg(null);
     try {
       const res = await apiCall(editItem.isNew ? 'addItem' : 'saveItem', {
         code, row: editItem.row, name: editItem.name.trim(),
@@ -267,9 +279,11 @@ export default function QcRdItems() {
         msg: (editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ`) + syncNote(res),
       });
       setEditItem(null);
+      setFormMsg(null);
       load({ quiet: true });
     } catch (err) {
-      setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
+      // กล่องยังเปิดค้างพร้อมข้อมูลที่กรอกไว้ — บอกสาเหตุตรงนี้เลย จะได้แก้แล้วกดใหม่ได้ทันที
+      setFormMsg({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
     } finally {
       setSavingItem(false);
     }
@@ -277,9 +291,10 @@ export default function QcRdItems() {
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
-    if (degraded) { setToast({ ok: false, msg: LOCK_HINT }); return; }
+    if (degraded) { setFormMsg({ ok: false, msg: LOCK_HINT }); return; }
     setDeleting(true);
     setToast(null);
+    setFormMsg(null);
     try {
       const res = await apiCall('deleteItem', { code: deleteTarget.code, row: deleteTarget.row });
       // ดันรายรายการเรียก deleteItem ฝั่ง SQL ด้วย ซึ่งลบแถวใน stock_item จริง การลบจึงตามขึ้นไป
@@ -289,9 +304,10 @@ export default function QcRdItems() {
         msg: `ลบ ${deleteTarget.code} สำเร็จ` + syncNote(res),
       });
       setDeleteTarget(null);
+      setFormMsg(null);
       load({ quiet: true });
     } catch (err) {
-      setToast({ ok: false, msg: err.message || 'ลบไม่สำเร็จ' });
+      setFormMsg({ ok: false, msg: err.message || 'ลบไม่สำเร็จ' });
     } finally {
       setDeleting(false);
     }
@@ -567,7 +583,7 @@ export default function QcRdItems() {
                         className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:text-slate-300 disabled:hover:bg-white">
                         <Pencil size={12} /> แก้ไข
                       </button>
-                      <button onClick={() => setDeleteTarget({ code: i.code, name: i.name, row: i._row })}
+                      <button onClick={() => { setFormMsg(null); setDeleteTarget({ code: i.code, name: i.name, row: i._row }); }}
                         disabled={degraded} title={degraded ? LOCK_HINT : 'ลบวัตถุดิบนี้'}
                         className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-500 bg-white border border-slate-200 rounded-lg hover:bg-rose-50 hover:border-rose-200 disabled:text-slate-300 disabled:hover:bg-white disabled:hover:border-slate-200">
                         <Trash2 size={12} />
@@ -803,14 +819,17 @@ export default function QcRdItems() {
               </div>
             </div>
 
-            <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-2">
-              <button onClick={() => setEditItem(null)} disabled={savingItem}
-                className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
-              <button onClick={saveItem} disabled={savingItem || degraded} title={degraded ? LOCK_HINT : ''}
-                className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
-                {savingItem ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />}
-                {savingItem ? 'กำลังบันทึก…' : (editItem.isNew ? 'เพิ่มวัตถุดิบ' : 'บันทึก')}
-              </button>
+            <div className="p-5 border-t border-slate-100 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setEditItem(null)} disabled={savingItem}
+                  className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
+                <button onClick={saveItem} disabled={savingItem || degraded} title={degraded ? LOCK_HINT : ''}
+                  className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+                  {savingItem ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />}
+                  {savingItem ? 'กำลังบันทึก…' : (editItem.isNew ? 'เพิ่มวัตถุดิบ' : 'บันทึก')}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -832,18 +851,32 @@ export default function QcRdItems() {
                 </p>
               </div>
             </div>
-            <div className="p-4 border-t border-slate-100 flex items-center justify-end gap-2">
-              <button onClick={() => setDeleteTarget(null)} disabled={deleting}
-                className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
-              <button onClick={confirmDelete} disabled={deleting || degraded} title={degraded ? LOCK_HINT : ''}
-                className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-rose-500 hover:bg-rose-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
-                {deleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
-                {deleting ? 'กำลังลบ…' : 'ลบเลย'}
-              </button>
+            <div className="p-4 border-t border-slate-100 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setDeleteTarget(null)} disabled={deleting}
+                  className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
+                <button onClick={confirmDelete} disabled={deleting || degraded} title={degraded ? LOCK_HINT : ''}
+                  className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-rose-500 hover:bg-rose-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+                  {deleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                  {deleting ? 'กำลังลบ…' : 'ลบเลย'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ข้อความผลการบันทึก/ลบ ที่อยู่ "ในกล่อง" — ข้อความจากเซิร์ฟเวอร์ยาวได้ (เช่น สาเหตุที่ต่อ SQL ไม่ติด)
+// จึงให้ขึ้นบรรทัดได้และจำกัดความสูงไว้ ไม่ให้ดันปุ่มตกจอ
+function FormMsg({ ok, msg }) {
+  return (
+    <div className={`flex items-start gap-1.5 text-xs font-semibold max-h-28 overflow-auto ${ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+      {ok ? <CheckCircle size={13} className="flex-shrink-0 mt-0.5" /> : <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />}
+      <span className="break-words whitespace-pre-wrap">{msg}</span>
     </div>
   );
 }
