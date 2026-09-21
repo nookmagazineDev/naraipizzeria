@@ -958,32 +958,49 @@ export default function App() {
 
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
-        setLoadProgress({
+        const chunkLabel = `${chunk.start} ถึง ${chunk.end}`;
+        // บอกบนแถบความคืบหน้าว่ากำลังดึงอะไรอยู่ — ยิงทีละตัวแล้วแต่ละก้อนใช้เวลานานขึ้น
+        // ถ้าไม่บอกว่าถึงไหนแล้ว คนดูจะนึกว่าค้าง
+        const say = (what) => setLoadProgress({
           current: i,
           total: chunks.length,
-          text: `กำลังดึงข้อมูลช่วง ${chunk.start} ถึง ${chunk.end} (ชุดที่ ${i + 1}/${chunks.length})`
+          text: `กำลังดึง${what}ช่วง ${chunk.start} ถึง ${chunk.end} (ชุดที่ ${i + 1}/${chunks.length})`
         });
-
-        const chunkLabel = `${chunk.start} ถึง ${chunk.end}`;
         // บอกบนแถบความคืบหน้าว่ากำลังลองใหม่อยู่ ไม่ใช่ค้าง (รอบหนึ่งรอได้ถึง 55 วิ)
         const onRetry = ({ attempt, total, chunkLabel: c }) => setLoadProgress(p => ({
           current: i, total: chunks.length, ...p,
           text: `ช่วง ${c} ตอบไม่ทัน กำลังลองใหม่ (ครั้งที่ ${attempt}/${total})...`,
         }));
 
-        // ยิงบิลกับรายการพร้อมกัน แต่ละตัวลองใหม่เองได้ — ใช้ allSettled เพื่อให้อีกตัว
-        // ที่ยังลองอยู่จบงานของมันก่อน ไม่ทิ้งเป็น unhandled rejection ค้างไว้
-        const [salesR, detailR] = await Promise.allSettled([
-          fetchChunkJson(`/api/sales?start=${chunk.start}&end=${chunk.end}${outletParam}`,
-            'Sales API', chunkLabel, { onRetry }),
-          fetchChunkJson(`/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`,
-            'Detail API', chunkLabel, { onRetry }),
-        ]);
-        if (salesR.status === 'rejected') throw salesR.reason;
-        if (detailR.status === 'rejected') throw detailR.reason;
+        // ── ยิงบิลก่อน แล้วค่อยรายการ ไม่ยิงพร้อมกัน ──
+        //
+        // ฐานที่ร้านไม่มี index ตามวันที่ (Cpaid 3.4 แสนแถว · Ctrans 7.5 ล้านแถว —
+        // ดู docs/fix-slow-sales-index.sql) ทุกคำขอจึงเท่ากับสแกนทั้งตาราง บนเครื่อง
+        // 2 คอร์ RAM 4 GB ที่แคชได้ ~1.4 GB แต่ฐานใหญ่ 4.6 GB — ยิงสองคำขอพร้อมกัน
+        // คือปล่อยให้สแกนคู่ขนานสองชุดแย่งซีพียูและแคชกันเอง ทั้งคู่ช้าลงพร้อมกัน
+        // แล้วไปชนเพดาน 55 วิของฝั่ง Vercel พร้อมกัน = อาการ "ดึงแล้วมาบ้างไม่มาบ้าง"
+        //
+        // ยิงทีละตัวแล้วตอนฐานว่างจะรวมช้ากว่าเดิม แต่ตอนฐานหนัก (ซึ่งเป็นตอนที่พังจริง)
+        // แต่ละคำขอได้เครื่องทั้งเครื่อง และตัวที่สองมักได้แคชที่ตัวแรกเพิ่งอุ่นไว้
+        // หลักเดียวกับที่ fetchChunkJson หน่วงก่อนลองใหม่แทนที่จะยิงซ้ำทันที
+        //
+        // ⚠️ นี่เป็นแค่การลดอาการ ต้นเหตุคือ index ที่ยังไม่ได้สร้างที่เครื่องออฟฟิศ
+        //    (node scripts/fix-sales-index.mjs — ขั้น Ctrans ต้องทำตอนปิดร้าน)
+        //
+        // ไม่ต้องใช้ allSettled แล้ว เพราะมีคำขอเดียวลอยอยู่ ณ เวลาหนึ่ง พังเมื่อไหร่
+        // await โยนออกไปเอง ไม่มี promise ตัวอื่นค้างเป็น unhandled rejection
+        say('บิล');
+        const salesJson = await fetchChunkJson(
+          `/api/sales?start=${chunk.start}&end=${chunk.end}${outletParam}`,
+          'Sales API', chunkLabel, { onRetry });
 
-        allSales = allSales.concat(normalizeArray(salesR.value));
-        allDetails = allDetails.concat(normalizeArray(detailR.value));
+        say('รายการ');
+        const detailJson = await fetchChunkJson(
+          `/api/detail?start=${chunk.start}&end=${chunk.end}${outletParam}`,
+          'Detail API', chunkLabel, { onRetry });
+
+        allSales = allSales.concat(normalizeArray(salesJson));
+        allDetails = allDetails.concat(normalizeArray(detailJson));
       }
 
       // รวมออเดอร์เพิ่มเติมจาก Google Sheet (โต๊ะ 800) ก่อนกรองช่วงวัน
