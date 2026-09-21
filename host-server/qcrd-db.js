@@ -256,8 +256,14 @@ function mountQcrd(app) {
   const read = (name) => (req, res) => send(res, getCore().then(c => c[name]()), name);
   app.get('/qcrd/menu', read('readMenus'));
   app.get('/qcrd/bom', read('readBom'));
-  app.get('/qcrd/item', read('readItems'));
   app.get('/qcrd/menugroup', read('readMenuGroups'));
+
+  // ?code=รหัส1,รหัส2 = เอาเฉพาะวัตถุดิบที่ระบุ (ไม่ส่ง = ทั้งทะเบียน)
+  // หน้าเว็บใช้ตอนตรวจว่าที่เพิ่งบันทึกเข้าจริงไหม — ไม่ต้องลากทะเบียน 2,657 รายการกลับไปทุกครั้ง
+  app.get('/qcrd/item', (req, res) => {
+    const codes = str(req.query.code).split(',').map(str).filter(Boolean);
+    return send(res, getCore().then(c => c.readItems(codes.length ? codes : null)), 'item');
+  });
 
   // ── สูตรฝั่ง POS (RcpDtls) — ตาราง rcp_recipe / rcp_line ในฐานเดียวกัน ──
   //    หน้า QC/RD > เมนู เอาไปเติมให้เมนูที่ยังไม่มีสูตรในแท็บ BOM ของชีทต้นทุนเมนู

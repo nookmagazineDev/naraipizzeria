@@ -120,11 +120,7 @@ export default function QcRdItems() {
   // s-maxage=30 + stale-while-revalidate=120 — เปิดหน้านี้ใหม่/กด F5 หลังเพิ่งบันทึก
   // จึงมีสิทธิ์ได้ของก่อนบันทึกกลับมาเป็นนาที ๆ ซึ่งดูเหมือน "บันทึกแล้วข้อมูลไม่เปลี่ยน"
   // หน้านี้เป็นหน้าแก้ไข ต้องเห็นของจริงเสมอ ยอมเสียเวลาโหลดชีทใหม่ทุกรอบ
-  //
-  // expect = { code, branches } ที่เพิ่งบันทึกไป — โหลดเสร็จแล้วเทียบกับของที่อ่านกลับมา
-  // ไม่ตรง = เขียนไม่เข้าจริง (หรืออ่านมาคนละที่กับที่เขียน) ต้องบอก ไม่ใช่ปล่อยให้ค่าเก่า
-  // เด้งกลับมาทับเงียบ ๆ แล้วคนใช้มานั่งงงว่าทำไมกดบันทึกแล้วไม่อัพเดท
-  const load = ({ quiet = false, expect = null } = {}) => {
+  const load = ({ quiet = false } = {}) => {
     if (!quiet) setLoading(true);
     fetch(`/api/qcrd?sheet=item&t=${Date.now()}`)
       .then(r => r.json())
@@ -138,21 +134,6 @@ export default function QcRdItems() {
           // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ต้องบอก ไม่งั้นแก้ไปแล้วเห็นข้อมูลเก่าจะงง
           // (ตั้งเฉพาะตอนมี warning จริง ไม่งั้นจะไปลบข้อความ "บันทึกสำเร็จ" ที่เพิ่งขึ้นมา)
           if (res.warning) setToast({ ok: false, msg: res.warning });
-          if (expect) {
-            const row = data.find(i => String(i.code).trim() === expect.code);
-            const got = row?.usedBranches || [];
-            if (!row) {
-              setToast({ ok: false, msg: `บันทึก ${expect.code} ขึ้นว่าสำเร็จ แต่อ่านกลับมาไม่เจอรหัสนี้ในทะเบียน — ข้อมูลอาจไม่ได้เข้าจริง` });
-            } else if (!sameBranches(got, expect.branches)) {
-              setToast({
-                ok: false,
-                msg: `บันทึก ${expect.code} ขึ้นว่าสำเร็จ แต่สาขาที่อ่านกลับมาเป็น `
-                  + `"${got.join(', ') || '(ไม่มี)'}" ไม่ใช่ "${expect.branches.join(', ') || '(ไม่มี)'}" `
-                  + '— ตอนนี้ตารางแสดงตามที่อ่านกลับมา ลองกดรีเฟรชอีกครั้ง '
-                  + 'ถ้ายังไม่ตรงแปลว่าที่เขียนกับที่อ่านไม่ใช่ที่เดียวกัน',
-              });
-            }
-          }
         }
         else setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
       })
@@ -160,6 +141,40 @@ export default function QcRdItems() {
       .finally(() => { if (!quiet) setLoading(false); });
   };
   useEffect(() => { load(); }, []);
+
+  /**
+   * ตรวจหลังบันทึกว่าของที่อ่านจากต้นทางตรงกับที่เพิ่งเขียนไหม — ขอมาแค่รหัสเดียว
+   *
+   * เดิมตรงนี้โหลดทะเบียนใหม่ทั้งชุดเพื่อดูแถวเดียว: JSON 1.17 MB (2,657 รายการ) + ให้ SQL
+   * สแกน stock_item ทั้งตารางกับ stock_item_branch อีกสองหมื่นกว่าแถว ทุกครั้งที่กดบันทึก
+   * ขอเฉพาะรหัสนั้น (?code=) เหลือไม่ถึง 1 KB และฐานอ่านแถวเดียว
+   *
+   * ไม่ตรง = เขียนไม่เข้าจริง (หรืออ่านมาคนละที่กับที่เขียน) ต้องบอก ไม่ใช่ปล่อยให้ค่าเก่า
+   * เด้งกลับมาทับเงียบ ๆ แล้วคนใช้มานั่งงงว่าทำไมกดบันทึกแล้วไม่อัพเดท
+   */
+  const verifySaved = (code, branches) =>
+    fetch(`/api/qcrd?sheet=item&code=${encodeURIComponent(code)}&t=${Date.now()}`)
+      .then(r => r.json())
+      .then(res => {
+        if (res.status !== 'success') return;
+        const row = (res.data || []).find(i => String(i.code).trim() === code);
+        if (!row) {
+          setToast({ ok: false, msg: `บันทึก ${code} ขึ้นว่าสำเร็จ แต่อ่านกลับมาไม่เจอรหัสนี้ในทะเบียน — ข้อมูลอาจไม่ได้เข้าจริง` });
+          return;
+        }
+        // ของจริงจากต้นทางมาแล้ว เอาทับแถวที่แปะไว้ตอนกดบันทึก (ปกติเหมือนกันเป๊ะ)
+        setItems(prev => prev.map(i => (String(i.code).trim() === code ? { ...i, ...row } : i)));
+        if (!sameBranches(row.usedBranches || [], branches)) {
+          setToast({
+            ok: false,
+            msg: `บันทึก ${code} ขึ้นว่าสำเร็จ แต่สาขาที่อ่านกลับมาเป็น `
+              + `"${(row.usedBranches || []).join(', ') || '(ไม่มี)'}" ไม่ใช่ "${branches.join(', ') || '(ไม่มี)'}" `
+              + '— ตอนนี้ตารางแสดงตามที่อ่านกลับมา ลองกดรีเฟรชอีกครั้ง '
+              + 'ถ้ายังไม่ตรงแปลว่าที่เขียนกับที่อ่านไม่ใช่ที่เดียวกัน',
+          });
+        }
+      })
+      .catch(() => { /* ตรวจไม่ได้ไม่ใช่เหตุให้การบันทึกที่สำเร็จไปแล้วกลายเป็นล้มเหลว */ });
 
   const nameMap = useMemo(() => {
     const m = {};
@@ -375,8 +390,8 @@ export default function QcRdItems() {
       });
       setEditItem(null);
       setFormMsg(null);
-      // โหลดใหม่เบื้องหลังเพื่อยืนยันอีกชั้นว่าที่อ่านจากต้นทางตรงกับที่เพิ่งเขียนจริง
-      load({ quiet: true, expect: { code, branches: savedBranches } });
+      // ยืนยันอีกชั้นเบื้องหลังว่าที่อ่านจากต้นทางตรงกับที่เพิ่งเขียนจริง (ขอแค่รหัสเดียว)
+      verifySaved(code, savedBranches);
     } catch (err) {
       // กล่องยังเปิดค้างพร้อมข้อมูลที่กรอกไว้ — บอกสาเหตุตรงนี้เลย จะได้แก้แล้วกดใหม่ได้ทันที
       setFormMsg({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
@@ -401,7 +416,8 @@ export default function QcRdItems() {
       });
       setDeleteTarget(null);
       setFormMsg(null);
-      load({ quiet: true });
+      // ถอดแถวออกจากตารางเลย — ไม่ต้องลากทะเบียนทั้งชุดกลับมาเพื่อให้แถวเดียวหายไป
+      setItems(prev => prev.filter(i => String(i.code).trim() !== String(deleteTarget.code).trim()));
     } catch (err) {
       setFormMsg({ ok: false, msg: err.message || 'ลบไม่สำเร็จ' });
     } finally {

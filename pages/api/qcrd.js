@@ -105,12 +105,16 @@ function withInferredUnit(items) {
   });
 }
 
+/** รหัสวัตถุดิบจาก ?code=a,b — กติกา normalize เดียวกับ lib/qcrdSql.mjs (ตัด 0 นำหน้า + พิมพ์เล็ก) */
+const normCode = (v) => String(v ?? '').trim().replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
+const codesFromQuery = (v) => String(v ?? '').split(',').map(c => c.trim()).filter(Boolean);
+
 /** อ่านจาก SQL — คืนรูปแบบเดียวกับฝั่งชีททุกช่อง หน้าเว็บจึงไม่ต้องรู้ว่าข้อมูลมาจากไหน */
-async function readFromSql(sheet) {
+async function readFromSql(sheet, codes = null) {
   if (sheet === 'menu') return fetchQcrdSql('menu');
   if (sheet === 'bom') return fetchQcrdSql('bom');
   if (sheet === 'menugroup') return fetchQcrdSql('menugroup');
-  if (sheet === 'item') return withInferredUnit(await fetchQcrdSql('item'));
+  if (sheet === 'item') return withInferredUnit(await fetchQcrdSql('item', { codes }));
   return null;
 }
 
@@ -122,6 +126,10 @@ const CACHE_OK = 'public, s-maxage=30, stale-while-revalidate=120';
 
 export default async function handler(req, res) {
   const { sheet } = req.query;
+  // ?code=รหัส1,รหัส2 (เฉพาะ sheet=item) = เอาเฉพาะรายการที่ระบุ
+  // หน้าวัตถุดิบใช้ตอนตรวจว่าที่เพิ่งบันทึกเข้าจริงไหม — ทะเบียนทั้งชุดเป็น JSON 1.17 MB
+  // ลากกลับมาทุกครั้งที่กดบันทึกเพื่อดูแถวเดียวคือเสียเวลาเปล่า
+  const codes = codesFromQuery(req.query.code);
   // แคชเฉพาะตอนได้ข้อมูลจริง จะได้ไม่ค้าง error ไว้ให้คนถัดไป (ตั้งเป็น no-store ไว้ก่อน)
   res.setHeader('Cache-Control', 'no-store');
 
@@ -134,7 +142,7 @@ export default async function handler(req, res) {
   let degraded = false;
   if (usingSql() && ['menu', 'bom', 'item', 'menugroup'].includes(sheet)) {
     try {
-      const data = await readFromSql(sheet);
+      const data = await readFromSql(sheet, codes.length ? codes : null);
       res.setHeader('Cache-Control', CACHE_OK);
       return res.status(200).json({ status: 'success', source: 'sql', via: sqlRoute(), data });
     } catch (err) {
@@ -241,8 +249,12 @@ export default async function handler(req, res) {
             _row: row,
           };
         });
+      const only = codes.length ? new Set(codes.map(normCode)) : null;
       res.setHeader('Cache-Control', CACHE_OK);
-      return res.status(200).json({ status: 'success', source: 'sheet', warning, degraded, data });
+      return res.status(200).json({
+        status: 'success', source: 'sheet', warning, degraded,
+        data: only ? data.filter(i => only.has(normCode(i.code))) : data,
+      });
     }
 
     if (sheet === 'menugroup') {

@@ -126,6 +126,23 @@ console.log('\nวัตถุดิบ (หน้า QC/RD > ไอเทม)')
   check('saveItem → อ่านทะเบียนใหม่แล้วได้สาขาชุดที่เพิ่งบันทึก',
     JSON.stringify([...back].sort()) === JSON.stringify(want), `ได้ ${JSON.stringify(back)}`);
   check('saveItem → สาขาที่ถอดออกหายไปจริง', !back.includes('HPS'));
+
+  // อ่านกลับเฉพาะรหัสเดียว (?code=) — ตัวที่ทำให้การตรวจหลังบันทึกไม่ต้องลากทะเบียน 1.17 MB กลับมา
+  const sqlLog = [];
+  const spy = async (text, params) => { sqlLog.push(String(text).replace(/\s+/g, ' ').trim()); return q(text, params); };
+  const spied = createQcrd({ q: spy, withTx: (fn) => fn({ tx: true }) });
+  const one = await spied.readItems(['011000265']);   // มี 0 นำหน้า ต้อง normalize ให้ตรง item_key
+  check('readItems(codes) → คืนเฉพาะรหัสที่ขอ', one.length === 1 && one[0].code === '11000265');
+  check('readItems(codes) → กรองด้วย IN (...) แบบผูกพารามิเตอร์',
+    sqlLog.every(t => !t.includes('WHERE item_key IN (11')) && sqlLog.some(t => /WHERE item_key IN \(@k0\)/.test(t)));
+  check('readItems(codes) → ตารางสาขาก็ถูกกรองด้วย ไม่ได้ลากมาทั้งตาราง',
+    sqlLog.some(t => /stock_item_branch WHERE item_key IN/.test(t)));
+  sqlLog.length = 0;
+  await spied.readItems();
+  check('readItems() → ไม่ส่งรหัส = ทั้งทะเบียน (ไม่มี WHERE)',
+    sqlLog.every(t => !/WHERE item_key IN/.test(t)));
+  sqlLog.length = 0;
+  check('readItems([]) → ไม่ยิงคำสั่งเลย', (await spied.readItems([])).length === 0 && sqlLog.length === 0);
 }
 
 {
