@@ -213,7 +213,9 @@ export default async function handler(req, res) {
         });
       });
       res.setHeader('Cache-Control', CACHE_OK);
-      return res.status(200).json({ status: 'success', data: map });
+      // คืน source/warning/degraded เหมือนชุดอื่น — หน้าเมนูดูธงนี้จากชุดที่โหลดมาเพื่อตัดสินใจล็อก
+      // การแก้ไข ถ้าชุดนี้ไม่มีธงติดมา การโหลดเฉพาะ bom จะกลายเป็น "ไม่ degraded" ทั้งที่ SQL ยังล่ม
+      return res.status(200).json({ status: 'success', source: 'sheet', warning, degraded, data: map });
     }
 
     if (sheet === 'item') {

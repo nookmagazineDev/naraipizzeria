@@ -71,11 +71,17 @@ export default function QcRdMenu() {
   //
   // ตอนเปิดหน้าต้องโหลดครบทุกชุดอยู่แล้ว แต่หลังกดบันทึกไม่ต้อง — ดู handleSave
   // การลากสูตรทุกบรรทัดของพันกว่าเมนูกลับมาใหม่เพื่อแก้ตัวเลขไม่กี่ช่องคือเหตุผลเดียว
-  // ที่ตารางอัปเดตช้าเป็นหลายวินาที (แถม ?t= กัน CDN ทำให้เป็น cache MISS ทุกครั้ง)
+  // ที่ตารางอัปเดตช้าเป็นหลายวินาที
+  //
+  // ต่อ ?t= ทุกครั้ง ไม่ใช่เฉพาะตอนโหลดหลังบันทึก — /api/qcrd ตั้งแคชไว้ที่ CDN
+  // s-maxage=30 + stale-while-revalidate=120 เปิดหน้านี้ใหม่/กด F5 หลังเพิ่งบันทึก
+  // จึงมีสิทธิ์ได้ของก่อนบันทึกกลับมาได้ถึงสองนาทีครึ่ง = อาการ "บันทึกแล้วข้อมูลไม่เปลี่ยน"
+  // และปุ่ม "ลองใหม่" ของแถบเตือนก็จะได้คำตอบเดิมที่แคชไว้กลับมา เหมือนกดแล้วไม่มีอะไรเกิดขึ้น
+  // หน้านี้เป็นหน้าแก้ไข ต้องเห็นของจริงเสมอ — กติกาเดียวกับหน้าวัตถุดิบ (components/QcRdItems.jsx)
   const loadAll = ({ quiet = false, only = null } = {}) => {
     if (!quiet) setLoading(true);
     const want = (name) => !only || only.includes(name);
-    const bust = quiet ? `&t=${Date.now()}` : '';
+    const bust = `&t=${Date.now()}`;
     const get = (name, url) => (want(name)
       ? fetch(url).then(r => r.json()).catch(err => ({ status: 'error', message: err.message }))
       : Promise.resolve(null));
@@ -87,7 +93,7 @@ export default function QcRdMenu() {
       get('menugroup', `/api/qcrd?sheet=menugroup${bust}`),
       // ดัชนีสูตรฝั่ง POS — ล้มก็ไม่เป็นไร หน้าเมนูต้องใช้งานต่อได้จากข้อมูลหลักตามเดิม
       want('rcp')
-        ? fetch(`/api/rcp${bust ? `?t=${Date.now()}` : ''}`).then(r => r.json()).catch(() => ({}))
+        ? fetch(`/api/rcp?t=${Date.now()}`).then(r => r.json()).catch(() => ({}))
         : Promise.resolve(null),
     ]).then(([m, b, it, g, rc]) => {
       const loaded = [m, b, it, g].filter(Boolean);
@@ -1001,10 +1007,13 @@ export default function QcRdMenu() {
       )}
 
       {/* ───── Modal จัดการหมวดหมู่ ───── */}
+      {/* เปลี่ยนชื่อ/เพิ่มหมวด กระทบแค่รายชื่อหมวดกับชื่อหมวดที่โชว์ในตารางเมนู
+          onSaved จึงโหลดคืนแค่สองชุดนั้น ไม่ต้องลากสูตรทุกบรรทัดของพันกว่าเมนู
+          กับทะเบียนวัตถุดิบกลับมาด้วย */}
       {groupModal && (
         <GroupManager groups={groupList} menus={menus}
           onClose={() => setGroupModal(false)}
-          onSaved={() => loadAll({ quiet: true })} />
+          onSaved={() => loadAll({ quiet: true, only: ['menugroup', 'menu'] })} />
       )}
     </div>
   );
