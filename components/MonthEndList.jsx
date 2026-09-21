@@ -3,6 +3,8 @@ import { Calendar, Search, Loader2, AlertCircle, AlertTriangle, Download, Refres
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style';
 import { useBranches } from '../lib/useBranches';
+// ชื่อเดือน/วันที่ไทยของกลาง — หน้ารายงานใช้ต่อหัวอ่านชุดเดียวกัน ตัวย่อจะได้ไม่เพี้ยนกันคนละหน้า
+import { monthLabel, dateLabel } from '../lib/thaiDate';
 
 /*
  * NARAI OFFICE — STOCK → ดูข้อมูลปิดรอบเดือน
@@ -38,23 +40,6 @@ const ITEM_CODE_DIGITS = 8;
 const padItemCode = (code) => {
   const s = String(code ?? '').trim();
   return /^\d+$/.test(s) && s.length < ITEM_CODE_DIGITS ? s.padStart(ITEM_CODE_DIGITS, '0') : s;
-};
-
-const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
-  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
-
-/** 'YYYY-MM' -> 'สิงหาคม 2569' (ปี พ.ศ. ตามที่ใช้กันในออฟฟิศ) */
-const monthLabel = (m) => {
-  const mt = String(m || '').match(/^(\d{4})-(\d{2})/);
-  return mt ? `${TH_MONTHS[Number(mt[2]) - 1] || mt[2]} ${Number(mt[1]) + 543}` : String(m || '');
-};
-
-/** 'YYYY-MM-DD' -> '31 ส.ค. 69' */
-const dateLabel = (d) => {
-  const mt = String(d || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!mt) return String(d || '-');
-  const shortMonth = (TH_MONTHS[Number(mt[2]) - 1] || '').slice(0, 3);
-  return `${Number(mt[3])} ${shortMonth}. ${String(Number(mt[1]) + 543).slice(-2)}`;
 };
 
 const SORTS = {
