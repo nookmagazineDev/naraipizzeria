@@ -176,8 +176,23 @@ export default function QcRdItems() {
   // ติ๊กครบทุกสาขาแล้วหรือยัง — ต้องมีสาขาในทะเบียนอย่างน้อยหนึ่งตัวถึงจะนับว่า "ครบ"
   // (ช่วงที่ทะเบียนยังโหลดไม่เสร็จ รายการว่าง ถ้าไม่กันไว้ปุ่มจะขึ้นเป็นเลือกครบทั้งที่ยังไม่ได้เลือก)
   // เทียบด้วย every() ไม่ใช่ความยาว เพราะไอเทมเก่าอาจติ๊กสาขาที่ถูกปิดการใช้งานไปแล้วค้างไว้
-  // (สาขานั้นไม่โผล่เป็นปุ่มให้เห็นแล้ว แต่ค่ายังอยู่ในชีทและถูกบันทึกกลับไปเหมือนเดิม)
+  // (สาขาพวกนั้นมีปุ่มของตัวเองต่อท้ายอยู่แล้ว ดู retiredOn ข้างล่าง — ไม่นับรวมใน "ครบทุกสาขา")
   const allBranchesOn = BRANCHES.length > 0 && BRANCHES.every(b => editItem?.branches?.includes(b));
+
+  // สาขาที่ไอเทมนี้ติ๊กไว้ แต่ไม่อยู่ในทะเบียนที่ยังเปิดใช้งาน (สาขาปิดกิจการ เช่น HPS ก.ย. 2026
+  // หรือถูกลบออกจากทะเบียนไปแล้ว) — ต้องมีปุ่มให้กดด้วย ไม่งั้น "เอาสาขาออก" ทำไม่ได้เลย:
+  // ปุ่มมีแต่สาขาที่เปิดอยู่ ค่าของสาขาที่ปิดแล้วจึงถูกส่งกลับไปเขียนทับเหมือนเดิมทุกครั้ง
+  // คนใช้เห็นเป็น "แก้สาขาแล้วกดบันทึก ขึ้นว่าสำเร็จ แต่ชิปในตารางไม่เปลี่ยน"
+  // (ตัวกรองด้านบนรับมือกรณีนี้อยู่แล้ว — ดู branchOptions)
+  // กัน BRANCHES.length === 0 (ทะเบียนยังโหลดไม่เสร็จ) ไม่งั้นสาขาของไอเทมจะถูกป้ายว่า "ปิดแล้ว" ยกแผง
+  const retiredOn = BRANCHES.length === 0 ? []
+    : (editItem?.branches || []).filter(b => !BRANCHES.includes(b)).sort();
+
+  // ปุ่มสาขาในฟอร์ม: ทะเบียนที่เปิดอยู่ก่อน แล้วต่อด้วยสาขาที่ปิดแล้วซึ่งยังติ๊กค้างอยู่
+  const branchButtons = [
+    ...BRANCHES.map(code => ({ code, retired: false })),
+    ...retiredOn.map(code => ({ code, retired: true })),
+  ];
 
   // ดันทะเบียนวัตถุดิบทั้งชีทขึ้น dbo.stock_item / stock_item_branch เอง
   // ปกติ /api/qcrd-save ดันให้อัตโนมัติหลังบันทึกอยู่แล้ว ปุ่มนี้ไว้ใช้ตอนรอบนั้นดันไม่ขึ้น
@@ -762,24 +777,39 @@ export default function QcRdItems() {
                       รายการจะว่าง แล้ว 0 === 0 จะทำให้ปุ่มขึ้นเป็น "เลือกครบแล้ว" ทั้งที่ยังไม่ได้เลือกอะไร */}
                   <button
                     disabled={BRANCHES.length === 0}
-                    onClick={() => setEditItem(m => ({ ...m, branches: allBranchesOn ? [] : [...BRANCHES] }))}
+                    onClick={() => setEditItem(m => ({
+                      ...m,
+                      // เลือกครบ = ทะเบียนที่เปิดอยู่ + คงสาขาที่ปิดแล้วซึ่งติ๊กไว้ก่อนหน้า
+                      // (จะเอาออกให้กดปุ่มสาขานั้นตรง ๆ ไม่ใช่ให้หายไปเองตอนกดปุ่มนี้)
+                      branches: allBranchesOn ? [] : [...BRANCHES, ...m.branches.filter(b => !BRANCHES.includes(b))],
+                    }))}
                     className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all disabled:opacity-40 ${allBranchesOn
                       ? 'bg-emerald-600 border-emerald-600 text-white'
                       : 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'}`}>
                     ✓ ทุกสาขา
                   </button>
-                  {BRANCHES.map(b => {
+                  {branchButtons.map(({ code: b, retired }) => {
                     const on = editItem.branches.includes(b);
                     return (
                       <button key={b} onClick={() => toggleBranch(b)}
+                        title={retired ? `${b} ไม่อยู่ในทะเบียนสาขาที่เปิดใช้งานแล้ว — กดเพื่อเอาออกจากไอเทมนี้` : b}
                         className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${on
-                          ? 'bg-emerald-500 border-emerald-500 text-white'
+                          ? (retired
+                            ? 'bg-amber-500 border-amber-500 text-white'
+                            : 'bg-emerald-500 border-emerald-500 text-white')
                           : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-                        {b}
+                        {b}{retired && <span className="ml-1 text-[9px] font-normal opacity-80">ปิดแล้ว</span>}
                       </button>
                     );
                   })}
                 </div>
+                {retiredOn.length > 0 && (
+                  <p className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                    <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
+                    <span>ไอเทมนี้ยังติ๊กสาขาที่ไม่อยู่ในทะเบียนที่เปิดใช้งานแล้ว {retiredOn.length} สาขา
+                      ({retiredOn.join(', ')}) — กดปุ่มสีส้มเพื่อเอาออก แล้วกดบันทึก</span>
+                  </p>
+                )}
               </div>
 
               <div>
