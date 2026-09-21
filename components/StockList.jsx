@@ -87,7 +87,8 @@ export default function StockList() {
     };
   });
 
-  const loadData = async (branch) => {
+  // fresh = โหลดหลังกดบันทึก ต้องข้ามแคช CDN ไม่งั้นได้ภาพก่อนบันทึกกลับมา (ดู lib/stockApi.js)
+  const loadData = async (branch, { fresh = false } = {}) => {
     if (!branch) return;
     branchRef.current = branch;
 
@@ -99,7 +100,7 @@ export default function StockList() {
 
     // ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ จากชีท "ปิดรอบสิ้นเดือน"
     // ยิงคู่ไปกับรายการสินค้า แต่ไม่รอ — ตารางขึ้นก่อน แล้วค่อยเติมยอดยกมาเมื่อมาถึง
-    fetch(`/api/stock-closing?branch=${encodeURIComponent(branch)}`)
+    fetch(`/api/stock-closing?branch=${encodeURIComponent(branch)}${fresh ? `&t=${Date.now()}` : ''}`)
       .then(r => r.json())
       .catch(() => ({ status: 'error', message: 'เชื่อมต่อไม่สำเร็จ' }))
       .then(closingRes => {
@@ -122,7 +123,7 @@ export default function StockList() {
       });
 
     try {
-      const itemsRes = await apiRead('getStockItems', { branch });
+      const itemsRes = await apiRead('getStockItems', { branch }, { fresh });
       if (branch !== branchRef.current) return;   // เปลี่ยนสาขาไปแล้ว ทิ้งผลเก่า
       // อ่านยอดนับจากฐานไม่ได้แล้วถอยไปชีทเก่า — ต้องบอก ไม่งั้นคนอ่านเลขเดือนที่แล้วโดยไม่รู้ตัว
       if (itemsRes.warning) toast.error(itemsRes.warning, { duration: 8000 });
@@ -353,7 +354,7 @@ export default function StockList() {
         setRequestDate('');
         setRequesterName('');
         setCounterName('');
-        loadData(effectiveBranch);
+        loadData(effectiveBranch, { fresh: true });
 
       } else {
         toast.error(res.message || 'เกิดข้อผิดพลาดในการบันทึกข้อมูล');
@@ -378,7 +379,7 @@ export default function StockList() {
         });
         if (res.status === 'success') {
           toast.success(res.message || 'อัปเดตหมวดจัดเก็บเรียบร้อยแล้ว');
-          loadData(effectiveBranch);
+          loadData(effectiveBranch, { fresh: true });
         } else {
           toast.error(res.message || 'เกิดข้อผิดพลาด');
         }

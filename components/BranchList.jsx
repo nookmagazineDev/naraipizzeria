@@ -39,6 +39,10 @@ export default function BranchList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [toast, setToast] = useState(null);          // { ok, msg }
+  // ข้อความในกล่อง — กล่องทุกอันเป็น fixed inset-0 z-50 คลุมทั้งจอ แถบเตือนของหน้าจึงอยู่ข้างหลัง
+  // บันทึกไม่ผ่านแล้วส่งข้อความไปที่นั่นอย่างเดียว = คนกดเห็นว่า "กดแล้วเงียบ ไม่มีอะไรเกิดขึ้น"
+  // (หน้าจัดการพนักงานทำถูกอยู่แล้ว — ดู formMsg ใน components/EmployeeList.jsx)
+  const [formMsg, setFormMsg] = useState(null);      // { ok, msg }
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [source, setSource] = useState('sql');       // 'sql' = อ่านจากฐานจริง, 'fallback' = รายชื่อในโค้ด
@@ -57,10 +61,14 @@ export default function BranchList() {
   const [savingAlias, setSavingAlias] = useState(false);
 
   // quiet = โหลดใหม่เบื้องหลังหลังกดบันทึก (ตารางเดิมยังอ่านได้ระหว่างรอ)
-  // ?t= กันไม่ให้ CDN คืนของที่แคชไว้ก่อนการบันทึกรอบนี้
+  //
+  // ต่อ ?t= ทุกครั้ง ไม่ใช่เฉพาะตอนโหลดหลังบันทึก — /api/branches ตั้งแคชไว้ที่ CDN
+  // s-maxage=30 + stale-while-revalidate=120 เปิดหน้านี้ใหม่/กด F5 หลังเพิ่งบันทึก
+  // จึงมีสิทธิ์ได้ของก่อนบันทึกกลับมาได้ถึงสองนาทีครึ่ง = อาการ "บันทึกแล้วข้อมูลไม่เปลี่ยน"
+  // หน้านี้เป็นหน้าแก้ไข ต้องเห็นของจริงเสมอ (กติกาเดียวกับหน้า QC/RD)
   const load = ({ quiet = false, withCompare = false } = {}) => {
     if (!quiet) setLoading(true);
-    const qs = [quiet ? `t=${Date.now()}` : '', withCompare ? 'compare=1' : ''].filter(Boolean).join('&');
+    const qs = [`t=${Date.now()}`, withCompare ? 'compare=1' : ''].filter(Boolean).join('&');
     return fetch(`/api/branches${qs ? `?${qs}` : ''}`)
       .then((r) => r.json())
       .then((res) => {
@@ -116,6 +124,7 @@ export default function BranchList() {
     const nextSort = branches.reduce((max, b) => Math.max(max, b.sortOrder || 0), 0) + 1;
     setEditing({ ...EMPTY_FORM, sortOrder: String(nextSort), isNew: true });
     setToast(null);
+    setFormMsg(null);
   };
 
   const openEdit = (b) => {
@@ -137,18 +146,20 @@ export default function BranchList() {
       isNew: false,
     });
     setToast(null);
+    setFormMsg(null);
   };
 
   const saveEdit = async () => {
     const code = normalizeCode(editing.code);
     const bad = validateCode(code);
-    if (bad) { setToast({ ok: false, msg: bad }); return; }
+    if (bad) { setFormMsg({ ok: false, msg: bad }); return; }
     // รหัสซ้ำตอนเพิ่มใหม่ ฝั่งฐานจะกลายเป็น "แก้ทับ" เงียบ ๆ (MERGE) — ดักตั้งแต่ในฟอร์ม
     if (editing.isNew && branches.some((b) => normalizeCode(b.code) === code)) {
-      setToast({ ok: false, msg: `มีสาขา ${code} ในทะเบียนอยู่แล้ว — กดแก้ไขที่แถวนั้นแทน` });
+      setFormMsg({ ok: false, msg: `มีสาขา ${code} ในทะเบียนอยู่แล้ว — กดแก้ไขที่แถวนั้นแทน` });
       return;
     }
     setSavingItem(true);
+    setFormMsg(null);
     try {
       await post('saveBranch', {
         code,
@@ -197,8 +208,11 @@ export default function BranchList() {
 
       setEditing(null);
       setToast({ ok: true, msg: `บันทึกสาขา ${code} แล้ว` });
+      setFormMsg(null);
       await load({ quiet: true });
     } catch (err) {
+      // กล่องยังเปิดค้างพร้อมค่าที่กรอกไว้ ต้องบอกในกล่อง · ส่งไปหัวหน้าด้วยเผื่อปิดกล่องไปแล้ว
+      setFormMsg({ ok: false, msg: err.message });
       setToast({ ok: false, msg: err.message });
     } finally {
       setSavingItem(false);
@@ -212,12 +226,13 @@ export default function BranchList() {
     const target = normalizeCode(aliasForm.branchCode);
     const bad = validateAlias(alias)
       || validateAliasTarget(alias, branches.map((b) => b.code), target);
-    if (bad) { setToast({ ok: false, msg: bad }); return; }
+    if (bad) { setFormMsg({ ok: false, msg: bad }); return; }
     if (aliasForm.isNew && aliases.some((a) => normalizeCode(a.alias) === alias)) {
-      setToast({ ok: false, msg: `มีรหัสพ้อง ${alias} อยู่แล้ว — กดแก้ไขที่แถวนั้นแทน` });
+      setFormMsg({ ok: false, msg: `มีรหัสพ้อง ${alias} อยู่แล้ว — กดแก้ไขที่แถวนั้นแทน` });
       return;
     }
     setSavingAlias(true);
+    setFormMsg(null);
     try {
       await post('saveAlias', {
         alias, branchCode: target, source: aliasForm.source, note: aliasForm.note,
@@ -226,6 +241,8 @@ export default function BranchList() {
       setToast({ ok: true, msg: `บันทึกรหัสพ้อง ${alias} → ${target} แล้ว` });
       await load({ quiet: true });
     } catch (err) {
+      // กล่องยังเปิดค้าง ต้องบอกในกล่อง · ส่งไปที่หัวหน้าด้วย เผื่อผู้ใช้ปิดกล่องไปแล้ว
+      setFormMsg({ ok: false, msg: err.message });
       setToast({ ok: false, msg: err.message });
     } finally {
       setSavingAlias(false);
@@ -254,6 +271,7 @@ export default function BranchList() {
       setToast({ ok: true, msg: `ลบสาขา ${gone} ออกจากทะเบียนแล้ว` });
       await load({ quiet: true });
     } catch (err) {
+      setFormMsg({ ok: false, msg: err.message });
       setToast({ ok: false, msg: err.message });
     } finally {
       setDeleting(false);
@@ -492,7 +510,7 @@ export default function BranchList() {
                         className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 disabled:text-slate-200 disabled:hover:bg-transparent transition-all">
                         <Pencil size={14} />
                       </button>
-                      <button onClick={() => setDeleteTarget(b)} disabled={!editable} title="ลบสาขานี้ออกจากทะเบียน"
+                      <button onClick={() => { setFormMsg(null); setDeleteTarget(b); }} disabled={!editable} title="ลบสาขานี้ออกจากทะเบียน"
                         className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:text-slate-200 disabled:hover:bg-transparent transition-all">
                         <Trash2 size={14} />
                       </button>
@@ -527,7 +545,7 @@ export default function BranchList() {
               </p>
             </div>
           </div>
-          <button onClick={() => { setAliasForm({ ...EMPTY_ALIAS, isNew: true }); setToast(null); }}
+          <button onClick={() => { setAliasForm({ ...EMPTY_ALIAS, isNew: true }); setToast(null); setFormMsg(null); }}
             disabled={!editable || !aliasReady}
             title={!aliasReady
               ? 'ยังไม่มีตารางรหัสพ้องในฐาน — รัน docs/schema-hr-branch.sql ที่เครื่องออฟฟิศก่อน'
@@ -569,7 +587,7 @@ export default function BranchList() {
                     <td className="px-4 py-2 text-xs text-slate-500 max-w-[320px] truncate" title={a.note}>{a.note || '—'}</td>
                     <td className="px-4 py-2">
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => { setAliasForm({ ...a, isNew: false }); setToast(null); }}
+                        <button onClick={() => { setAliasForm({ ...a, isNew: false }); setToast(null); setFormMsg(null); }}
                           disabled={!editable || savingAlias} title="แก้ไขรหัสพ้องนี้"
                           className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 disabled:text-slate-200 transition-all">
                           <Pencil size={14} />
@@ -739,7 +757,9 @@ export default function BranchList() {
               )}
             </div>
 
-            <div className="p-5 border-t border-slate-100 flex justify-end gap-2">
+            <div className="p-5 border-t border-slate-100 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex justify-end gap-2">
               <button onClick={() => setEditing(null)} disabled={savingItem}
                 className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
               <button onClick={saveEdit} disabled={savingItem}
@@ -747,6 +767,7 @@ export default function BranchList() {
                 {savingItem ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 บันทึก
               </button>
+              </div>
             </div>
           </div>
         </div>
@@ -810,7 +831,9 @@ export default function BranchList() {
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
               </div>
             </div>
-            <div className="p-5 border-t border-slate-100 flex justify-end gap-2">
+            <div className="p-5 border-t border-slate-100 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex justify-end gap-2">
               <button onClick={() => setAliasForm(null)} disabled={savingAlias}
                 className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
               <button onClick={saveAlias} disabled={savingAlias}
@@ -818,6 +841,7 @@ export default function BranchList() {
                 {savingAlias ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 บันทึก
               </button>
+              </div>
             </div>
           </div>
         </div>
@@ -841,7 +865,9 @@ export default function BranchList() {
                 การลบนี้แตะเฉพาะทะเบียนในฐาน InventoryNarai ไม่ได้ไปลบข้อมูลที่ระบบอื่นเก็บไว้
               </p>
             </div>
-            <div className="p-5 pt-0 flex justify-end gap-2">
+            <div className="p-5 pt-0 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex justify-end gap-2">
               <button onClick={() => setDeleteTarget(null)} disabled={deleting}
                 className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
               <button
@@ -869,10 +895,22 @@ export default function BranchList() {
                 {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                 ลบถาวร
               </button>
+              </div>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ข้อความผลการบันทึก/ลบ ที่อยู่ "ในกล่อง" — ข้อความจากเซิร์ฟเวอร์ยาวได้ (เช่น สาเหตุที่ต่อฐานไม่ติด)
+// จึงให้ขึ้นบรรทัดได้และจำกัดความสูงไว้ ไม่ให้ดันปุ่มตกจอ
+function FormMsg({ ok, msg }) {
+  return (
+    <div className={`flex items-start gap-1.5 text-xs font-semibold max-h-28 overflow-auto ${ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+      {ok ? <CheckCircle size={13} className="flex-shrink-0 mt-0.5" /> : <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />}
+      <span className="break-words whitespace-pre-wrap">{msg}</span>
     </div>
   );
 }

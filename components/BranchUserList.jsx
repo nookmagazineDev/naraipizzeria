@@ -45,7 +45,10 @@ export default function BranchUserList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [warning, setWarning] = useState('');
-  const [toast, setToast] = useState(null);       // { ok, msg }
+  const [toast, setToast] = useState(null);
+  // ข้อความในกล่อง — กล่องเป็น fixed inset-0 z-50 คลุมทั้งจอ แถบเตือนของหน้าจึงอยู่ข้างหลัง
+  // บันทึกไม่ผ่านแล้วส่งไปที่นั่นอย่างเดียว = คนกดเห็นว่า "กดแล้วเงียบ" (ดู formMsg ใน EmployeeList.jsx)
+  const [formMsg, setFormMsg] = useState(null);       // { ok, msg }
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState(null);   // { ...form, isNew }
   const [saving, setSaving] = useState(false);
@@ -98,7 +101,7 @@ export default function BranchUserList() {
       || (u.displayName || '').toLowerCase().includes(q));
   }, [users, search]);
 
-  const openNew = () => { setEditing({ ...EMPTY_FORM, isNew: true }); setToast(null); };
+  const openNew = () => { setEditing({ ...EMPTY_FORM, isNew: true }); setToast(null); setFormMsg(null); };
   const openEdit = (u) => {
     setEditing({
       username: u.username,
@@ -110,20 +113,22 @@ export default function BranchUserList() {
       isNew: false,
     });
     setToast(null);
+    setFormMsg(null);
   };
 
   const saveEdit = async () => {
     const username = editing.username.trim();
-    if (!username) { setToast({ ok: false, msg: 'ต้องกรอกชื่อผู้ใช้' }); return; }
+    if (!username) { setFormMsg({ ok: false, msg: 'ต้องกรอกชื่อผู้ใช้' }); return; }
     if (!splitBranches(editing.branch).length) {
-      setToast({ ok: false, msg: 'ต้องเลือกสาขาของบัญชีนี้' }); return;
+      setFormMsg({ ok: false, msg: 'ต้องเลือกสาขาของบัญชีนี้' }); return;
     }
     // ชื่อซ้ำตอนเพิ่มใหม่จะกลายเป็น "แก้ทับ" เงียบ ๆ (MERGE) — ดักตั้งแต่ในฟอร์ม
     if (editing.isNew && users.some((u) => u.username.toLowerCase() === username.toLowerCase())) {
-      setToast({ ok: false, msg: `มีบัญชี ${username} อยู่แล้ว — กดแก้ไขที่แถวนั้นแทน` });
+      setFormMsg({ ok: false, msg: `มีบัญชี ${username} อยู่แล้ว — กดแก้ไขที่แถวนั้นแทน` });
       return;
     }
     setSaving(true);
+    setFormMsg(null);
     try {
       await post('saveBranchUser', {
         username,
@@ -138,6 +143,8 @@ export default function BranchUserList() {
       setToast({ ok: true, msg: `บันทึกบัญชี ${username} แล้ว` });
       await load({ quiet: true });
     } catch (err) {
+      // กล่องยังเปิดค้างพร้อมค่าที่กรอกไว้ ต้องบอกในกล่อง · ส่งไปหัวหน้าด้วยเผื่อปิดกล่องไปแล้ว
+      setFormMsg({ ok: false, msg: err.message });
       setToast({ ok: false, msg: err.message });
     } finally {
       setSaving(false);
@@ -154,6 +161,7 @@ export default function BranchUserList() {
       setToast({ ok: true, msg: `ตั้งรหัสใหม่ให้ ${who} แล้ว — แจ้งรหัสให้สาขาด้วย` });
       await load({ quiet: true });
     } catch (err) {
+      setFormMsg({ ok: false, msg: err.message });
       setToast({ ok: false, msg: err.message });
     } finally {
       setSaving(false);
@@ -169,6 +177,7 @@ export default function BranchUserList() {
       setToast({ ok: true, msg: `ลบบัญชี ${gone} แล้ว` });
       await load({ quiet: true });
     } catch (err) {
+      setFormMsg({ ok: false, msg: err.message });
       setToast({ ok: false, msg: err.message });
     } finally {
       setDeleting(false);
@@ -336,7 +345,7 @@ export default function BranchUserList() {
                         className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 disabled:text-slate-200 transition-all">
                         <Pencil size={14} />
                       </button>
-                      <button onClick={() => setDeleteTarget(u)} disabled={saving} title="ลบบัญชีนี้"
+                      <button onClick={() => { setFormMsg(null); setDeleteTarget(u); }} disabled={saving} title="ลบบัญชีนี้"
                         className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:text-slate-200 transition-all">
                         <Trash2 size={14} />
                       </button>
@@ -465,7 +474,9 @@ export default function BranchUserList() {
               </div>
             </div>
 
-            <div className="p-5 border-t border-slate-100 flex justify-end gap-2">
+            <div className="p-5 border-t border-slate-100 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex justify-end gap-2">
               <button onClick={() => setEditing(null)} disabled={saving}
                 className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
               <button onClick={saveEdit} disabled={saving}
@@ -473,6 +484,7 @@ export default function BranchUserList() {
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 บันทึก
               </button>
+              </div>
             </div>
           </div>
         </div>
@@ -495,7 +507,9 @@ export default function BranchUserList() {
                 ตั้งแล้วรหัสเดิมใช้ไม่ได้ทันที — <b>บอกสาขาก่อนกด</b> ไม่งั้นสาขาจะล็อกอินไม่ได้โดยไม่รู้สาเหตุ
               </p>
             </div>
-            <div className="p-5 pt-0 flex justify-end gap-2">
+            <div className="p-5 pt-0 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex justify-end gap-2">
               <button onClick={() => setPwdTarget(null)} disabled={saving}
                 className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
               <button onClick={savePassword} disabled={saving || !newPwd}
@@ -503,6 +517,7 @@ export default function BranchUserList() {
                 {saving ? <Loader2 size={14} className="animate-spin" /> : <KeyRound size={14} />}
                 ตั้งรหัสใหม่
               </button>
+              </div>
             </div>
           </div>
         </div>
@@ -523,7 +538,9 @@ export default function BranchUserList() {
                 ลบแถวนี้ไม่ได้ลบบันทึกพวกนั้น แต่จะไม่เหลืออะไรบอกว่าชื่อนั้นเคยเป็นของสาขาไหน
               </p>
             </div>
-            <div className="p-5 pt-0 flex justify-end gap-2">
+            <div className="p-5 pt-0 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex justify-end gap-2">
               <button onClick={() => setDeleteTarget(null)} disabled={deleting}
                 className="px-4 py-2 rounded-xl text-sm font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
               <button
@@ -537,10 +554,21 @@ export default function BranchUserList() {
                 {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                 ลบถาวร
               </button>
+              </div>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ข้อความผลการบันทึก/ลบ ที่อยู่ "ในกล่อง" — ข้อความจากเซิร์ฟเวอร์ยาวได้ จึงให้ขึ้นบรรทัดได้
+function FormMsg({ ok, msg }) {
+  return (
+    <div className={`flex items-start gap-1.5 text-xs font-semibold max-h-28 overflow-auto ${ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+      {ok ? <CheckCircle size={13} className="flex-shrink-0 mt-0.5" /> : <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />}
+      <span className="break-words whitespace-pre-wrap">{msg}</span>
     </div>
   );
 }

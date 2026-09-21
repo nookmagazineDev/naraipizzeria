@@ -41,7 +41,10 @@ export default function UserList({ me }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [toast, setToast] = useState(null);          // { ok, msg }
+  const [toast, setToast] = useState(null);
+  // ข้อความในกล่อง — กล่องเป็น fixed inset-0 z-50 คลุมทั้งจอ แถบเตือนของหน้าจึงอยู่ข้างหลัง
+  // บันทึกไม่ผ่านแล้วส่งไปที่นั่นอย่างเดียว = คนกดเห็นว่า "กดแล้วเงียบ" (ดู formMsg ใน EmployeeList.jsx)
+  const [formMsg, setFormMsg] = useState(null);          // { ok, msg }
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [tableReady, setTableReady] = useState(true);
@@ -130,9 +133,10 @@ export default function UserList({ me }) {
     }
   };
 
-  const openNew = () => { setEditing({ ...EMPTY_FORM, isNew: true }); setToast(null); };
+  const openNew = () => { setEditing({ ...EMPTY_FORM, isNew: true }); setToast(null); setFormMsg(null); };
 
   const openEdit = (u) => {
+    setFormMsg(null);
     setEditing({
       username: u.username,
       displayName: u.displayName || '',
@@ -165,18 +169,18 @@ export default function UserList({ me }) {
   const saveEdit = async () => {
     const username = normalizeUsername(editing.username);
     const bad = validateUsername(username);
-    if (bad) { setToast({ ok: false, msg: bad }); return; }
+    if (bad) { setFormMsg({ ok: false, msg: bad }); return; }
     if (editing.isNew && users.some((u) => u.username === username)) {
-      setToast({ ok: false, msg: `มีผู้ใช้ ${username} อยู่แล้ว — กดแก้ไขที่แถวนั้นแทน` });
+      setFormMsg({ ok: false, msg: `มีผู้ใช้ ${username} อยู่แล้ว — กดแก้ไขที่แถวนั้นแทน` });
       return;
     }
     if (editing.isNew || editing.password) {
       const badPwd = validatePassword(editing.password);
-      if (badPwd) { setToast({ ok: false, msg: badPwd }); return; }
+      if (badPwd) { setFormMsg({ ok: false, msg: badPwd }); return; }
     }
     // ผู้ใช้ทั่วไปที่ไม่ได้ติ๊กเมนูสักอัน = ล็อกอินเข้ามาแล้วเจอหน้าว่าง ๆ ดักไว้ก่อนบันทึก
     if (editing.role !== ROLE_ADMIN && editing.perms.length === 0) {
-      setToast({ ok: false, msg: 'ยังไม่ได้ติ๊กเมนูให้สักอัน — ผู้ใช้คนนี้จะเข้ามาแล้วไม่เห็นอะไรเลย' });
+      setFormMsg({ ok: false, msg: 'ยังไม่ได้ติ๊กเมนูให้สักอัน — ผู้ใช้คนนี้จะเข้ามาแล้วไม่เห็นอะไรเลย' });
       return;
     }
 
@@ -196,6 +200,8 @@ export default function UserList({ me }) {
       setToast({ ok: true, msg: `บันทึกผู้ใช้ ${username} แล้ว` });
       await load({ quiet: true });
     } catch (err) {
+      // กล่องยังเปิดค้างพร้อมค่าที่กรอกไว้ ต้องบอกในกล่อง · ส่งไปหัวหน้าด้วยเผื่อปิดกล่องไปแล้ว
+      setFormMsg({ ok: false, msg: err.message });
       setToast({ ok: false, msg: err.message });
     } finally {
       setSavingItem(false);
@@ -204,7 +210,7 @@ export default function UserList({ me }) {
 
   const doResetPassword = async () => {
     const bad = validatePassword(pwdTarget.password);
-    if (bad) { setToast({ ok: false, msg: bad }); return; }
+    if (bad) { setFormMsg({ ok: false, msg: bad }); return; }
     setSavingPwd(true);
     try {
       await post('resetPassword', { username: pwdTarget.username, password: pwdTarget.password });
@@ -212,6 +218,7 @@ export default function UserList({ me }) {
       setPwdTarget(null);
       setToast({ ok: true, msg: `ตั้งรหัสผ่านใหม่ให้ ${who} แล้ว — ส่งรหัสให้เจ้าตัวแล้วบอกให้เปลี่ยนเอง` });
     } catch (err) {
+      setFormMsg({ ok: false, msg: err.message });
       setToast({ ok: false, msg: err.message });
     } finally {
       setSavingPwd(false);
@@ -227,6 +234,7 @@ export default function UserList({ me }) {
       setToast({ ok: true, msg: `ลบผู้ใช้ ${who} แล้ว` });
       await load({ quiet: true });
     } catch (err) {
+      setFormMsg({ ok: false, msg: err.message });
       setToast({ ok: false, msg: err.message });
     } finally {
       setDeleting(false);
@@ -380,12 +388,12 @@ export default function UserList({ me }) {
                         className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 disabled:text-slate-200 disabled:hover:bg-transparent transition-all">
                         <Pencil size={14} />
                       </button>
-                      <button onClick={() => { setPwdTarget({ username: u.username, password: '' }); setToast(null); }}
+                      <button onClick={() => { setPwdTarget({ username: u.username, password: '' }); setToast(null); setFormMsg(null); }}
                         disabled={!editable} title="ตั้งรหัสผ่านใหม่ให้คนนี้"
                         className="p-1.5 rounded-lg text-slate-400 hover:text-sky-600 hover:bg-sky-50 disabled:text-slate-200 disabled:hover:bg-transparent transition-all">
                         <Key size={14} />
                       </button>
-                      <button onClick={() => setDeleteTarget(u)} disabled={!editable || u.username === me?.username}
+                      <button onClick={() => { setFormMsg(null); setDeleteTarget(u); }} disabled={!editable || u.username === me?.username}
                         title={u.username === me?.username ? 'ลบบัญชีตัวเองไม่ได้' : 'ลบบัญชีนี้'}
                         className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 disabled:text-slate-200 disabled:hover:bg-transparent transition-all">
                         <Trash2 size={14} />
@@ -544,7 +552,9 @@ export default function UserList({ me }) {
               </div>
             </div>
 
-            <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-2 sticky bottom-0 bg-white">
+            <div className="p-5 border-t border-slate-100 space-y-3 sticky bottom-0 bg-white">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex items-center justify-end gap-2">
               <button onClick={() => setEditing(null)} disabled={savingItem}
                 className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
               <button onClick={saveEdit} disabled={savingItem}
@@ -552,6 +562,7 @@ export default function UserList({ me }) {
                 {savingItem && <Loader2 size={14} className="animate-spin" />}
                 บันทึก
               </button>
+              </div>
             </div>
           </div>
         </div>
@@ -575,7 +586,9 @@ export default function UserList({ me }) {
                 คัดลอกส่งให้เจ้าตัวก่อนปิดหน้าต่าง แล้วบอกให้เขาเปลี่ยนเองที่ปุ่มมุมขวาบน
               </p>
             </div>
-            <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-2">
+            <div className="p-5 border-t border-slate-100 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex items-center justify-end gap-2">
               <button onClick={() => setPwdTarget(null)} disabled={savingPwd}
                 className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
               <button onClick={doResetPassword} disabled={savingPwd || !pwdTarget.password}
@@ -583,6 +596,7 @@ export default function UserList({ me }) {
                 {savingPwd && <Loader2 size={14} className="animate-spin" />}
                 ตั้งรหัสผ่าน
               </button>
+              </div>
             </div>
           </div>
         </div>
@@ -599,7 +613,9 @@ export default function UserList({ me }) {
                 “{STATUS_INACTIVE}” แทน จะได้ไม่เสียประวัติที่อ้างชื่อผู้ใช้นี้
               </p>
             </div>
-            <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-2">
+            <div className="p-5 border-t border-slate-100 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex items-center justify-end gap-2">
               <button onClick={() => setDeleteTarget(null)} disabled={deleting}
                 className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-500 hover:bg-slate-100">ยกเลิก</button>
               <button onClick={doDelete} disabled={deleting}
@@ -607,10 +623,21 @@ export default function UserList({ me }) {
                 {deleting && <Loader2 size={14} className="animate-spin" />}
                 ลบผู้ใช้
               </button>
+              </div>
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ข้อความผลการบันทึก/ลบ ที่อยู่ "ในกล่อง" — ข้อความจากเซิร์ฟเวอร์ยาวได้ จึงให้ขึ้นบรรทัดได้
+function FormMsg({ ok, msg }) {
+  return (
+    <div className={`flex items-start gap-1.5 text-xs font-semibold max-h-28 overflow-auto ${ok ? 'text-emerald-600' : 'text-rose-600'}`}>
+      {ok ? <CheckCircle size={13} className="flex-shrink-0 mt-0.5" /> : <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />}
+      <span className="break-words whitespace-pre-wrap">{msg}</span>
     </div>
   );
 }
