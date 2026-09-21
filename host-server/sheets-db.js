@@ -20,7 +20,7 @@
 //    GET  /sheets/stock-items?branch=crm   หน้านับสต๊อก: ยอดนับ/ยอดยกมา/ใบเบิกล่าสุดของสาขานั้น
 //    GET  /sheets/stock-total?endDate=     ยอดคงเหลือรวมทุกสาขา (ไม่ระบุวัน = ล่าสุด)
 //    GET  /sheets/month-end-summary        สรุปรายสาขา: ปิดยอดรอบล่าสุดถึงวันไหน กี่รายการ มูลค่าเท่าไหร่
-//    GET  /sheets/month-end?month=&branch= แถวปิดรอบเดือนจาก dbo.stock_month_end (ไม่ระบุเดือน = เดือนล่าสุด)
+//    GET  /sheets/month-end?month=&branch=&limit= แถวปิดรอบเดือนจาก dbo.stock_month_end (ไม่ระบุเดือน = เดือนล่าสุด)
 //    GET  /sheets/month-end-months         เดือนที่มีข้อมูลปิดรอบ ('YYYY-MM' ใหม่ก่อน)
 //    GET  /sheets/scan-edit?start=&end=    เวลาสแกนนิ้วที่แก้ด้วยมือ (แถวล่าสุดของแต่ละช่อง)
 //    GET  /sheets/scan-edit-history?date=&emp=   ประวัติการแก้ของคนหนึ่งในวันหนึ่ง
@@ -188,6 +188,7 @@ function mountSheets(app) {
 
   app.get('/sheets/month-end', (req, res) => send(res, getMonthEnd().then(c => c.readMonthEnd({
     month: str(req.query.month), branch: str(req.query.branch),
+    limit: Number(str(req.query.limit)) || undefined,
   })), 'readMonthEnd'));
 
   app.get('/sheets/month-end-months', (req, res) =>
