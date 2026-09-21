@@ -3,14 +3,27 @@
 // ตอบคำถามเดียว: "วัตถุดิบตัวนี้ แต่ละสาขาใช้ไปเท่าไหร่ และคิดเป็นเท่าไหร่ต่อลูกค้า 1 หัว"
 // เอาไว้จับสาขาที่ใช้เปลืองผิดปกติ โดยเทียบกันได้ตรง ๆ แม้สาขาจะขายไม่เท่ากัน
 //
-// ที่มาของตัวเลข (ไม่มีการคิดสูตรใหม่ในไฟล์นี้ — ใช้ของที่ระบบคิดอยู่แล้วทั้งคู่):
-//   ยอดใช้  = /api/usage-bom → ยอดขายจริง × สูตร BOM (ชุดเดียวกับคอลัมน์ "ยอดใช้จากระบบ"
-//             ของหน้านับสต๊อก รวมกฎกันนับซ้ำใน lib/usageRules.js ครบทุกข้อ)
-//   จำนวนหัว = meta.covers ของคำตอบเดียวกัน — จานบุฟเฟต์ที่จ่ายจริง (ไม่รวมเด็กฟรี)
+// ที่มาของตัวเลข (ไม่มีการคิดสูตรใหม่ในไฟล์นี้ — ใช้ของที่ระบบคิดอยู่แล้วทุกตัว)
+// "ยอดใช้" เลือกได้สองฐานจากปุ่มบนแถบเครื่องมือ ส่วน "ต่อหัว" คิดวิธีเดียวกันทั้งคู่ ต่างแค่ตัวตั้ง:
+//
+//   1) ยอดใช้จาก BOM (ค่าเริ่มต้น) = /api/usage-bom → ยอดขายจริง × สูตร BOM
+//      (ชุดเดียวกับคอลัมน์ "ยอดใช้จากระบบ" ของหน้านับสต๊อก รวมกฎกันนับซ้ำใน lib/usageRules.js
+//      ครบทุกข้อ) — คือของที่ "ควรใช้ตามสูตร"
+//
+//   2) ยอดจากปิดรอบ (Endding) = ยกมา + รับเข้า − ปิดรอบ — คือของที่ "หายไปจากสต๊อกจริง"
+//        ยกมา    = ยอดปิดรอบของรอบเดือนก่อนหน้า  (/api/stock-month-end)
+//        รับเข้า  = ใบรับของสาขาในช่วงเดียวกัน      (/api/orderd)
+//        ปิดรอบ  = ยอดปิดรอบของรอบเดือนที่เลือก   (/api/stock-month-end)
+//      ช่วงวันคิดทีละสาขา = วันถัดจากวันปิดรอบก่อนหน้า ถึงวันปิดรอบของรอบที่เลือก เพราะสาขา
+//      ปิดรอบกันคนละวัน — ยอดรับเข้ากับจำนวนหัวจึงนับในช่วงเดียวกับที่ยอดสต๊อกขยับจริง
+//      (สูตรเดียวกับคอลัมน์ "ยอดคงเหลือจากระบบ = ยกมา+รับ-ใช้" ของหน้านับสต๊อก แค่ย้ายข้างสมการ)
+//
+//   จำนวนหัว = meta.covers ของ /api/usage-bom — จานบุฟเฟต์ที่จ่ายจริง (ไม่รวมเด็กฟรี)
 //             ยกเว้น WRM/WMT ที่ใช้ Cover All ของบิล (ดู lib/coverRules.js)
-// ยิงสาขาละคำขอเดียวได้ทั้งสองค่า เพราะ /api/usage-bom นับหัวจากรายการขายที่ดึงมาอยู่แล้ว
-import React, { useState, useEffect, useMemo } from 'react';
-import { BarChart3, Search, Loader2, AlertCircle, Download, Users, Package, AlertTriangle, Store, ChevronDown } from 'lucide-react';
+//
+// ส่วนต่างของสองฐานนี้คือของที่หาย ตักเกินสูตร หรือตัดสต๊อกไม่ครบ — เปิดทีละฐานแล้วเทียบเอง
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { BarChart3, Search, Loader2, AlertCircle, Download, Users, Package, AlertTriangle, Store, ChevronDown, Calendar } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
 import { apiRead } from '../lib/stockApi';
@@ -24,6 +37,31 @@ const BRANCH_BATCH = 5;
 
 /** ต่างจากค่ากลางเกินกี่ % ถึงจะทาสีเตือน */
 const DEVIATION_PCT = 15;
+
+const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+/** 'YYYY-MM' -> 'สิงหาคม 2569' — เรียกให้ตรงกับหน้า "ดูข้อมูลปิดรอบเดือน" (ปี พ.ศ.) */
+const monthLabel = (m) => {
+  const mt = String(m || '').match(/^(\d{4})-(\d{2})/);
+  return mt ? `${TH_MONTHS[Number(mt[2]) - 1] || mt[2]} ${Number(mt[1]) + 543}` : String(m || '');
+};
+
+/** 'YYYY-MM' บวก/ลบกี่เดือน (ใช้หา "รอบก่อนหน้า" ที่เอามาเป็นยอดยกมา) */
+const shiftMonth = (m, delta) => {
+  const mt = String(m || '').match(/^(\d{4})-(\d{2})$/);
+  if (!mt) return '';
+  const d = new Date(Date.UTC(Number(mt[1]), Number(mt[2]) - 1 + delta, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+};
+
+/** 'YYYY-MM-DD' บวกกี่วัน — คิดที่ UTC จะได้ไม่โดนโซนเวลาเลื่อนวันตอนข้ามเดือน */
+const addDays = (iso, n) => {
+  const mt = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!mt) return '';
+  const d = new Date(Date.UTC(Number(mt[1]), Number(mt[2]) - 1, Number(mt[3]) + n));
+  return d.toISOString().slice(0, 10);
+};
 
 const fmtUsage = v => Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtPerHead = v => Number(v).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 });
@@ -47,6 +85,14 @@ export default function StockUsagePerHead() {
   const [onlyUsed, setOnlyUsed] = useState(true);   // ซ่อนไอเทมที่ช่วงนี้ไม่มีการใช้เลย
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+
+  // ฐานที่ใช้คิดยอดใช้ : 'bom' = ยอดขายจริง × สูตร | 'closing' = ยกมา + รับเข้า − ปิดรอบ
+  const [usageSource, setUsageSource] = useState('bom');
+  const [closingMonth, setClosingMonth] = useState('');   // รอบเดือนที่เลือก ('YYYY-MM')
+  const [monthOptions, setMonthOptions] = useState([]);
+  const [loadingMonths, setLoadingMonths] = useState(false);
+  // แถวปิดรอบที่ดึงมาแล้ว { 'YYYY-MM': data } — สลับรอบไปมา/กดคำนวณซ้ำจะได้ไม่ยิงซ้ำ
+  const monthCacheRef = useRef({});
 
   // ผลการคำนวณรอบล่าสุด — เก็บช่วงวันที่ที่ใช้คำนวณไว้ด้วย จะได้ไม่โชว์เลขเก่าคู่กับวันที่ใหม่
   const [report, setReport] = useState(null); // { from, to, branches: [...], usage: {branch: {id: qty}} }
@@ -89,17 +135,43 @@ export default function StockUsagePerHead() {
     }
   };
 
-  const fetchReport = async () => {
-    if (!startDate || !endDate) { toast.error('กรุณาระบุช่วงวันที่ให้ครบถ้วน'); return; }
-    if (startDate > endDate) { toast.error('วันที่เริ่มต้นอยู่หลังวันที่สิ้นสุด'); return; }
+  /** สาขาที่ติ๊กไว้และยิงข้อมูลได้จริง — ใช้ร่วมกันทั้งสองฐาน (null = ยังเลือกไม่ครบ) */
+  const pickTargets = () => {
     // ดึงเฉพาะสาขาที่ติ๊กไว้ — เลือกน้อยลงก็รอสั้นลงจริง ไม่ใช่ดึงหมดแล้วมาซ่อนทีหลัง
     const targets = branches.filter(b => b.outletId && selectedKeys.includes(String(b.name).toLowerCase()));
     if (targets.length === 0) {
       toast.error(branches.some(b => b.outletId)
         ? 'ยังไม่ได้เลือกสาขาที่จะเทียบ — กดปุ่ม “สาขาที่เทียบ” แล้วติ๊กอย่างน้อย 1 สาขา'
         : 'ไม่พบสาขาที่มีรหัส outlet — ดึงยอดใช้ไม่ได้');
-      return;
+      return null;
     }
+    return targets;
+  };
+
+  /** บอกให้ชัดว่าสาขาไหนไม่ได้ข้อมูล — ค่ากลางที่คิดได้จะไม่รวมสาขาพวกนั้น */
+  const reportToast = (stats) => {
+    const failed = stats.filter(s => !s.ok).map(s => s.name.toUpperCase());
+    const noCovers = stats.filter(s => s.ok && !s.covers).map(s => s.name.toUpperCase());
+    if (failed.length === 0 && noCovers.length === 0) {
+      toast.success(`คำนวณครบ ${stats.length} สาขา`);
+    } else if (failed.length === stats.length) {
+      toast.error(`ดึงยอดใช้ไม่สำเร็จทั้ง ${stats.length} สาขา`, { duration: 7000 });
+    } else {
+      const parts = [];
+      if (failed.length) parts.push(`ดึงไม่สำเร็จ ${failed.length} สาขา (${failed.slice(0, 4).join(', ')}${failed.length > 4 ? '…' : ''})`);
+      if (noCovers.length) parts.push(`ไม่มีจำนวนหัว ${noCovers.length} สาขา (${noCovers.slice(0, 4).join(', ')}${noCovers.length > 4 ? '…' : ''}) — คิดต่อหัวไม่ได้`);
+      toast(parts.join(' · '), { icon: '⚠️', duration: 8000 });
+    }
+  };
+
+  /** กดปุ่มเดียว แต่ไปคนละทางตามฐานที่เลือกอยู่ */
+  const fetchReport = () => (usageSource === 'closing' ? fetchClosingReport() : fetchBomReport());
+
+  const fetchBomReport = async () => {
+    if (!startDate || !endDate) { toast.error('กรุณาระบุช่วงวันที่ให้ครบถ้วน'); return; }
+    if (startDate > endDate) { toast.error('วันที่เริ่มต้นอยู่หลังวันที่สิ้นสุด'); return; }
+    const targets = pickTargets();
+    if (!targets) return;
 
     setIsFetching(true);
     setProgress({ done: 0, total: targets.length });
@@ -136,23 +208,191 @@ export default function StockUsagePerHead() {
       }
 
       stats.sort((a, b) => a.name.localeCompare(b.name));
-      setReport({ from: startDate, to: endDate, branches: stats, usage });
-
-      // บอกให้ชัดว่าสาขาไหนไม่ได้ข้อมูล — ค่ากลางที่คิดได้จะไม่รวมสาขาพวกนั้น
-      const failed = stats.filter(s => !s.ok).map(s => s.name.toUpperCase());
-      const noCovers = stats.filter(s => s.ok && !s.covers).map(s => s.name.toUpperCase());
-      if (failed.length === 0 && noCovers.length === 0) {
-        toast.success(`คำนวณครบ ${stats.length} สาขา`);
-      } else if (failed.length === stats.length) {
-        toast.error(`ดึงยอดใช้ไม่สำเร็จทั้ง ${stats.length} สาขา`, { duration: 7000 });
-      } else {
-        const parts = [];
-        if (failed.length) parts.push(`ดึงไม่สำเร็จ ${failed.length} สาขา (${failed.slice(0, 4).join(', ')}${failed.length > 4 ? '…' : ''})`);
-        if (noCovers.length) parts.push(`ไม่มีจำนวนหัว ${noCovers.length} สาขา (${noCovers.slice(0, 4).join(', ')}${noCovers.length > 4 ? '…' : ''}) — คิดต่อหัวไม่ได้`);
-        toast(parts.join(' · '), { icon: '⚠️', duration: 8000 });
-      }
+      setReport({ source: 'bom', from: startDate, to: endDate, branches: stats, usage });
+      reportToast(stats);
     } catch (err) {
       toast.error('เกิดข้อผิดพลาดในการคำนวณ: ' + err.message);
+    } finally {
+      setIsFetching(false);
+      setProgress(null);
+    }
+  };
+
+  /* ───────────────────── ฐานที่สอง : ยอดจากปิดรอบสิ้นเดือน ───────────────────── */
+
+  /** แถวปิดรอบของรอบเดือนหนึ่ง (month ว่าง = รอบล่าสุดที่มีข้อมูล) — จำไว้ไม่ให้ยิงซ้ำ */
+  const fetchMonthEnd = async (month) => {
+    const cacheKey = month || 'latest';
+    if (monthCacheRef.current[cacheKey]) return monthCacheRef.current[cacheKey];
+    const res = await fetch(`/api/stock-month-end${month ? `?month=${encodeURIComponent(month)}` : ''}`);
+    const json = await res.json();
+    if (json.status !== 'success') throw new Error(json.message || 'ดึงข้อมูลปิดรอบเดือนไม่สำเร็จ');
+    const data = json.data || {};
+    monthCacheRef.current[cacheKey] = data;
+    if (data.month) monthCacheRef.current[data.month] = data;   // ยิงแบบ 'latest' แล้วรู้ว่าเป็นรอบไหน
+    return data;
+  };
+
+  /** รายชื่อรอบเดือนที่มีข้อมูล — โหลดตอนสลับมาฐานปิดรอบครั้งแรก */
+  const loadMonths = async () => {
+    setLoadingMonths(true);
+    try {
+      const data = await fetchMonthEnd('');
+      if (data.months?.length) setMonthOptions(data.months);
+      if (data.month) setClosingMonth(prev => prev || data.month);
+    } catch (err) {
+      toast.error('ดึงรายชื่อรอบเดือนไม่สำเร็จ: ' + err.message);
+    } finally {
+      setLoadingMonths(false);
+    }
+  };
+
+  /** สลับฐานที่ใช้คิดยอดใช้ — ล้างผลเดิมทิ้ง เลขสองฐานนี้อยู่บนตารางเดียวกันไม่ได้ */
+  const switchSource = (src) => {
+    if (src === usageSource) return;
+    setUsageSource(src);
+    setReport(null);
+    setDetailItem(null);
+    setShowHotSpots(false);
+    if (src === 'closing' && monthOptions.length === 0) loadMonths();
+  };
+
+  /**
+   * ยอดปิดรอบรายสาขา: { สาขา: { date, items: { รหัส: ยอดคงเหลือ } } }
+   * เอาเฉพาะแถวของ "วันที่ปิดล่าสุด" ในรอบนั้น — สาขาที่นับซ้ำหลายวันจะได้ไม่บวกกันมั่ว
+   */
+  const groupClosing = (rows) => {
+    const lastDate = {};
+    (rows || []).forEach(r => {
+      const key = String(r.branch || '').toLowerCase();
+      const date = String(r.date || '').slice(0, 10);
+      if (!key || !date) return;
+      if (!lastDate[key] || date > lastDate[key]) lastDate[key] = date;
+    });
+
+    const out = {};
+    Object.entries(lastDate).forEach(([key, date]) => { out[key] = { date, items: {} }; });
+    (rows || []).forEach(r => {
+      const key = String(r.branch || '').toLowerCase();
+      const slot = out[key];
+      if (!slot || String(r.date || '').slice(0, 10) !== slot.date) return;
+      // ไอเทมเดียวอาจมีหลายแถวในวันเดียว (นับแยกจุดเก็บ) — รวมเป็นยอดเดียว
+      const id = normalizeId(r.itemKey || r.itemCode);
+      if (!id) return;
+      slot.items[id] = (slot.items[id] || 0) + (Number(r.balance) || 0);
+    });
+    return out;
+  };
+
+  /** เก็บเฉพาะช่องที่ตาราง/การ์ดใช้ — ยอดปิดรอบรายไอเทมไม่ต้องติดไปกับ state */
+  const branchStat = ({ cur, prev, ...rest }) => rest;
+
+  /**
+   * ยอดใช้จากยอดปิดรอบสิ้นเดือน = ยกมา + รับเข้า − ปิดรอบ
+   *
+   * ยิงแถวปิดรอบแค่สองครั้ง (รอบที่เลือก + รอบก่อนหน้า) ได้ครบทุกสาขา แล้วค่อยไล่ยิงยอดรับเข้า
+   * กับจำนวนหัวทีละชุด ตามช่วงวันปิดรอบของแต่ละสาขาซึ่งไม่ตรงกัน
+   */
+  const fetchClosingReport = async () => {
+    const targets = pickTargets();
+    if (!targets) return;
+
+    setIsFetching(true);
+    setProgress(null);
+    try {
+      const curData = await fetchMonthEnd(closingMonth);
+      const month = curData.month || closingMonth;
+      if (!month) throw new Error('ยังไม่มีข้อมูลปิดรอบเดือนในระบบ');
+      if (curData.months?.length) setMonthOptions(curData.months);
+      if (closingMonth !== month) setClosingMonth(month);
+
+      const prevMonth = shiftMonth(month, -1);
+      const prevData = await fetchMonthEnd(prevMonth);
+      const cur = groupClosing(curData.rows);
+      const prev = groupClosing(prevData.rows);
+
+      // แต่ละสาขาปิดรอบคนละวัน ช่วงที่ต้องนับยอดรับเข้า/จำนวนหัวจึงคิดทีละสาขา
+      const jobs = targets.map(b => {
+        const key = String(b.name).toLowerCase();
+        const base = {
+          name: String(b.name), key, outletId: b.outletId,
+          covers: null, coversSource: '', from: '', to: '', closeDate: '', prevDate: '', error: '',
+        };
+        const c = cur[key];
+        const p = prev[key];
+        if (!c) return { ...base, ok: false, error: `ยังไม่ได้ปิดรอบ${monthLabel(month)}` };
+        if (!p) return { ...base, ok: false, error: `ไม่มียอดปิดรอบ${monthLabel(prevMonth)} — ไม่มียอดยกมาให้ตั้งต้น` };
+        return {
+          ...base, ok: true,
+          closeDate: c.date, prevDate: p.date,
+          from: addDays(p.date, 1), to: c.date,   // นับต่อจากวันที่ปิดรอบก่อนหน้า ไม่นับซ้ำวันนั้น
+          cur: c.items, prev: p.items,
+        };
+      });
+
+      const stats = [];
+      const usage = {};
+      jobs.filter(j => !j.ok).forEach(j => { stats.push(branchStat(j)); usage[j.key] = {}; });
+
+      const runnable = jobs.filter(j => j.ok);
+      setProgress({ done: 0, total: runnable.length });
+      for (let i = 0; i < runnable.length; i += BRANCH_BATCH) {
+        const chunk = runnable.slice(i, i + BRANCH_BATCH);
+        const results = await Promise.all(chunk.map(j => {
+          const qs = `branch=${encodeURIComponent(j.name)}&outletId=${encodeURIComponent(j.outletId)}`
+            + `&startDate=${encodeURIComponent(j.from)}&endDate=${encodeURIComponent(j.to)}`;
+          return Promise.all([
+            fetch(`/api/orderd?${qs}`).then(r => r.json()).catch(err => ({ status: 'error', message: err.message })),
+            // ยิงเพื่อเอา meta.covers อย่างเดียว — ยอดใช้ฝั่ง BOM ไม่ได้ใช้ในฐานนี้
+            fetch(`/api/usage-bom?${qs}`).then(r => r.json()).catch(err => ({ status: 'error', message: err.message })),
+          ]);
+        }));
+
+        results.forEach(([recRes, coverRes], idx) => {
+          const j = chunk[idx];
+          const recOk = recRes.status === 'success';
+          const rec = recOk ? (recRes.data || {}) : {};
+          const coverOk = coverRes.status === 'success' && coverRes.meta;
+          const covers = coverOk ? coverRes.meta.covers : null;
+
+          const map = {};
+          if (recOk) {
+            const ids = new Set([...Object.keys(j.prev), ...Object.keys(j.cur), ...Object.keys(rec)]);
+            ids.forEach(id => {
+              const used = (j.prev[id] || 0) + (Number(rec[id]?.total) || 0) - (j.cur[id] || 0);
+              const q = Number(used.toFixed(2));
+              if (q) map[id] = q;
+            });
+          }
+          usage[j.key] = map;
+          stats.push({
+            ...branchStat(j),
+            // ยอดรับเข้าพลาด = คิดยอดใช้ไม่ได้เลย (ของที่รับมาจะกลายเป็นของที่ใช้ไปทั้งก้อน)
+            // แต่จำนวนหัวพลาด ยังเหลือคอลัมน์ "ยอดใช้" ให้ดูได้ จึงไม่ถือว่าสาขานี้ล้ม
+            ok: recOk,
+            covers: covers === null || covers === undefined ? null : Number(covers),
+            coversSource: coverOk ? coverRes.meta.coversSource : '',
+            error: recOk ? '' : `ดึงยอดรับเข้าไม่สำเร็จ: ${recRes.message || 'ไม่ทราบสาเหตุ'}`,
+          });
+        });
+        setProgress({ done: Math.min(i + BRANCH_BATCH, runnable.length), total: runnable.length });
+      }
+
+      stats.sort((a, b) => a.name.localeCompare(b.name));
+      const windows = stats.filter(s => s.from && s.to);
+      setReport({
+        source: 'closing',
+        month,
+        prevMonth,
+        // ช่วงรวมของทุกสาขาไว้โชว์บนการ์ด/ชื่อไฟล์ — ช่วงจริงของแต่ละสาขาอยู่ในป้ายสาขา
+        from: windows.reduce((a, s) => (!a || s.from < a ? s.from : a), ''),
+        to: windows.reduce((a, s) => (s.to > a ? s.to : a), ''),
+        branches: stats,
+        usage,
+      });
+      reportToast(stats);
+    } catch (err) {
+      toast.error('คิดยอดจากปิดรอบไม่สำเร็จ: ' + err.message);
     } finally {
       setIsFetching(false);
       setProgress(null);
@@ -193,7 +433,9 @@ export default function StockUsagePerHead() {
         if (qty) totalUsage += qty;
         // นับเข้าค่ากลางเฉพาะสาขาที่ "ใช้ของตัวนี้จริง" — สาขาที่ไม่ได้สต๊อกไอเทมนี้เลย
         // ถ้าเอาจำนวนหัวไปรวมในตัวหารด้วย ค่ากลางจะถูกเจือจางจนสาขาที่ใช้จริงขึ้นแดงกันหมด
-        if (b.covers > 0 && qty) { usableUsage += qty; usableCovers += b.covers; }
+        // ฐานปิดรอบอาจได้ยอดติดลบ (นับได้มากกว่ายกมา+รับเข้า = จดพลาด/ของมาไม่ทันบันทึก)
+        // เอาไปคิดค่ากลางไม่ได้ ตัดทิ้งเหมือนสาขาที่ไม่ได้ใช้ไอเทมนี้
+        if (b.covers > 0 && qty > 0) { usableUsage += qty; usableCovers += b.covers; }
         return { branch: b, usage: qty, perHead: b.covers > 0 && qty !== null ? qty / b.covers : null };
       });
 
@@ -296,7 +538,9 @@ export default function StockUsagePerHead() {
   const exportExcel = () => {
     if (!report || visibleRows.length === 0) { toast.error('ไม่มีรายการให้ export'); return; }
     const cols = activeBranches;
-    const h1 = ['รหัส', 'ชื่อสินค้า', 'หมวดจัดเก็บ', 'หน่วย', 'ยอดใช้รวม', 'ต่อหัว (ค่ากลาง)'];
+    const isClosing = report.source === 'closing';
+    const h1 = ['รหัส', 'ชื่อสินค้า', 'หมวดจัดเก็บ', 'หน่วย',
+      isClosing ? 'ยอดใช้รวม (ปิดรอบ)' : 'ยอดใช้รวม (BOM)', 'ต่อหัว (ค่ากลาง)'];
     const h2 = ['', '', '', '', '', ''];
     cols.forEach(b => {
       h1.push(`${b.name.toUpperCase()} (${b.covers ? fmtInt(b.covers) : '-'} หัว)`, '');
@@ -342,7 +586,9 @@ export default function StockUsagePerHead() {
     }
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'ใช้ต่อหัวรายสาขา');
-    XLSX.writeFile(wb, `usage_per_head_${report.from}_${report.to}.xlsx`);
+    XLSX.writeFile(wb, isClosing
+      ? `usage_per_head_closing_${report.month}.xlsx`
+      : `usage_per_head_${report.from}_${report.to}.xlsx`);
     toast.success('Export สำเร็จ');
   };
 
@@ -367,33 +613,26 @@ export default function StockUsagePerHead() {
           รายงานการใช้วัตถุดิบต่อหัว ของสาขา
         </h1>
         <p className="text-gray-500 mt-1 ml-11 text-sm">
-          ยอดใช้ = ยอดขายจริง × สูตร BOM (ชุดเดียวกับ “ยอดใช้จากระบบ”) · ต่อหัว = ยอดใช้ ÷ จำนวนหัวลูกค้าของสาขานั้นในช่วงที่เลือก
+          {usageSource === 'closing'
+            ? 'ยอดใช้ = ยกมา (ปิดรอบเดือนก่อน) + รับเข้า − ปิดรอบเดือนนี้ = ของที่หายไปจากสต๊อกจริง · ต่อหัว = ยอดใช้ ÷ จำนวนหัวลูกค้าในช่วงเดียวกัน'
+            : 'ยอดใช้ = ยอดขายจริง × สูตร BOM (ชุดเดียวกับ “ยอดใช้จากระบบ”) · ต่อหัว = ยอดใช้ ÷ จำนวนหัวลูกค้าของสาขานั้นในช่วงที่เลือก'}
         </p>
       </div>
 
-      {/* แถบเครื่องมือ */}
-      <div className="flex flex-col xl:flex-row gap-3 mb-4">
-        <div className="relative flex-1 flex gap-2 min-w-0">
-          <div className="relative flex-1">
-            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search className="h-5 w-5 text-gray-400" />
-            </div>
-            <input type="text"
-              className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-fuchsia-500 focus:border-fuchsia-500 sm:text-sm"
-              placeholder="ค้นหาด้วยรหัส / ชื่อสินค้า / หมวดจัดเก็บ..."
-              value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
-          </div>
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-            className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500 text-gray-700">
-            <option value="usage">เรียงตามยอดใช้รวม (มาก→น้อย)</option>
-            <option value="deviation">เรียงตามจำนวนสาขาที่ใช้เกินค่ากลาง</option>
-            <option value="storageCat">เรียงตามหมวดจัดเก็บ</option>
-            <option value="productId">เรียงตามรหัสสินค้า</option>
-            <option value="name">เรียงตามชื่อสินค้า</option>
-          </select>
+      {/* แถบเครื่องมือ — แถวบน: ฐานที่ใช้คิด / มุมมอง / สาขา / ช่วงเวลา / export */}
+      <div className="flex flex-col xl:flex-row xl:flex-wrap gap-3 mb-3">
+        {/* ฐานที่ใช้คิดยอดใช้ — คนละที่มา จึงล้างผลเดิมทุกครั้งที่สลับ */}
+        <div className="flex shrink-0 bg-white border border-gray-200 rounded-xl overflow-hidden text-sm">
+          {[['bom', 'ยอดใช้จาก BOM', 'ยอดขายจริง × สูตร BOM — ของที่ “ควรใช้ตามสูตร”'],
+            ['closing', 'ยอดจากปิดรอบ (Endding)', 'ยกมา + รับเข้า − ปิดรอบสิ้นเดือน — ของที่ “หายไปจากสต๊อกจริง”']].map(([v, label, hint]) => (
+            <button key={v} onClick={() => switchSource(v)} title={hint}
+              className={`px-3 py-3 whitespace-nowrap transition-colors ${usageSource === v ? 'bg-indigo-600 text-white font-semibold' : 'text-gray-600 hover:bg-gray-50'}`}>
+              {label}
+            </button>
+          ))}
         </div>
 
-        <div className="flex bg-white border border-gray-200 rounded-xl overflow-hidden text-sm">
+        <div className="flex shrink-0 bg-white border border-gray-200 rounded-xl overflow-hidden text-sm">
           {[['both', 'ต่อหัว + ยอดใช้'], ['perHead', 'ต่อหัวอย่างเดียว'], ['usage', 'ยอดใช้อย่างเดียว']].map(([v, label]) => (
             <button key={v} onClick={() => setViewMode(v)}
               className={`px-3 py-3 whitespace-nowrap transition-colors ${viewMode === v ? 'bg-fuchsia-600 text-white font-semibold' : 'text-gray-600 hover:bg-gray-50'}`}>
@@ -403,7 +642,7 @@ export default function StockUsagePerHead() {
         </div>
 
         {/* เลือกสาขาที่จะเทียบ — ติ๊กได้หลายสาขา มีผลทั้งตอนดึงข้อมูลและตอนคิดค่ากลาง */}
-        <div className="relative">
+        <div className="relative shrink-0">
           <button onClick={() => setBranchPickerOpen(o => !o)}
             className={`h-full w-full xl:w-auto px-3 py-3 border rounded-xl bg-white text-sm flex items-center gap-2 whitespace-nowrap transition-colors ${
               branchPickerOpen ? 'border-fuchsia-400 ring-1 ring-fuchsia-300' : 'border-gray-200 hover:border-fuchsia-300'}`}>
@@ -462,27 +701,70 @@ export default function StockUsagePerHead() {
           )}
         </div>
 
-        <div className="flex items-center gap-2 bg-gradient-to-r from-fuchsia-50 to-pink-50 border border-fuchsia-100 p-2 rounded-xl">
-          <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap">วันที่ :</span>
-          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-            className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
-          <span className="text-gray-500 text-sm">-</span>
-          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
-            className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
-          <button onClick={fetchReport} disabled={isFetching || loading}
-            className="px-4 py-1.5 bg-fuchsia-600 text-white text-sm rounded-lg hover:bg-fuchsia-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
-            {isFetching
-              ? <><Loader2 className="w-4 h-4 animate-spin" />{progress ? `${progress.done}/${progress.total} สาขา` : 'กำลังคำนวณ'}</>
-              : 'คำนวณรายงาน'}
-          </button>
-        </div>
+        {usageSource === 'closing' ? (
+          /* ฐานปิดรอบไม่ได้เลือกวันเอง — ช่วงของแต่ละสาขามาจากวันที่สาขานั้นปิดรอบจริง */
+          <div className="flex shrink-0 items-center gap-2 bg-gradient-to-r from-indigo-50 to-sky-50 border border-indigo-100 p-2 rounded-xl">
+            <Calendar className="w-4 h-4 text-indigo-500 ml-1" />
+            <span className="text-sm font-medium text-gray-700 whitespace-nowrap">รอบเดือน :</span>
+            <select value={closingMonth} onChange={e => setClosingMonth(e.target.value)} disabled={loadingMonths}
+              className="px-2 py-1.5 border border-gray-200 rounded-lg bg-white text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-60">
+              {loadingMonths && <option value="">กำลังโหลดรอบเดือน…</option>}
+              {!loadingMonths && monthOptions.length === 0 && (
+                <option value={closingMonth}>{closingMonth ? monthLabel(closingMonth) : 'รอบล่าสุดที่มีข้อมูล'}</option>
+              )}
+              {monthOptions.map(m => <option key={m} value={m}>{monthLabel(m)}</option>)}
+            </select>
+            <button onClick={fetchReport} disabled={isFetching || loading || loadingMonths}
+              className="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
+              {isFetching
+                ? <><Loader2 className="w-4 h-4 animate-spin" />{progress ? `${progress.done}/${progress.total} สาขา` : 'กำลังคำนวณ'}</>
+                : 'คำนวณรายงาน'}
+            </button>
+          </div>
+        ) : (
+          <div className="flex shrink-0 items-center gap-2 bg-gradient-to-r from-fuchsia-50 to-pink-50 border border-fuchsia-100 p-2 rounded-xl">
+            <span className="text-sm font-medium text-gray-700 ml-2 whitespace-nowrap">วันที่ :</span>
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+              className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
+            <span className="text-gray-500 text-sm">-</span>
+            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+              className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500" />
+            <button onClick={fetchReport} disabled={isFetching || loading}
+              className="px-4 py-1.5 bg-fuchsia-600 text-white text-sm rounded-lg hover:bg-fuchsia-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
+              {isFetching
+                ? <><Loader2 className="w-4 h-4 animate-spin" />{progress ? `${progress.done}/${progress.total} สาขา` : 'กำลังคำนวณ'}</>
+                : 'คำนวณรายงาน'}
+            </button>
+          </div>
+        )}
 
-        <div className="flex items-center gap-2 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 p-2 rounded-xl">
+        <div className="flex shrink-0 items-center gap-2 bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 p-2 rounded-xl">
           <button onClick={exportExcel} disabled={!report || visibleRows.length === 0}
             className="px-4 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-2 transition-colors whitespace-nowrap">
             <Download className="w-4 h-4" /> Export Excel
           </button>
         </div>
+      </div>
+
+      {/* แถวล่าง: ค้นหา + การเรียง — แยกมาอีกบรรทัดให้ช่องค้นหากว้างพอพิมพ์ชื่อไอเทมยาว ๆ */}
+      <div className="flex flex-col sm:flex-row gap-2 mb-4">
+        <div className="relative flex-1 min-w-0">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <Search className="h-5 w-5 text-gray-400" />
+          </div>
+          <input type="text"
+            className="block w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-fuchsia-500 focus:border-fuchsia-500 sm:text-sm"
+            placeholder="ค้นหาด้วยรหัส / ชื่อสินค้า / หมวดจัดเก็บ..."
+            value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+        </div>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          className="border border-gray-200 rounded-xl px-3 py-3 bg-white text-sm focus:outline-none focus:ring-1 focus:ring-fuchsia-500 text-gray-700 sm:w-auto">
+          <option value="usage">เรียงตามยอดใช้รวม (มาก→น้อย)</option>
+          <option value="deviation">เรียงตามจำนวนสาขาที่ใช้เกินค่ากลาง</option>
+          <option value="storageCat">เรียงตามหมวดจัดเก็บ</option>
+          <option value="productId">เรียงตามรหัสสินค้า</option>
+          <option value="name">เรียงตามชื่อสินค้า</option>
+        </select>
       </div>
 
       {/* ติ๊กสาขาเพิ่มหลังคำนวณไปแล้ว — บอกให้ชัดว่าคอลัมน์ยังไม่โผล่เพราะยังไม่ได้ดึง ไม่ใช่เพราะไม่มีข้อมูล */}
@@ -506,7 +788,9 @@ export default function StockUsagePerHead() {
             <div className="bg-white border border-fuchsia-100 rounded-2xl p-3">
               <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Package className="w-3.5 h-3.5" /> สาขาที่ดึงข้อมูลได้</div>
               <div className="text-xl font-bold text-fuchsia-600 mt-1">{summary.okCount} / {summary.total}</div>
-              <div className="text-[10px] text-gray-400 mt-0.5">{report.from} ถึง {report.to}</div>
+              <div className="text-[10px] text-gray-400 mt-0.5">
+                {report.source === 'closing' ? `รอบ${monthLabel(report.month)} · ` : ''}{report.from} ถึง {report.to}
+              </div>
             </div>
             <div className="bg-white border border-purple-100 rounded-2xl p-3">
               <div className="text-[11px] text-gray-500 flex items-center gap-1.5"><Users className="w-3.5 h-3.5" /> จำนวนหัวลูกค้ารวม</div>
@@ -544,9 +828,9 @@ export default function StockUsagePerHead() {
             <span className="text-[11px] font-semibold text-gray-500 mr-1">จำนวนหัวลูกค้าที่ใช้หาร :</span>
             {activeBranches.map(b => (
               <span key={b.key}
-                title={b.ok
+                title={(b.ok
                   ? (b.covers ? `นับจาก${b.coversSource === 'coverAll' ? ' Cover All ของบิล' : 'จานบุฟเฟต์ที่จ่ายจริง'}` : 'ดึงยอดใช้ได้ แต่ไม่มีจำนวนหัว — คิดต่อหัวไม่ได้')
-                  : b.error}
+                  : b.error) + (b.from ? ` · ช่วง ${b.from} ถึง ${b.to}` : '')}
                 className={`rounded-full px-2.5 py-0.5 text-[11px] border ${
                   !b.ok ? 'border-red-200 bg-red-50 text-red-700'
                     : b.covers ? 'border-purple-200 bg-purple-50 text-purple-700'
@@ -557,6 +841,18 @@ export default function StockUsagePerHead() {
               </span>
             ))}
           </div>
+
+          {report.source === 'closing' && (
+            <div className="mb-3 flex items-start gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-[11px] text-indigo-800 leading-relaxed">
+              <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <span>
+                ยอดใช้รอบ{monthLabel(report.month)} = <b>ยกมา (ปิดรอบ{monthLabel(report.prevMonth)}) + รับเข้า − ปิดรอบ{monthLabel(report.month)}</b> ·
+                แต่ละสาขาใช้ช่วงวันของตัวเอง (วันถัดจากวันที่ปิดรอบก่อนหน้า ถึงวันที่ปิดรอบของรอบนี้) ทั้งยอดรับเข้าและจำนวนหัว —
+                ชี้ที่ชื่อสาขาเพื่อดูช่วงวันของสาขานั้น ·
+                ยอดติดลบ = นับได้มากกว่ายกมา+รับเข้า (จดพลาด หรือของมาไม่ทันบันทึก) จะไม่ถูกนำไปคิดค่ากลาง
+              </span>
+            </div>
+          )}
         </>
       )}
 
@@ -569,7 +865,9 @@ export default function StockUsagePerHead() {
         ) : !report ? (
           <div className="py-20 text-center text-gray-400">
             <BarChart3 className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-            <p className="text-sm">เลือกสาขาที่จะเทียบ ตั้งช่วงวันที่ แล้วกด “คำนวณรายงาน”</p>
+            <p className="text-sm">
+              เลือกสาขาที่จะเทียบ {usageSource === 'closing' ? 'เลือกรอบเดือน' : 'ตั้งช่วงวันที่'} แล้วกด “คำนวณรายงาน”
+            </p>
             <p className="text-xs mt-1 text-gray-400">ยิงทีละ {BRANCH_BATCH} สาขา · เลือกสาขาน้อยลงจะเร็วขึ้นตามจำนวนที่เลือก</p>
           </div>
         ) : activeBranches.length === 0 ? (
@@ -645,13 +943,16 @@ export default function StockUsagePerHead() {
                         return (
                           <React.Fragment key={i}>
                             {showUsage && (
-                              <td className="px-3 py-2 text-center text-[12px] text-slate-600 border-l-2 border-purple-100 whitespace-nowrap">
+                              <td className={`px-3 py-2 text-center text-[12px] border-l-2 border-purple-100 whitespace-nowrap ${
+                                c.usage < 0 ? 'text-amber-600 font-semibold' : 'text-slate-600'}`}
+                                title={c.usage < 0 ? 'ยอดติดลบ = นับได้มากกว่ายกมา + รับเข้า (จดพลาด หรือของมาไม่ทันบันทึก)' : undefined}>
                                 {c.usage === null ? <span className="text-gray-300">-</span> : c.usage ? fmtUsage(c.usage) : '0'}
                               </td>
                             )}
                             {showPerHead && (
                               <td className={`px-3 py-2 text-center whitespace-nowrap ${showUsage ? '' : 'border-l-2 border-purple-100'}`}>
                                 {c.perHead === null ? <span className="text-gray-300 text-sm">-</span>
+                                  : c.usage < 0 ? <span className="text-amber-500 text-sm" title="ยอดติดลบ — ไม่นำไปคิดค่ากลาง">ติดลบ</span>
                                   : !c.usage ? <span className="text-gray-300 text-sm" title="ช่วงนี้สาขานี้ไม่ได้ใช้ไอเทมนี้เลย — ไม่นำไปคิดค่ากลาง">0</span> : (
                                   <>
                                     <div className={`text-[12px] font-bold ${tone.text}`}>{fmtPerHead(c.perHead)}</div>
@@ -677,7 +978,10 @@ export default function StockUsagePerHead() {
               <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded bg-red-100 inline-block" /> ใช้ต่อหัวสูงกว่าค่ากลาง &gt; {DEVIATION_PCT}%</span>
               <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded bg-cyan-100 inline-block" /> ต่ำกว่าค่ากลาง &gt; {DEVIATION_PCT}%</span>
               <span className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded bg-slate-100 inline-block" /> ใกล้เคียงค่ากลาง</span>
-              <span className="ml-auto">ค่ากลาง = ยอดใช้รวม ÷ จำนวนหัวรวม ของสาขาที่ใช้ไอเทมนั้น (ถ่วงน้ำหนักตามขนาดสาขา)</span>
+              <span className="ml-auto">
+                {report.source === 'closing' ? 'ยอดใช้ = ยกมา + รับเข้า − ปิดรอบ · ' : 'ยอดใช้ = ยอดขายจริง × สูตร BOM · '}
+                ค่ากลาง = ยอดใช้รวม ÷ จำนวนหัวรวม ของสาขาที่ใช้ไอเทมนั้น (ถ่วงน้ำหนักตามขนาดสาขา)
+              </span>
             </div>
           </>
         )}
@@ -885,7 +1189,9 @@ function DetailModal({ row, report, settings, loadingSettings, onClose }) {
             <div className="border border-blue-100 bg-blue-50/50 rounded-xl p-3">
               <div className="text-[10px] text-blue-600">ยอดใช้รวม</div>
               <div className="text-lg font-bold text-blue-900">{fmtUsage(row.totalUsage)}</div>
-              <div className="text-[10px] text-blue-400">{report.from} ถึง {report.to}</div>
+              <div className="text-[10px] text-blue-400">
+                {report.source === 'closing' ? `รอบ${monthLabel(report.month)}` : `${report.from} ถึง ${report.to}`}
+              </div>
             </div>
             <div className="border border-red-100 bg-red-50/50 rounded-xl p-3">
               <div className="text-[10px] text-red-600">สาขาที่เกินค่ากลาง &gt;{DEVIATION_PCT}%</div>
@@ -989,7 +1295,10 @@ function DetailModal({ row, report, settings, loadingSettings, onClose }) {
 
         <div className="p-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
           <span className="text-[10.5px] text-gray-400">
-            ยอดใช้ = ยอดขายจริง × สูตร BOM · จำนวนหัว = จานบุฟเฟต์ที่จ่ายจริง (WRM/WMT ใช้ Cover All)
+            {report.source === 'closing'
+              ? `ยอดใช้ = ยกมา (ปิดรอบ${monthLabel(report.prevMonth)}) + รับเข้า − ปิดรอบ${monthLabel(report.month)}`
+              : 'ยอดใช้ = ยอดขายจริง × สูตร BOM'}
+            {' · '}จำนวนหัว = จานบุฟเฟต์ที่จ่ายจริง (WRM/WMT ใช้ Cover All)
           </span>
           <button className="px-4 py-2 bg-fuchsia-100 text-fuchsia-700 rounded-lg text-sm font-medium hover:bg-fuchsia-200 transition-colors"
             onClick={onClose}>ปิดหน้าต่าง</button>
