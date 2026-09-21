@@ -18,6 +18,52 @@ import { useBranches } from '../lib/useBranches';
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
   : Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// ค่าจากช่องกรอกเป็นสตริงเสมอ — ตารางกับตัวกรองคาดหวังตัวเลขหรือ null (ว่าง = ยังไม่ได้กรอก ไม่ใช่ 0)
+const numOrNull = (v) => {
+  const t = String(v ?? '').trim();
+  if (t === '') return null;
+  const n = Number(t.replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * แถวในตารางที่สะท้อนค่าที่เพิ่งบันทึก — ใช้แปะทับทันทีโดยไม่ต้องรอโหลดข้อมูลใหม่ทั้งชุด
+ *
+ * "สาขาที่ใช้" เอาชุดที่ฝั่งเซิร์ฟเวอร์อ่านกลับมาจากฐาน/ชีทหลังเขียนเสร็จก่อนเสมอ (saved.branches)
+ * ไม่ใช่ค่าที่กรอกในฟอร์ม — ที่เห็นบนตารางจึงเป็นของจริงที่เข้าไปแล้ว ไม่ใช่การเดา
+ * (เซิร์ฟเวอร์รุ่นเก่าที่ยังไม่คืนช่องนี้มา ค่อยถอยไปใช้ค่าที่ส่งไป แล้วให้การโหลดรอบถัดไปแก้ให้)
+ *
+ * @param {object} sent    payload ชุดเดียวกับที่ยิงไป /api/qcrd-save
+ * @param {object} saved   res.data ที่ตอบกลับมา
+ * @param {{source?: string, prev?: object|null}} opts
+ */
+export function savedItemRow(sent, saved = {}, { source = 'sheet', prev = null } = {}) {
+  const unit = String(sent.unit || '').trim();
+  return {
+    ...(prev || {}),
+    code: String(sent.code || '').trim(),
+    name: String(sent.name || '').trim(),
+    price: numOrNull(sent.price),
+    unit: unit || (prev?.unit || ''),
+    // กรอกหน่วยเองแล้ว = ไม่ใช่หน่วยที่ระบบวิเคราะห์ให้อีกต่อไป (ป้าย "วิเคราะห์" ต้องหาย)
+    unitSource: unit ? (source === 'sql' ? 'sql' : 'sheet') : (prev?.unitSource || 'auto'),
+    status: sent.status || 'ใช้งาน',
+    subs: [...(sent.subs || [])],
+    converter: numOrNull(sent.converter),
+    usedBranches: Array.isArray(saved.branches) ? [...saved.branches] : [...(sent.branches || [])],
+    storeCategory: String(sent.storeCategory || '').trim(),
+    posItemId: String(sent.posItemId || '').trim(),
+    requestUnit: String(sent.requestUnit || '').trim(),
+    itemType: sent.itemType || '',
+    usedWhen: sent.usedWhen || '',
+    _row: saved.row ?? prev?._row,
+  };
+}
+
+/** เทียบรายชื่อสาขาแบบไม่สนลำดับ — ใช้ตรวจว่าที่อ่านกลับมาตรงกับที่เพิ่งบันทึกไหม */
+const sameBranches = (a = [], b = []) =>
+  [...a].map(String).sort().join(',') === [...b].map(String).sort().join(',');
+
 // เทียบรหัสแบบมองข้ามเลข 0 นำหน้า — ระบบคลังใช้ 01000078 แต่ชีท item เก็บ 1000078
 const codeMatch = (code, q) => {
   const c = String(code).toLowerCase(), s = q.toLowerCase();
@@ -74,19 +120,39 @@ export default function QcRdItems() {
   // s-maxage=30 + stale-while-revalidate=120 — เปิดหน้านี้ใหม่/กด F5 หลังเพิ่งบันทึก
   // จึงมีสิทธิ์ได้ของก่อนบันทึกกลับมาเป็นนาที ๆ ซึ่งดูเหมือน "บันทึกแล้วข้อมูลไม่เปลี่ยน"
   // หน้านี้เป็นหน้าแก้ไข ต้องเห็นของจริงเสมอ ยอมเสียเวลาโหลดชีทใหม่ทุกรอบ
-  const load = ({ quiet = false } = {}) => {
+  //
+  // expect = { code, branches } ที่เพิ่งบันทึกไป — โหลดเสร็จแล้วเทียบกับของที่อ่านกลับมา
+  // ไม่ตรง = เขียนไม่เข้าจริง (หรืออ่านมาคนละที่กับที่เขียน) ต้องบอก ไม่ใช่ปล่อยให้ค่าเก่า
+  // เด้งกลับมาทับเงียบ ๆ แล้วคนใช้มานั่งงงว่าทำไมกดบันทึกแล้วไม่อัพเดท
+  const load = ({ quiet = false, expect = null } = {}) => {
     if (!quiet) setLoading(true);
     fetch(`/api/qcrd?sheet=item&t=${Date.now()}`)
       .then(r => r.json())
       .then(res => {
         if (res.status === 'success') {
-          setItems(res.data || []);
+          const data = res.data || [];
+          setItems(data);
           setSource(res.source || 'sheet');
           setDegraded(Boolean(res.degraded));
           setError('');
           // โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท — ต้องบอก ไม่งั้นแก้ไปแล้วเห็นข้อมูลเก่าจะงง
           // (ตั้งเฉพาะตอนมี warning จริง ไม่งั้นจะไปลบข้อความ "บันทึกสำเร็จ" ที่เพิ่งขึ้นมา)
           if (res.warning) setToast({ ok: false, msg: res.warning });
+          if (expect) {
+            const row = data.find(i => String(i.code).trim() === expect.code);
+            const got = row?.usedBranches || [];
+            if (!row) {
+              setToast({ ok: false, msg: `บันทึก ${expect.code} ขึ้นว่าสำเร็จ แต่อ่านกลับมาไม่เจอรหัสนี้ในทะเบียน — ข้อมูลอาจไม่ได้เข้าจริง` });
+            } else if (!sameBranches(got, expect.branches)) {
+              setToast({
+                ok: false,
+                msg: `บันทึก ${expect.code} ขึ้นว่าสำเร็จ แต่สาขาที่อ่านกลับมาเป็น `
+                  + `"${got.join(', ') || '(ไม่มี)'}" ไม่ใช่ "${expect.branches.join(', ') || '(ไม่มี)'}" `
+                  + '— ตอนนี้ตารางแสดงตามที่อ่านกลับมา ลองกดรีเฟรชอีกครั้ง '
+                  + 'ถ้ายังไม่ตรงแปลว่าที่เขียนกับที่อ่านไม่ใช่ที่เดียวกัน',
+              });
+            }
+          }
         }
         else setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
       })
@@ -277,25 +343,40 @@ export default function QcRdItems() {
     setSavingItem(true);
     setToast(null);
     setFormMsg(null);
+    const sent = {
+      code, row: editItem.row, name: editItem.name.trim(),
+      status: editItem.status, subs: editItem.subs.slice(0, 3),
+      price: editItem.price, unit: (editItem.unit || '').trim(), converter: editItem.converter,
+      branches: editItem.branches, storeCategory: (editItem.storeCategory || '').trim(),
+      // itemID ของ POS + หน่วยเบิก — ฝั่งสต๊อก/ตัดยอดขายใช้สองช่องนี้ เดิมแก้ได้ที่ชีทเท่านั้น
+      posItemId: (editItem.posItemId || '').trim(), requestUnit: (editItem.requestUnit || '').trim(),
+      // ประเภท/ใช้กับ — ไว้แยกต้นทุนบรรจุภัณฑ์ระหว่างทานที่ร้านกับห่อกลับบ้าน
+      itemType: editItem.itemType === PACKAGING ? PACKAGING : MATERIAL,
+      usedWhen: editItem.itemType === PACKAGING ? (editItem.usedWhen || USED_WHEN[0]) : '',
+    };
+    const isNew = editItem.isNew;
     try {
-      const res = await apiCall(editItem.isNew ? 'addItem' : 'saveItem', {
-        code, row: editItem.row, name: editItem.name.trim(),
-        status: editItem.status, subs: editItem.subs.slice(0, 3),
-        price: editItem.price, unit: (editItem.unit || '').trim(), converter: editItem.converter,
-        branches: editItem.branches, storeCategory: (editItem.storeCategory || '').trim(),
-        // itemID ของ POS + หน่วยเบิก — ฝั่งสต๊อก/ตัดยอดขายใช้สองช่องนี้ เดิมแก้ได้ที่ชีทเท่านั้น
-        posItemId: (editItem.posItemId || '').trim(), requestUnit: (editItem.requestUnit || '').trim(),
-        // ประเภท/ใช้กับ — ไว้แยกต้นทุนบรรจุภัณฑ์ระหว่างทานที่ร้านกับห่อกลับบ้าน
-        itemType: editItem.itemType === PACKAGING ? PACKAGING : MATERIAL,
-        usedWhen: editItem.itemType === PACKAGING ? (editItem.usedWhen || USED_WHEN[0]) : '',
+      const res = await apiCall(isNew ? 'addItem' : 'saveItem', sent);
+
+      // ── แปะแถวในตารางทันที ไม่ต้องรอโหลดข้อมูลใหม่ทั้ง 2,600 รายการ ──
+      // ใช้ "สาขาที่เซิร์ฟเวอร์อ่านกลับมาจากฐานหลังเขียนเสร็จ" เป็นตัวตั้ง จึงเป็นของจริง ไม่ใช่การเดา
+      const saved = res.data || {};
+      const savedBranches = savedItemRow(sent, saved, { source }).usedBranches;
+      setItems(prev => {
+        const idx = prev.findIndex(i => String(i.code).trim() === code);
+        if (idx < 0) return [...prev, savedItemRow(sent, saved, { source })];
+        return prev.map((it, n) => (n === idx ? savedItemRow(sent, saved, { source, prev: it }) : it));
       });
+
       setToast({
         ok: syncOk(res),
-        msg: (editItem.isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ`) + syncNote(res),
+        msg: (isNew ? `เพิ่มวัตถุดิบ ${code} สำเร็จ` : `บันทึก ${code} สำเร็จ`)
+          + ` · ${savedBranches.length} สาขา` + syncNote(res),
       });
       setEditItem(null);
       setFormMsg(null);
-      load({ quiet: true });
+      // โหลดใหม่เบื้องหลังเพื่อยืนยันอีกชั้นว่าที่อ่านจากต้นทางตรงกับที่เพิ่งเขียนจริง
+      load({ quiet: true, expect: { code, branches: savedBranches } });
     } catch (err) {
       // กล่องยังเปิดค้างพร้อมข้อมูลที่กรอกไว้ — บอกสาเหตุตรงนี้เลย จะได้แก้แล้วกดใหม่ได้ทันที
       setFormMsg({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });

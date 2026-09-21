@@ -86,6 +86,49 @@ console.log('\nวัตถุดิบ (หน้า QC/RD > ไอเทม)')
 }
 
 {
+  // รอบ "บันทึกสาขา -> อ่านกลับ" บนฐานปลอมที่เก็บแถวจริง — เคสที่คนใช้เจอว่า
+  // กดบันทึกแล้วชิปสาขาในตารางไม่เปลี่ยน ต้องพิสูจน์ได้ว่าของที่คืนกลับมาคือของในฐานจริง
+  let branchRows = ['crm', 'hps', 'hrs', 'p90'].map(b => ({ item_key: '11000265', branch: b }));
+  const item = {
+    item_key: '11000265', item_code: '11000265', item_name: 'นมสด', price: 39, unit: 'ลิตร',
+    status: 'ใช้งาน', store_cat: null, converter: null, sub_item1: null, sub_item2: null,
+    sub_item3: null, item_type: 'วัตถุดิบ', used_when: null, pos_item_id: '4120', request_unit: '2',
+  };
+  const q = async (text, params = {}) => {
+    const t = String(text).replace(/\s+/g, ' ').trim();
+    if (t.startsWith('SELECT item_key FROM dbo.stock_item WHERE item_key')) return [{ item_key: params.k }];
+    if (t.startsWith('SELECT item_key, item_code')) return [item];
+    if (t.startsWith('SELECT item_key, branch FROM dbo.stock_item_branch')) return branchRows;
+    if (t.startsWith('SELECT branch FROM dbo.stock_item_branch WHERE item_key')) {
+      return branchRows.filter(r => r.item_key === params.k)
+        .map(r => ({ branch: r.branch })).sort((a, b) => a.branch.localeCompare(b.branch));
+    }
+    if (t.startsWith('DELETE FROM dbo.stock_item_branch')) {
+      branchRows = branchRows.filter(r => r.item_key !== params.k); return [];
+    }
+    if (t.startsWith('INSERT INTO dbo.stock_item_branch')) {
+      branchRows.push({ item_key: params.k, branch: params.b }); return [];
+    }
+    return [];
+  };
+  const core = createQcrd({ q, withTx: (fn) => fn({ tx: true }) });
+
+  // เอา HPS (สาขาที่ปิดกิจการแล้ว) ออก แล้วเพิ่ม WMT
+  const out = await core.actions.saveItem({
+    code: '11000265', name: 'นมสด', status: 'ใช้งาน', subs: [], price: '39', unit: 'ลิตร',
+    converter: '', branches: ['CRM', 'HRS', 'P90', 'WMT'], storeCategory: '',
+    posItemId: '4120', requestUnit: '2', itemType: 'วัตถุดิบ', usedWhen: '',
+  });
+  const want = ['CRM', 'HRS', 'P90', 'WMT'];
+  check('saveItem → คืนสาขาที่อ่านกลับจากฐานหลังเขียนเสร็จ',
+    JSON.stringify(out.branches) === JSON.stringify(want), `ได้ ${JSON.stringify(out.branches)}`);
+  const back = (await core.readItems())[0].usedBranches;
+  check('saveItem → อ่านทะเบียนใหม่แล้วได้สาขาชุดที่เพิ่งบันทึก',
+    JSON.stringify([...back].sort()) === JSON.stringify(want), `ได้ ${JSON.stringify(back)}`);
+  check('saveItem → สาขาที่ถอดออกหายไปจริง', !back.includes('HPS'));
+}
+
+{
   const { db, log } = fakeDb({ items: { 99001: 250 } });
   const { actions } = createQcrd(db);
   const out = await actions.deleteItem({ code: '00099001' });

@@ -452,7 +452,17 @@ function saveItem_(ss, data) {
     sh.getRange(row, 14).setValue(String(data.storeCategory || '').trim());
   }
   writeItemExtra_(sh, row, data);
-  return { status: 'success', data: { code: code, row: row } };
+  // อ่านสาขา (คอลัมน์ J) กลับมาจากชีทหลังเขียนเสร็จ คืนไปให้หน้าเว็บใช้เป็นตัวจริง
+  // (ฝั่ง SQL คืนช่องนี้มาเหมือนกัน หน้าเว็บจึงใช้ชุดเดียวกันได้ไม่ว่าจะโหมดไหน)
+  return { status: 'success', data: { code: code, row: row, branches: readBranches_(sh, row) } };
+}
+
+// สาขาที่ใช้ของแถวนั้นตามที่อยู่ในชีทจริง ณ ตอนนี้
+function readBranches_(sh, row) {
+  return String(sh.getRange(row, 10).getValue() || '')
+    .split(',')
+    .map(function (b) { return b.trim(); })
+    .filter(function (b) { return b; });
 }
 
 // เพิ่มวัตถุดิบใหม่: ต่อแถวใหม่ท้ายชีท item (กันรหัสซ้ำ)
@@ -485,7 +495,7 @@ function addItem_(ss, data) {
     String(data.posItemId || '').trim(), String(data.requestUnit || '').trim(), '', storeCategory,
   ]]);
   writeItemExtra_(sh, newRow, data);
-  return { status: 'success', data: { code: code, row: newRow } };
+  return { status: 'success', data: { code: code, row: newRow, branches: readBranches_(sh, newRow) } };
 }
 
 // ประเภทวัตถุดิบ (O) และใช้กับ (P) ของชีท item — เขียนเฉพาะที่ส่งมา พร้อมเติมหัวตารางให้ถ้ายังว่าง
