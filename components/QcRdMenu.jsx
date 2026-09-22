@@ -1066,6 +1066,19 @@ export default function QcRdMenu() {
           runningBase={runningBase}
           groupList={groupList}
           onClose={() => setSrcModal(false)}
+          onPick={(row) => {
+            // เลือกทีละตัว = เปิดฟอร์มเพิ่มเมนูที่กรอกให้แล้ว ยังไม่บันทึก
+            // ผู้ใช้ใส่สูตรต่อได้ทันทีแล้วค่อยกดบันทึกเอง (เมนูที่ดึงมายังไงก็ต้องมาใส่สูตรอยู่ดี)
+            setSrcModal(false);
+            setFormMsg(null);
+            setEditMenu({
+              code: row.code, name: row.name,
+              price: row.price === null || row.price === undefined ? '' : String(row.price),
+              group: row.group || '', newGroupName: '',
+              yieldQty: '', yieldUnit: '', unitEdits: {}, isNew: true,
+              items: [emptyIng()], sources: [],
+            });
+          }}
           onSaved={(n) => {
             setToast({ ok: true, msg: `เพิ่มเมนูจากฐานข้อมูล ${n} รายการแล้ว` });
             loadAll({ quiet: true, only: ['menu'] });
@@ -1120,7 +1133,7 @@ async function askMenuSource(params) {
   return json.data;
 }
 
-function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onClose, onSaved }) {
+function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onClose, onSaved, onPick }) {
   const [schema, setSchema] = useState(null);      // ผลการจับคู่ของทั้งสามต้นทาง
   const [schemaErr, setSchemaErr] = useState('');  // อ่านผลจับคู่ไม่ได้ — ไม่ควรบังตารางที่ยังใช้ได้
   const [tab, setTab] = useState('aoringo');
@@ -1201,6 +1214,21 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
     ? (assigned[keyOf(r, r.srcId || src.id)] || '')
     : r.newCode);
 
+  /**
+   * กดที่แถว = เอาเมนูตัวนั้นไปเปิดฟอร์มเลย (ไม่บันทึกทันที)
+   * รหัสของต้นทางแบบ running6 ยังไม่ถูกจองจนกว่าจะบันทึกจริง จึงให้เลขถัดไปที่ว่างอยู่
+   * ถ้ากดหลายตัวติดกันโดยยังไม่บันทึก จะได้เลขเดียวกัน — กันด้วยการปิดหน้าต่างทันทีที่กด
+   */
+  const pickOne = (r) => {
+    if (!onPick) return;
+    const p = String(src.prefix || '').toUpperCase();
+    const code = running ? `${p}${pad6((runningBase?.[p] || 0) + 1)}` : r.newCode;
+    // หมวดจากต้นทางใช้ได้ต่อเมื่อรหัสตรงกับหมวดที่มีในทะเบียนจริง (NaraiPos.MenuCode ตรง ส่วน
+    // Aoringo เป็น CategoryId และ HumLai เป็นชื่อไทย ซึ่งไม่ใช่รหัสหมวดของที่นี่) ไม่ตรงก็ใช้ที่เลือกท้ายหน้าต่าง
+    const presetGroup = groupList.some(g => g.code === r.group) ? r.group : group;
+    onPick({ code, name: r.name, price: r.price, group: presetGroup });
+  };
+
   const toggle = (r) => setPicked(prev => {
     const k = keyOf(r);
     const next = { ...prev };
@@ -1261,7 +1289,8 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
               <Database size={18} className="text-indigo-500" /> เพิ่มเมนูจากฐานข้อมูล
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              เลือกเมนูจาก POS ฐานอื่นมาเพิ่มเข้าทะเบียนเมนูหลัก — เมนูที่เพิ่มแล้วยังไม่มีสูตร กดที่แถวในตารางเพื่อใส่วัตถุดิบต่อได้
+              <b>กดที่แถว</b> = เปิดฟอร์มเมนูที่กรอกรหัส/ชื่อ/ราคาให้แล้ว ใส่สูตรต่อได้เลย (ยังไม่บันทึกจนกว่าจะกดบันทึกในฟอร์ม)
+              · <b>ติ๊กช่องซ้าย</b> = เลือกไว้หลายเมนูแล้วบันทึกรวดเดียว (ยังไม่มีสูตร ค่อยมาใส่ทีหลัง)
             </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 flex-shrink-0"><X size={20} /></button>
@@ -1338,10 +1367,13 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
                   const willBe = codeFor(r);
                   return (
                     <tr key={keyOf(r)}
-                      onClick={() => !dup && toggle(r)}
+                      onClick={() => !dup && pickOne(r)}
+                      title={dup ? 'มีเมนูนี้ในทะเบียนแล้ว' : 'กดเพื่อเปิดฟอร์มใส่สูตรของเมนูนี้'}
                       className={`border-b border-slate-50 ${dup ? 'bg-slate-50/70 text-slate-400' : `cursor-pointer ${on ? 'bg-indigo-50/60' : 'hover:bg-slate-50'}`}`}>
-                      <td className="px-4 py-2">
-                        <input type="checkbox" checked={on} disabled={dup} readOnly className="rounded" />
+                      {/* ติ๊กช่องนี้ = เลือกไว้บันทึกรวดเดียวหลายเมนู (ไม่เปิดฟอร์ม) จึงต้องกันไม่ให้คลิกทะลุไปถึงแถว */}
+                      <td className="px-4 py-2" onClick={e => { e.stopPropagation(); if (!dup) toggle(r); }}>
+                        <input type="checkbox" checked={on} disabled={dup} readOnly className="rounded"
+                          title="เลือกไว้บันทึกพร้อมกันหลายเมนู (ยังไม่ใส่สูตร)" />
                       </td>
                       <td className="px-4 py-2 font-mono text-xs">
                         <span className="text-slate-400">{r.code}</span>
