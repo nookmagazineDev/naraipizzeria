@@ -251,6 +251,8 @@ powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart
 | GET | `/qcrd/menu` `/qcrd/bom` `/qcrd/item` `/qcrd/menugroup` | ข้อมูล QC/RD จากฐาน InventoryNarai |
 | POST | `/qcrd/save` | เพิ่ม/แก้/ลบ ของ QC/RD (ต้องมี header `x-api-key`) |
 | GET | `/qcrd/ping` | เช็กการเชื่อมต่อฐาน QC/RD + เขียนได้ไหม |
+| GET | `/qcrd/menu-source-schema` | ตาราง/คอลัมน์ที่จับคู่ได้ของ Aoringo · HumlaiPOS · NaraiPos |
+| GET | `/qcrd/menu-source?src=aoringo&q=…` | ทะเบียนเมนูของฐานนั้น (ดู `docs/qcrd-menu-source.md`) |
 | GET | `/sheets/plan` | แพลนสั่งของทุกสาขา (dbo.stock_plan) |
 | GET | `/sheets/closing?branch=crm` | ยอดยกมาล่าสุดของสาขานั้น (dbo.stock_closing) |
 | GET | `/sheets/expense-ref` `/sheets/expense` | รหัสค่าใช้จ่าย · ค่าใช้จ่ายที่บันทึกแล้ว |

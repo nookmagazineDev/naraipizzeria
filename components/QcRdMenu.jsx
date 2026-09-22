@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save } from 'lucide-react';
+import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save, Database } from 'lucide-react';
 import { apiCall, syncNote, syncOk } from '../lib/qcrdApi';
 import { rcpNameKey, rcpItemKey } from '../lib/rcpMatch';
 import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
@@ -14,6 +14,9 @@ import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
  * เมนูที่ยังไม่มีสูตรในแท็บ BOM จะไปหยิบสูตรฝั่ง POS (RcpDtls) มาแสดงแทนผ่าน /api/rcp
  * จับคู่ด้วยชื่อเมนู (rcpNameKey) เพราะ RcpDtls ไม่มีคอลัมน์รหัสเมนูให้ join — ดู lib/rcpMatch.js
  * สูตรชุดนั้น "อ่านอย่างเดียว" แก้ไม่ได้จากหน้านี้ เพราะเป็นข้อมูลของฝั่ง POS ไม่ใช่ของชีทต้นทุนเมนู
+ *
+ * ปุ่ม "เพิ่มจากฐานข้อมูล" เปิดตัวเลือกเมนูจาก POS ฐานอื่น (Aoringo / HumlaiPOS / NaraiPos)
+ * ผ่าน /api/qcrd-menu-source แล้วบันทึกด้วย action saveMenu ตัวเดิม — ดู MenuSourcePicker ท้ายไฟล์
  */
 
 const fmt = (v, d = 2) => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -50,6 +53,7 @@ export default function QcRdMenu() {
   const [rcpLines, setRcpLines] = useState({});   // rtsId -> items[] (แคชไว้ ไม่โหลดซ้ำ)
   const [rcpLoading, setRcpLoading] = useState(false);
   const [groupModal, setGroupModal] = useState(false);
+  const [srcModal, setSrcModal] = useState(false);   // ตัวเลือกเมนูจากฐานอื่น (ดู MenuSourcePicker)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -188,6 +192,15 @@ export default function QcRdMenu() {
     menus.forEach(m => { if (m.group && !map.has(m.group)) map.set(m.group, m.groupName || `หมวด ${m.group}`); });
     return [...map].map(([code, name]) => ({ code, name })).sort((a, b) => a.name.localeCompare(b.name, 'th'));
   }, [groups, menus]);
+
+  // รหัสที่มีในทะเบียนแล้ว — ตัวเลือก "เพิ่มจากฐานข้อมูล" ใช้กันไม่ให้เลือกตัวซ้ำมาบันทึกทับ
+  // เทียบแบบไม่สนตัวพิมพ์และมองข้าม 0 นำหน้า ด้วยเหตุผลเดียวกับ menu_key ในฐาน
+  // (รหัสเดียวกันถูกเขียนทั้ง '00123' และ '123' มาตั้งแต่สมัยชีท)
+  const existingCodes = useMemo(() => {
+    const set = new Set();
+    menus.forEach(m => { normCodeKeys(m.code).forEach(k => set.add(k)); });
+    return set;
+  }, [menus]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
@@ -520,6 +533,10 @@ export default function QcRdMenu() {
                 {toast.ok ? <CheckCircle size={13} /> : <AlertCircle size={13} />}{toast.msg}
               </span>
             )}
+            <button onClick={() => setSrcModal(true)} disabled={degraded} title={degraded ? LOCK_HINT : 'ดึงเมนูจากฐาน Aoringo / HumlaiPOS / NaraiPos'}
+              className="inline-flex items-center gap-2 bg-white hover:bg-indigo-50 disabled:bg-slate-100 disabled:text-slate-400 text-indigo-600 border border-indigo-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+              <Database size={14} /> เพิ่มจากฐานข้อมูล
+            </button>
             <button onClick={openAdd} disabled={degraded} title={degraded ? LOCK_HINT : ''}
               className="inline-flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
               <Plus size={14} /> เพิ่มเมนู
@@ -1015,6 +1032,304 @@ export default function QcRdMenu() {
           onClose={() => setGroupModal(false)}
           onSaved={() => loadAll({ quiet: true, only: ['menugroup', 'menu'] })} />
       )}
+
+      {srcModal && (
+        <MenuSourcePicker
+          existing={existingCodes}
+          groupList={groupList}
+          onClose={() => setSrcModal(false)}
+          onSaved={(n) => {
+            setToast({ ok: true, msg: `เพิ่มเมนูจากฐานข้อมูล ${n} รายการแล้ว` });
+            loadAll({ quiet: true, only: ['menu'] });
+          }} />
+      )}
+    </div>
+  );
+}
+
+/* ════════════════ เพิ่มเมนูจากฐานข้อมูลของ POS ตัวอื่น ════════════════
+ *
+ * ต้นทางสามฐานบนเครื่องที่ร้าน อ่านผ่าน /api/qcrd-menu-source (อ่านอย่างเดียว):
+ *   Aoringo.dbo.MenuItem  → บันทึกด้วยรหัส AO + รหัสต้นทาง
+ *   HumlaiPOS.dbo.Menu    → บันทึกด้วยรหัส HM + รหัสต้นทาง
+ *   NaraiPos.dbo.Item     → ใช้รหัสเดิม ไม่เติมตัวนำหน้า
+ *
+ * การบันทึกใช้ action saveMenu ตัวเดิม ทีละเมนูตามลำดับ ไม่ได้เปิดทางเขียนใหม่
+ *   - ได้ทั้งโหมดชีทและโหมด SQL ฟรี ๆ (ทั้งสองทางรู้จัก saveMenu อยู่แล้ว)
+ *   - พลาดกลางทางแล้วยังบอกได้ว่าเมนูไหนเข้าแล้ว เมนูไหนยัง ซึ่งการยิงก้อนเดียวบอกไม่ได้
+ *
+ * ⚠️ เมนูที่รหัสขึ้นต้นด้วย AO/HM จะไม่มีวันจับคู่กับเลขไอเทมที่ POS ของนารายณ์ส่งมา
+ *    (ระบบจับคู่ด้วย menu_key) จึงเป็นเมนูไว้คิดต้นทุน/ทำสูตรเท่านั้น ไม่โผล่ในรายงานยอดใช้
+ *    ส่วนของ NaraiPos ที่ไม่เติมตัวนำหน้าจะจับคู่ได้ตามปกติ
+ */
+
+/** คีย์เทียบรหัสซ้ำ — ตัวพิมพ์เล็ก และเวอร์ชันที่ตัด 0 นำหน้าออก (กติกาเดียวกับ menu_key) */
+function normCodeKeys(code) {
+  const s = String(code ?? '').trim().toLowerCase();
+  if (!s) return [];
+  const stripped = s.replace(/^0+/, '');
+  return stripped && stripped !== s ? [s, stripped] : [s];
+}
+
+const SOURCE_NOTE = {
+  aoringo: 'บันทึกแล้วรหัสจะขึ้นต้นด้วย AO',
+  humlai: 'บันทึกแล้วรหัสจะขึ้นต้นด้วย HM',
+  naraipos: 'ใช้รหัสเดิมไม่เติมตัวนำหน้า จึงจับคู่กับยอดขายในรายงานได้',
+};
+
+async function askMenuSource(params) {
+  const res = await fetch(`/api/qcrd-menu-source?${params}`, { cache: 'no-store' });
+  const json = await res.json().catch(() => ({ status: 'error', message: 'เซิร์ฟเวอร์ตอบกลับมาไม่ใช่ JSON' }));
+  if (json.status !== 'success') throw new Error(json.message || 'อ่านข้อมูลไม่สำเร็จ');
+  return json.data;
+}
+
+function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
+  const [schema, setSchema] = useState(null);      // ผลการจับคู่ของทั้งสามต้นทาง
+  const [tab, setTab] = useState('aoringo');
+  const [typed, setTyped] = useState('');
+  const [query, setQuery] = useState('');          // ค่าที่หน่วงแล้ว (ยิงจริงด้วยตัวนี้)
+  const [includeInactive, setIncludeInactive] = useState(false);
+  const [result, setResult] = useState(null);      // { rows, limited, hiddenInactive, source }
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [picked, setPicked] = useState({});        // newCode -> แถวที่เลือกไว้ (ข้ามแท็บได้)
+  const [group, setGroup] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState(null);  // { done, total, name }
+  const [saved, setSaved] = useState(null);        // { ok: [], fail: [] }
+
+  // ต้นทางไหนอ่านได้บ้าง + จับคู่คอลัมน์ได้อะไร — ถามครั้งเดียวตอนเปิด
+  useEffect(() => {
+    let alive = true;
+    askMenuSource('schema=1')
+      .then(d => { if (alive) setSchema(d); })
+      .catch(err => { if (alive) setError(err.message); });
+    return () => { alive = false; };
+  }, []);
+
+  // หน่วงพิมพ์ก่อนยิง — ทุกครั้งที่ยิงคือคำสั่ง SQL ที่เครื่องร้าน ไม่ควรยิงทุกตัวอักษร
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(typed.trim()), 350);
+    return () => clearTimeout(t);
+  }, [typed]);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError('');
+    const qs = new URLSearchParams({ src: tab, limit: '100' });
+    if (query) qs.set('q', query);
+    if (includeInactive) qs.set('includeInactive', '1');
+    askMenuSource(qs.toString())
+      .then(d => { if (alive) { setResult(d); setLoading(false); } })
+      .catch(err => { if (alive) { setError(err.message); setResult(null); setLoading(false); } });
+    return () => { alive = false; };
+  }, [tab, query, includeInactive]);
+
+  const rows = result?.rows || [];
+  const isDup = (r) => normCodeKeys(r.newCode).some(k => existing.has(k));
+  const pickable = rows.filter(r => !isDup(r));
+  const pickedList = Object.values(picked);
+  const allPicked = pickable.length > 0 && pickable.every(r => picked[r.newCode]);
+
+  const toggle = (r) => setPicked(prev => {
+    const next = { ...prev };
+    if (next[r.newCode]) delete next[r.newCode]; else next[r.newCode] = r;
+    return next;
+  });
+  const toggleAll = () => setPicked(prev => {
+    const next = { ...prev };
+    if (allPicked) pickable.forEach(r => delete next[r.newCode]);
+    else pickable.forEach(r => { next[r.newCode] = r; });
+    return next;
+  });
+
+  const doSave = async () => {
+    if (!pickedList.length) return;
+    setSaving(true);
+    setSaved(null);
+    const ok = [];
+    const fail = [];
+    for (let i = 0; i < pickedList.length; i++) {
+      const row = pickedList[i];
+      setProgress({ done: i, total: pickedList.length, name: row.name });
+      try {
+        // ช่องเดียวกับฟอร์ม "เพิ่มเมนู" ทุกช่อง — เมนูที่เพิ่งเพิ่มยังไม่มีสูตร (items ว่าง)
+        await apiCall('saveMenu', {
+          code: row.newCode,
+          name: row.name,
+          price: row.price === null || row.price === undefined ? '' : String(row.price),
+          group, newGroupName: '', yieldQty: '', yieldUnit: '', items: [],
+        });
+        ok.push(row);
+      } catch (err) {
+        fail.push({ row, msg: err.message || 'บันทึกไม่สำเร็จ' });
+      }
+    }
+    setProgress(null);
+    setSaving(false);
+    setSaved({ ok, fail });
+    // เอาตัวที่เข้าแล้วออกจากรายการที่เลือกไว้ เหลือไว้เฉพาะตัวที่ยังไม่ผ่าน กดซ้ำได้เลย
+    setPicked(Object.fromEntries(fail.map(f => [f.row.newCode, f.row])));
+    if (ok.length) onSaved(ok.length);
+  };
+
+  const tabInfo = (id) => (schema || []).find(s => s.id === id);
+  const active = tabInfo(tab);
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Database size={18} className="text-indigo-500" /> เพิ่มเมนูจากฐานข้อมูล
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              เลือกเมนูจาก POS ฐานอื่นมาเพิ่มเข้าทะเบียนเมนูหลัก — เมนูที่เพิ่มแล้วยังไม่มีสูตร กดที่แถวในตารางเพื่อใส่วัตถุดิบต่อได้
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 flex-shrink-0"><X size={20} /></button>
+        </div>
+
+        {/* แท็บต้นทาง — ต้นทางที่อ่านไม่ได้ยังกดเข้าไปดูสาเหตุได้ ไม่ซ่อนทิ้งเฉย ๆ */}
+        <div className="px-5 pt-3 flex flex-wrap gap-2">
+          {(schema || [{ id: 'aoringo', label: 'Aoringo' }, { id: 'humlai', label: 'HumlaiPOS' }, { id: 'naraipos', label: 'NaraiPos' }]).map(sc => (
+            <button key={sc.id} onClick={() => setTab(sc.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${
+                tab === sc.id ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+              {sc.label}
+              {sc.ok === false && <span className="ml-1.5 text-rose-500">• อ่านไม่ได้</span>}
+              {sc.ok && <span className="ml-1.5 font-mono text-[10px] text-slate-400">{sc.rows?.toLocaleString?.() ?? ''}</span>}
+            </button>
+          ))}
+        </div>
+
+        <div className="px-5 pt-3 pb-3 flex flex-wrap gap-2 items-center">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={typed} onChange={e => setTyped(e.target.value)} placeholder="ค้นหารหัส / ชื่อเมนูในฐานนี้…"
+              className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+          <label className="inline-flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
+            <input type="checkbox" checked={includeInactive} onChange={e => setIncludeInactive(e.target.checked)} className="rounded" />
+            แสดงเมนูที่ปิดในต้นทางด้วย
+          </label>
+          {active?.ok && (
+            <span className="text-[11px] text-slate-400 font-mono">{active.table}</span>
+          )}
+        </div>
+
+        {error && (
+          <div className="mx-5 mb-3 p-3 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 whitespace-pre-wrap">{error}</div>
+        )}
+        {!error && active?.ok === false && (
+          <div className="mx-5 mb-3 p-3 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 whitespace-pre-wrap">{active.error}</div>
+        )}
+
+        <div className="flex-1 overflow-y-auto border-t border-slate-100">
+          {loading ? (
+            <div className="p-10 text-center text-slate-400 text-sm">
+              <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />กำลังอ่านทะเบียนเมนู…
+            </div>
+          ) : !rows.length ? (
+            <div className="p-10 text-center text-slate-400 text-sm">
+              {query ? `ไม่เจอเมนูที่ตรงกับ "${query}"` : 'ไม่มีข้อมูลในต้นทางนี้'}
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 sticky top-0">
+                <tr className="text-left text-[11px] uppercase text-slate-400">
+                  <th className="px-4 py-2 w-10">
+                    <input type="checkbox" checked={allPicked} onChange={toggleAll} className="rounded" title="เลือกทั้งหน้า" />
+                  </th>
+                  <th className="px-4 py-2">รหัสต้นทาง → รหัสที่จะบันทึก</th>
+                  <th className="px-4 py-2">ชื่อเมนู</th>
+                  <th className="px-4 py-2 text-right">ราคา</th>
+                  <th className="px-4 py-2">สถานะ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => {
+                  const dup = isDup(r);
+                  const on = Boolean(picked[r.newCode]);
+                  return (
+                    <tr key={`${r.code}-${r.newCode}`}
+                      onClick={() => !dup && toggle(r)}
+                      className={`border-b border-slate-50 ${dup ? 'bg-slate-50/70 text-slate-400' : `cursor-pointer ${on ? 'bg-indigo-50/60' : 'hover:bg-slate-50'}`}`}>
+                      <td className="px-4 py-2">
+                        <input type="checkbox" checked={on} disabled={dup} readOnly className="rounded" />
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs">
+                        <span className="text-slate-400">{r.code}</span>
+                        <span className="mx-1.5 text-slate-300">→</span>
+                        <span className="font-semibold text-indigo-600">{r.newCode}</span>
+                      </td>
+                      <td className="px-4 py-2">{r.name}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{r.price === null ? '—' : fmt(r.price)}</td>
+                      <td className="px-4 py-2">
+                        {dup ? (
+                          <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-[10px] font-bold">มีในระบบแล้ว</span>
+                        ) : !r.active ? (
+                          <span className="px-2 py-0.5 bg-rose-50 text-rose-600 border border-rose-200 rounded-full text-[10px] font-bold">ปิดในต้นทาง</span>
+                        ) : (
+                          <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-[10px] font-bold">เพิ่มได้</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          {result?.limited && (
+            <p className="px-4 py-3 text-[11px] text-amber-700 bg-amber-50 border-t border-amber-100">
+              แสดงได้สูงสุด 100 รายการต่อครั้ง — พิมพ์ค้นหาให้แคบลงถ้ายังไม่เจอตัวที่ต้องการ
+            </p>
+          )}
+        </div>
+
+        {saved && (
+          <div className="px-5 py-3 border-t border-slate-100 text-xs space-y-1">
+            {saved.ok.length > 0 && (
+              <p className="text-emerald-700 flex items-start gap-1.5">
+                <CheckCircle size={13} className="mt-0.5 flex-shrink-0" />
+                <span>เพิ่มแล้ว {saved.ok.length} เมนู: {saved.ok.map(r => r.newCode).join(', ')}</span>
+              </p>
+            )}
+            {saved.fail.map(f => (
+              <p key={f.row.newCode} className="text-rose-700 flex items-start gap-1.5">
+                <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+                <span>{f.row.newCode} {f.row.name} — {f.msg}</span>
+              </p>
+            ))}
+          </div>
+        )}
+
+        <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            เลือกไว้ <b className="text-slate-700">{pickedList.length}</b> เมนู
+            {SOURCE_NOTE[tab] && <span className="ml-1.5 text-slate-400">· {SOURCE_NOTE[tab]}</span>}
+            {progress && (
+              <span className="ml-2 text-indigo-600">กำลังบันทึก {progress.done + 1}/{progress.total} — {progress.name}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <select value={group} onChange={e => setGroup(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+              <option value="">ยังไม่จัดหมวด</option>
+              {groupList.map(g => <option key={g.code} value={g.code}>{g.name}</option>)}
+            </select>
+            <button onClick={onClose} className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ปิด</button>
+            <button onClick={doSave} disabled={!pickedList.length || saving}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              บันทึก {pickedList.length || ''} เมนู
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
