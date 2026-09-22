@@ -12,7 +12,7 @@ import { QCRD_ROW_MAPPERS } from '../lib/qcrdRows.mjs';
 import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
 
 /* ─────────────── ตัวยิงคำสั่งปลอม: จำทุกคำสั่ง + ตอบค่าที่ตรรกะต้องใช้ ─────────────── */
-function fakeDb({ menus = [], items = {} } = {}) {
+function fakeDb({ menus = [], items = {}, useUnitCol = true } = {}) {
   const log = [];
   const menuSet = new Set(menus);
 
@@ -30,6 +30,8 @@ function fakeDb({ menus = [], items = {} } = {}) {
       return [{ menu_name: `ชื่อของ ${params.c ?? params.src}` }];
     if (t.includes('MAX(sort_order) AS s FROM dbo.qcrd_menu')) return [{ s: 5474 }];
     if (t.includes('MAX(sort_order) AS s FROM dbo.stock_item')) return [{ s: 3000 }];
+    // คอลัมน์ use_unit ถูกเพิ่มทีหลังด้วย docs/schema-qcrd.sql — ฐานที่ยังไม่ได้รันตอบ NULL
+    if (t.includes("COL_LENGTH('dbo.stock_item', 'use_unit')")) return [{ n: useUnitCol ? 50 : null }];
     if (t.includes('FROM dbo.qcrd_bom b WHERE b.src_code')) return [];          // ไม่มีเมนูไหนดึงสูตรต่อ
     if (t.startsWith('SELECT item_key FROM dbo.stock_item WHERE item_key'))
       return params.k in items ? [{ item_key: params.k }] : [];
@@ -73,6 +75,33 @@ console.log('\nวัตถุดิบ (หน้า QC/RD > ไอเทม)')
   check('addItem → เขียนสาขาลง dbo.stock_item_branch',
     log.filter(l => /INSERT INTO dbo\.stock_item_branch/i.test(l.sql)).length === 2);
   check('addItem → ไม่ไปแตะตารางเมนู', !writes(log).some(s => /qcrd_menu|qcrd_bom/i.test(s)));
+}
+
+{
+  // หน่วยใช้ (คอลัมน์ที่เพิ่มทีหลัง) — ฐานที่รันสคีมาแล้วต้องเขียนลงไป
+  const { db, log } = fakeDb({ items: {} });
+  const { actions } = createQcrd(db);
+  await actions.addItem({ code: '00099002', name: 'ทดสอบ หน่วยใช้', unit: 'ขวด', converter: 750, useUnit: 'มล.' });
+  const ins = hit(log, /^INSERT INTO dbo\.stock_item/i);
+  check('addItem → มีคอลัมน์ use_unit ในคำสั่ง', /use_unit/.test(ins?.sql || ''));
+  check('addItem → ส่งค่าหน่วยใช้ไปด้วย', ins?.params.uunit === 'มล.');
+}
+
+{
+  // ฐานที่ยังไม่ได้รัน docs/schema-qcrd.sql — ต้องยังเพิ่มของได้ตามปกติ ไม่ใช่ล้มทั้งหน้า
+  const { db, log } = fakeDb({ items: {}, useUnitCol: false });
+  const { actions } = createQcrd(db);
+  await actions.addItem({ code: '00099003', name: 'ทดสอบ ฐานยังไม่มีคอลัมน์', unit: 'ขวด' });
+  const ins = hit(log, /^INSERT INTO dbo\.stock_item/i);
+  check('ฐานยังไม่มีคอลัมน์ → เพิ่มวัตถุดิบได้ตามปกติ', Boolean(ins));
+  check('ฐานยังไม่มีคอลัมน์ → ไม่ใส่ use_unit ลงคำสั่ง', !/use_unit/.test(ins?.sql || ''));
+
+  // แต่ถ้ามีคนกรอกหน่วยใช้มาจริง ต้องฟ้อง ไม่ใช่เงียบแล้วทิ้งค่าที่เขาพิมพ์
+  let msg = '';
+  try {
+    await actions.addItem({ code: '00099004', name: 'ทดสอบ ฟ้อง', useUnit: 'กรัม' });
+  } catch (err) { msg = err.message; }
+  check('ฐานยังไม่มีคอลัมน์ + กรอกหน่วยใช้ → บอกให้ไปรันสคีมา', /schema-qcrd\.sql/.test(msg), msg || 'ไม่ฟ้องเลย');
 }
 
 {
