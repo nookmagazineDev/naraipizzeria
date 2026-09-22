@@ -13,6 +13,8 @@
 //    GET  /qcrd/menu | /qcrd/bom | /qcrd/item | /qcrd/menugroup     อ่านข้อมูล
 //    GET  /qcrd/rcp                       ดัชนีสูตรฝั่ง POS (RcpDtls)
 //    GET  /qcrd/rcp-lines?rtsId=..        บรรทัดวัตถุดิบของสูตรนั้น
+//    GET  /qcrd/menu-source-schema        ตาราง/คอลัมน์ที่จับคู่ได้ของ Aoringo/HumlaiPOS/NaraiPos
+//    GET  /qcrd/menu-source?src=..&q=..   ทะเบียนเมนูของฐานนั้น (ไว้เพิ่มเข้าทะเบียนหลัก)
 //    POST /qcrd/save   { action, ... }    เขียน (ต้องมี header x-api-key)
 //
 //  ⚠️ เขียนได้ต้องตั้ง env QCRD_WRITE_KEY บนเครื่องโฮสต์ก่อน แล้วตั้งค่าเดียวกันเป็น
@@ -103,6 +105,17 @@ function getCore() {
       .catch(err => { corePromise = null; throw err; });
   }
   return corePromise;
+}
+
+/** ทะเบียนเมนูของ POS ฐานอื่น (Aoringo/HumlaiPOS/NaraiPos) — โหลดเมื่อหน้าเว็บเรียกใช้ */
+let menuSrcPromise = null;
+function getMenuSource() {
+  if (!menuSrcPromise) {
+    menuSrcPromise = importFirst(['../lib/menuSourceSql.mjs', './menuSourceSql.mjs'])
+      .then(m => m.createMenuSource({ q }))
+      .catch(err => { menuSrcPromise = null; throw err; });
+  }
+  return menuSrcPromise;
 }
 
 /** ตัวย้ายข้อมูล (โหลดเมื่อเรียก /qcrd/migrate เท่านั้น) */
@@ -292,6 +305,26 @@ function mountQcrd(app) {
         ORDER BY l.line_no`,
       { rtsId }
     ), 'rcp-lines');
+  });
+
+  // ── ทะเบียนเมนูของ POS ฐานอื่น — หน้า QC/RD > เมนู เอาไปเพิ่มเข้าทะเบียนหลัก ──
+  //
+  //    Aoringo.dbo.MenuItem (เติม AO) · HumlaiPOS.dbo.Menu (เติม HM) · NaraiPos.dbo.Item (ไม่เติม)
+  //    ทั้งสามอยู่บน SQL instance เดียวกับ InventoryNarai จึงอ่านข้ามฐานจาก pool เดิมได้
+  //    ตรรกะจับคู่คอลัมน์/ต่อคำสั่งอยู่ใน lib/menuSourceSql.mjs (ไฟล์เดียวกับที่ฝั่ง Vercel ใช้)
+  //
+  //    อ่านอย่างเดียว ไม่ต้องมีกุญแจ — การเขียนยังไปทาง /qcrd/save (action saveMenu) เหมือนเดิม
+  app.get('/qcrd/menu-source-schema', (req, res) =>
+    send(res, getMenuSource().then(m => m.schema({ fresh: str(req.query.fresh) === '1' })), 'menu-source-schema'));
+
+  app.get('/qcrd/menu-source', (req, res) => {
+    const src = str(req.query.src);
+    if (!src) return res.status(400).json({ status: 'error', message: 'ต้องส่ง ?src= (aoringo | humlai | naraipos)' });
+    send(res, getMenuSource().then(m => m.search(src, {
+      q: str(req.query.q),
+      limit: req.query.limit,
+      includeInactive: str(req.query.includeInactive) === '1',
+    })), 'menu-source');
   });
 
   // ── ย้ายข้อมูลจากชีท -> SQL (ทำที่เครื่องนี้ เพราะต่อ SQL ได้ตรงและเปิดเน็ตอ่านชีทได้) ──
