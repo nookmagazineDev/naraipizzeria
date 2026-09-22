@@ -55,6 +55,23 @@ http://localhost:14365/qcrd/menu-source-schema
 ได้ทีละต้นทางว่า `ok` ไหม จำนวนแถวทั้งตาราง และ `map` ว่าช่อง code/name/price/group/status
 ไปตกที่คอลัมน์ไหน ถ้าจับผิดตัวให้เพิ่มชื่อคอลัมน์ลงใน `FIELDS` ของไฟล์นั้น (เรียงจากน่าจะใช่ที่สุด)
 
+## ผลการจับคู่ที่ตรวจแล้วจริง (22 ก.ย. 2026)
+
+| ต้นทาง | แถว | code | name | price | group | status |
+|---|---|---|---|---|---|---|
+| `Aoringo.dbo.MenuItem` | 92 | `Code` | `Name` | `Price` | `CategoryId` | `IsActive` |
+| `NaraiPos.dbo.Item` | 5,543 | `Code` | `NameThai` | `UnitPrice` | `MenuCode` | `Active` |
+| `HumLaiPOS.dbo.Menu` | — | ยังไม่ได้ตรวจ (รอให้สิทธิ์อ่านก่อน) | | | | |
+
+สองเรื่องที่เห็นจากผลนี้:
+
+* **`NaraiPos.dbo.Item` คือต้นฉบับของทะเบียนเมนู QC/RD** — คอลัมน์ `Code` · `NameThai` ·
+  `MenuCode` · `UnitPrice` · `Active` ตรงกับคอลัมน์ A · B · C · D · F ของชีท `menu` พอดี
+  (`MenuCode` = รหัสหมวด ตรงกับ `qcrd_menu.group_code`)
+* **ตารางนี้เก็บทั้งเมนูและวัตถุดิบรวมกัน** (มี `RcvUnit` · `IssUnit` · `AvePrice` ของฝั่งสต๊อก
+  ปนกับ `MenuCode` · `MenuSort` ของฝั่งเมนู) ยอด 5,543 แถวจึงไม่ใช่จำนวนเมนู — ใช้ช่องค้นหา
+  เอาเท่าที่ต้องการ อย่าไล่ดูทีละหน้า
+
 ## สิทธิ์ที่ต้องมี
 
 host-server ต่อ SQL ด้วย login เดียว แล้วอ่านข้ามฐานด้วยชื่อสามท่อน `[ฐาน].[dbo].[ตาราง]`
@@ -66,8 +83,8 @@ DECLARE @login SYSNAME = N'narai_app';
 
 USE Aoringo;    IF DATABASE_PRINCIPAL_ID(@login) IS NULL CREATE USER [narai_app] FOR LOGIN [narai_app];
                 ALTER ROLE db_datareader ADD MEMBER [narai_app];
-USE HumlaiPOS;  IF DATABASE_PRINCIPAL_ID(@login) IS NULL CREATE USER [narai_app] FOR LOGIN [narai_app];
-                ALTER ROLE db_datareader ADD MEMBER [narai_app];
+USE HumLaiPOS;  IF DATABASE_PRINCIPAL_ID(@login) IS NULL CREATE USER [narai_app] FOR LOGIN [narai_app];
+                ALTER ROLE db_datareader ADD MEMBER [narai_app];   -- ชื่อฐานสะกด HumLaiPOS (L ตัวใหญ่)
 USE NaraiPos;   IF DATABASE_PRINCIPAL_ID(@login) IS NULL CREATE USER [narai_app] FOR LOGIN [narai_app];
                 ALTER ROLE db_datareader ADD MEMBER [narai_app];
 ```
@@ -79,7 +96,8 @@ USE NaraiPos;   IF DATABASE_PRINCIPAL_ID(@login) IS NULL CREATE USER [narai_app]
 | อาการ | แปลว่า | แก้ |
 |---|---|---|
 | `ยังไม่มีเส้น /qcrd/menu-source` | host-server ยังเป็นเวอร์ชันก่อนหน้านี้ | ที่เครื่องออฟฟิศ `git pull` แล้ว `host-server\start-narai.ps1 -Restart -NoTunnel` |
-| `ไม่พบตาราง HumlaiPOS.dbo.Menu` | ฐานนั้นอยู่คนละ SQL instance หรือ login ไม่มีสิทธิ์ | ให้สิทธิ์ตามด้านบน · ถ้าคนละ instance ต้องเพิ่ม pool แยก (ยังไม่รองรับ) |
+| `is not able to access the database` | ฐานมีอยู่ แต่ login ไม่มีสิทธิ์อ่าน | ให้สิทธิ์ตามหัวข้อด้านบน แล้วเปิด `/qcrd/menu-source-schema?fresh=1` (ใส่ `fresh=1` เพื่อไม่ใช้ผลที่แคชไว้) |
+| `ไม่พบตาราง …` | ชื่อฐาน/ตารางไม่ตรง หรืออยู่คนละ SQL instance | ตั้งชื่อทับด้วย env · ถ้าคนละ instance ต้องเพิ่ม pool แยก (ยังไม่รองรับ) |
 | `หาคอลัมน์รหัสไม่เจอ` | ชื่อคอลัมน์ไม่อยู่ในรายการที่รู้จัก | เปิด `/qcrd/menu-source-schema` ดูชื่อจริง แล้วเพิ่มลง `FIELDS` |
 | ตารางว่างทั้งที่ฐานมีข้อมูล | เมนูถูกปิดในต้นทางทั้งหมด | ติ๊ก “แสดงเมนูที่ปิดในต้นทางด้วย” |
 | ขึ้น “มีในระบบแล้ว” ทั้งที่ยังไม่เคยเพิ่ม | รหัสชนกับเมนูเดิม (เทียบแบบมองข้าม 0 นำหน้า) | ตรวจรหัสในทะเบียนก่อน — ระบบกันบันทึกทับให้โดยตั้งใจ |
