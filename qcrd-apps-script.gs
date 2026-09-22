@@ -467,8 +467,9 @@ function readBranches_(sh, row) {
 
 // เพิ่มวัตถุดิบใหม่: ต่อแถวใหม่ท้ายชีท item (กันรหัสซ้ำ)
 // คอลัมน์: A=รหัส B=ชื่อ C=ราคา D=หน่วย E=สถานะ F–H=ไอเทมทดแทน I=ตัวแปลง J=สาขาที่ใช้
-//          K=itemID(POS) L=หน่วยเบิก N=หมวดสโตร์
-// payload: { code, name, price, unit, status, subs[], converter, branches[], posItemId, requestUnit, storeCategory }
+//          K=itemID(POS) L=หน่วยเบิก N=หมวดสโตร์ O=ประเภท P=ใช้กับ Q=หน่วยใช้
+// payload: { code, name, price, unit, status, subs[], converter, branches[], posItemId, requestUnit,
+//            storeCategory, itemType, usedWhen, useUnit }
 function addItem_(ss, data) {
   var code = String(data.code || '').trim();
   if (!code) return { status: 'error', message: 'ต้องระบุรหัสวัตถุดิบ' };
@@ -498,18 +499,22 @@ function addItem_(ss, data) {
   return { status: 'success', data: { code: code, row: newRow, branches: readBranches_(sh, newRow) } };
 }
 
-// ประเภทวัตถุดิบ (O) และใช้กับ (P) ของชีท item — เขียนเฉพาะที่ส่งมา พร้อมเติมหัวตารางให้ถ้ายังว่าง
-// ประเภท = 'แพ็กเกจจิ้ง' สำหรับบรรจุภัณฑ์ · ใช้กับ = ทั้งสอง / ทานที่ร้าน / ห่อกลับบ้าน
-// เก็บไว้เพื่อแยกต้นทุนบรรจุภัณฑ์ระหว่างทานที่ร้านกับห่อกลับบ้านตอนตัดสูตรในอนาคต
+// ประเภทวัตถุดิบ (O) · ใช้กับ (P) · หน่วยใช้ (Q) ของชีท item — เขียนเฉพาะที่ส่งมา
+// พร้อมเติมหัวตารางให้ถ้ายังว่าง
+//   ประเภท   = ชื่ออะไรก็ได้ที่ใช้จัดกลุ่ม ('แพ็กเกจจิ้ง' มีความหมายพิเศษ ไว้แยกต้นทุนบรรจุภัณฑ์)
+//   ใช้กับ   = ทั้งสอง / ทานที่ร้าน / ห่อกลับบ้าน (มีความหมายเฉพาะกับแพ็กเกจจิ้ง)
+//   หน่วยใช้ = หน่วยเล็กที่สูตรใช้จริง เช่น กรัม/มล. — คู่กับตัวแปลงหน่วยในคอลัมน์ I
+//             ซึ่งเก็บแต่ตัวเลข ไม่เคยบอกว่าเลขนั้นเป็นหน่วยอะไร
 function writeItemExtra_(sh, row, data) {
-  if (data.itemType === undefined && data.usedWhen === undefined) return;
-  var labels = ['ประเภท', 'ใช้กับ'];
-  var header = sh.getRange(1, 15, 1, 2).getValues()[0];
+  if (data.itemType === undefined && data.usedWhen === undefined && data.useUnit === undefined) return;
+  var labels = ['ประเภท', 'ใช้กับ', 'หน่วยใช้'];
+  var header = sh.getRange(1, 15, 1, 3).getValues()[0];
   for (var i = 0; i < labels.length; i++) {
     if (!String(header[i] || '').trim()) sh.getRange(1, 15 + i).setValue(labels[i]);
   }
   if (data.itemType !== undefined) sh.getRange(row, 15).setValue(String(data.itemType || '').trim());
   if (data.usedWhen !== undefined) sh.getRange(row, 16).setValue(String(data.usedWhen || '').trim());
+  if (data.useUnit !== undefined) sh.getRange(row, 17).setValue(String(data.useUnit || '').trim());
 }
 
 // ลบวัตถุดิบ: ลบทั้งแถวออกจากชีท item
