@@ -1457,6 +1457,11 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
 
 // แถววัตถุดิบในฟอร์ม: ค้นหาไอเทมจากชีท item + กรอกยอดใช้/หน่วยซื้อ/ตัวแปลง
 // unit/onUnitChange = หน่วยซื้อของวัตถุดิบ (ชีท item คอลัมน์ D) แก้จากในฟอร์มเมนูได้เลย
+//
+// "หน่วยใช้" (หน่วยเล็กที่ช่องยอดใช้กรอกเป็นหน่วยนั้น) ดึงจากทะเบียนวัตถุดิบมาแสดงสด ๆ ทุกครั้ง
+// ไม่ได้เก็บซ้ำไว้ในสูตร — แก้ที่ทะเบียนที่เดียวแล้วทุกเมนูที่ใช้วัตถุดิบตัวนั้นเปลี่ยนตามทันที
+// (เก็บซ้ำเมื่อไหร่ = ต้องคอยซิงก์สองที่ ซึ่งไม่มีวันตรงกันได้จริง) สูตรเก่าจึงได้ไปด้วยเลย
+// ไม่ต้องไล่แก้ย้อนหลัง ส่วนวัตถุดิบที่ยังไม่ได้ตั้งหน่วยใช้ ก็แค่ไม่ขึ้นอะไร ไม่มีอะไรพัง
 function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -1464,6 +1469,8 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
   const info = items.find(i => i.code === row.itemCode);
   // ตัวแปลงหน่วยในสูตรไม่ตรงกับที่ตั้งไว้ในข้อมูลวัตถุดิบ → ฟ้องให้เห็น กดใช้ค่าจากวัตถุดิบได้
   const convMismatch = Boolean(row.itemCode && info?.converter && parseFloat(row.converter) !== info.converter);
+  // หน่วยของตัวเลขในช่อง "ยอดใช้" — ของเดิมมีแต่ตัวเลขลอย ๆ ต้องเปิดไปดูทะเบียนเองว่ากรัมหรือมล.
+  const useUnit = String(info?.useUnit || '').trim();
 
   const suggestions = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -1519,7 +1526,7 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
                     className="block w-full text-left px-3 py-2 text-sm hover:bg-indigo-50">
                     <span className="font-mono text-xs text-slate-400 mr-1.5">{s.code}</span>{s.name}
                     <span className="float-right text-xs text-slate-400 font-mono">
-                      {s.converter ? `×${s.converter}` : ''} {s.price != null ? s.price.toLocaleString() : ''}
+                      {s.converter ? `×${s.converter}` : ''}{s.useUnit ? ` ${s.useUnit}` : ''} {s.price != null ? s.price.toLocaleString() : ''}
                     </span>
                   </button>
                 ))}
@@ -1528,8 +1535,22 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
           </>
         )}
       </div>
-      <input type="number" value={row.qty} onChange={e => onChange({ ...row, qty: e.target.value })} placeholder="ยอดใช้"
-        className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+      {/* หน่วยใช้แปะไว้ "ในช่อง" ทางซ้าย (ตัวเลขชิดขวาอยู่แล้ว จึงไม่ชนกัน) แทนที่จะเป็นช่องใหม่
+          ไม่งั้นแถวที่วัตถุดิบยังไม่ได้ตั้งหน่วยใช้จะกว้างไม่เท่ากัน แล้วคอลัมน์เลื่อนไม่ตรงหัวตาราง */}
+      <div className="relative w-24">
+        <input type="number" value={row.qty} onChange={e => onChange({ ...row, qty: e.target.value })}
+          placeholder="ยอดใช้"
+          title={useUnit
+            ? `ยอดใช้ต่อ 1 จาน หน่วยเป็น "${useUnit}" ตามที่ตั้งไว้ในทะเบียนวัตถุดิบ`
+            : 'ยอดใช้ต่อ 1 จาน (หน่วยเล็ก) — ตั้ง "หน่วยใช้" ให้วัตถุดิบตัวนี้ในหน้าวัตถุดิบ แล้วหน่วยจะมาขึ้นตรงนี้'}
+          className={`w-full py-2 pr-2 border border-slate-200 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 ${useUnit ? 'pl-9' : 'pl-2'}`} />
+        {useUnit && (
+          <span title="หน่วยใช้ของวัตถุดิบตัวนี้ (แก้ได้ที่หน้าวัตถุดิบ)"
+            className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-slate-400 pointer-events-none max-w-[28px] truncate">
+            {useUnit}
+          </span>
+        )}
+      </div>
       <input list="qcrd-item-units" value={unit} disabled={!row.itemCode}
         onChange={e => onUnitChange(e.target.value)} placeholder="หน่วย"
         title="หน่วยซื้อของวัตถุดิบ (เช่น กก. / ถุง / ขวด) — บันทึกลงชีท item คอลัมน์ D ใช้ร่วมกันทุกเมนู"
@@ -1551,6 +1572,12 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
             onChange={e => onChange({ ...row, noDeduct: e.target.checked })} className="accent-amber-500" />
           ไม่ตัด BOM
         </label>
+        {useUnit && row.converter > 0 && (
+          <span title="อ่านจากทะเบียนวัตถุดิบ (ตัวแปลงหน่วย + หน่วยใช้) — ไว้กันกรอกยอดใช้ผิดหน่วย"
+            className="inline-block px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full text-[10px] font-medium">
+            1 {unit || 'หน่วยซื้อ'} = {Number(row.converter).toLocaleString()} {useUnit}
+          </span>
+        )}
         {info?.itemType === 'แพ็กเกจจิ้ง' && (
           <span className="inline-block px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-[10px] font-bold">
             แพ็กเกจจิ้ง{info.usedWhen && info.usedWhen !== 'ทั้งสอง' ? ` · ${info.usedWhen}` : ''}
