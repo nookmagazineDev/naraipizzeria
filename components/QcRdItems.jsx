@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud, Download } from 'lucide-react';
+import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud, Download, Database } from 'lucide-react';
 import { apiCall, syncNote, syncOk, syncSql } from '../lib/qcrdApi';
 import { useBranches } from '../lib/useBranches';
 
@@ -13,6 +13,9 @@ import { useBranches } from '../lib/useBranches';
  *   ลบได้ (ทั้งแถว) — โหมดชีททั้งแก้ไขและลบส่ง _row ไประบุแถวเผื่อรหัสซ้ำ (ไม่งั้นโดนแถวแรกเสมอ),
  *   โหมด SQL คีย์ด้วยรหัสจึงไม่มีแถวซ้ำ
  *   ผ่าน action: saveItem / addItem / deleteItem (ดู lib/qcrdApi.js)
+ * - ปุ่ม "เพิ่มจากฐานข้อมูล" ดึงวัตถุดิบที่มีอยู่จริงในข้อมูลที่ใช้งานอยู่ (ฐาน InventoryNarai:
+ *   สูตรเมนู qcrd_bom · แพลนสั่งของ stock_plan · ปิดรอบ stock_closing) แต่ยังไม่มีในทะเบียนนี้
+ *   ผ่าน /api/qcrd-item-source แล้วบันทึกด้วย action addItem ตัวเดิม — ดู ItemSourcePicker ท้ายไฟล์
  */
 
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -56,6 +59,7 @@ export function savedItemRow(sent, saved = {}, { source = 'sheet', prev = null }
     requestUnit: String(sent.requestUnit || '').trim(),
     itemType: sent.itemType || '',
     usedWhen: sent.usedWhen || '',
+    useUnit: String(sent.useUnit || '').trim(),
     _row: saved.row ?? prev?._row,
   };
 }
@@ -70,12 +74,21 @@ const codeMatch = (code, q) => {
   return c.includes(s) || c.replace(/^0+/, '').includes(s.replace(/^0+/, ''));
 };
 
+// รหัสเดียวกันในสองที่เขียนไม่เหมือนกัน (01000078 กับ 1000078) — เทียบด้วยรูปที่ตัด 0 นำหน้าแล้ว
+// ชุดเดียวกับ item_key ที่ฝั่ง SQL ใช้จับคู่ ตัวเลือก "เพิ่มจากฐานข้อมูล" ใช้กันไม่ให้เลือกตัวที่มีอยู่แล้ว
+const normKey = (code) => String(code || '').trim().replace(/^0+/, '').toLowerCase();
+
 // ประเภท (ชีท item คอลัมน์ O) มีแค่ 2 ค่า: วัตถุดิบ (ค่าเริ่มต้นเสมอ) หรือ แพ็กเกจจิ้ง
 // ใช้กับ (คอลัมน์ P) มีความหมายเฉพาะกับแพ็กเกจจิ้ง: ไว้แยกต้นทุนทานที่ร้าน vs ห่อกลับบ้านตอนตัดสูตร
 // ของเดิมในชีทที่คอลัมน์ O ยังว่าง ถือเป็น "วัตถุดิบ" และจะถูกเขียนค่าลงไปเมื่อบันทึกครั้งถัดไป
 const MATERIAL = 'วัตถุดิบ';
 const PACKAGING = 'แพ็กเกจจิ้ง';
 const USED_WHEN = ['ทั้งสอง', 'ทานที่ร้าน', 'ห่อกลับบ้าน'];
+// ค่าใน dropdown ประเภทที่แปลว่า "ขอพิมพ์ชื่อใหม่" — ตั้งชื่อประเภทเองได้ตามกลุ่มที่ร้านใช้จริง
+// (เนื้อสัตว์ · ผัก · เครื่องปรุง ฯลฯ) ส่วน 'แพ็กเกจจิ้ง' ยังมีความหมายพิเศษเหมือนเดิม
+const NEW_TYPE = '__newtype__';
+// หน่วยใช้ที่เจอบ่อยในสูตร — พิมพ์หน่วยอื่นเองได้ ช่องนี้เป็น datalist ไม่ใช่ dropdown ตายตัว
+const USE_UNITS = ['กรัม', 'มล.', 'ชิ้น', 'ใบ', 'ฟอง', 'แผ่น', 'ซอง', 'ที่', 'ลูก', 'ตัว'];
 
 // ข้อความอธิบายตอนหน้าถูกล็อกไม่ให้แก้ (โหมด SQL ที่อ่านไม่ได้แล้วถอยไปอ่านชีท) — ชุดเดียวกับหน้าเมนู QC/RD
 const LOCK_HINT = 'ตอนนี้อ่านข้อมูลจาก SQL ไม่ได้ กำลังแสดงข้อมูลจากชีทแทน — ' +
@@ -94,7 +107,7 @@ export default function QcRdItems() {
   const [unitFilter, setUnitFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [storeFilter, setStoreFilter] = useState('');
-  const [typeFilter, setTypeFilter] = useState('');   // '' = ทุกประเภท, MATERIAL, PACKAGING
+  const [typeFilter, setTypeFilter] = useState('');   // '' = ทุกประเภท · ที่เหลือเทียบกับชื่อประเภทตรง ๆ
   const [branchFilter, setBranchFilter] = useState(''); // '' = ทุกสาขา, รหัสสาขา, NO_BRANCH
   const [posFilter, setPosFilter] = useState('');     // '' = ทุกรายการ, NO_POS, DUP_POS
   const [saving, setSaving] = useState(false);
@@ -106,6 +119,7 @@ export default function QcRdItems() {
   const [formMsg, setFormMsg] = useState(null); // { ok, msg }
   const [editItem, setEditItem] = useState(null); // { code, name, status, subs[] }
   const [savingItem, setSavingItem] = useState(false);
+  const [srcModal, setSrcModal] = useState(false);   // ตัวเลือกวัตถุดิบจากข้อมูลจริง (ดู ItemSourcePicker)
   const [deleteTarget, setDeleteTarget] = useState(null); // { code, name, row }
   const [deleting, setDeleting] = useState(false);
   const [source, setSource] = useState('sheet');   // ข้อมูลชุดนี้มาจากชีทหรือ SQL
@@ -185,6 +199,18 @@ export default function QcRdItems() {
   const units = useMemo(() => [...new Set(items.map(i => i.unit).filter(Boolean))].sort(), [items]);
   const autoCount = useMemo(() => items.filter(i => i.unitSource === 'auto' && i.unit).length, [items]);
   const inactiveCount = useMemo(() => items.filter(i => i.status === 'ปิดการใช้งาน').length, [items]);
+  // รหัสที่มีในทะเบียนแล้ว (รูปที่ตัด 0 นำหน้า) — ตัวเลือก "เพิ่มจากฐานข้อมูล" ใช้กันไม่ให้เลือกตัวซ้ำ
+  // ฝั่ง SQL กรองด้วย stock_item ให้แล้วชั้นหนึ่ง ชั้นนี้ไว้กันโหมดชีทที่ทะเบียนตัวจริงคือชีท ไม่ใช่ฐาน
+  const existingKeys = useMemo(() => new Set(items.map(i => normKey(i.code)).filter(Boolean)), [items]);
+
+  // ประเภทที่ทะเบียนใช้อยู่จริง + สองค่าพื้นฐานเสมอ — ใช้ทั้งตัวกรองด้านบนและ dropdown ในฟอร์ม
+  // (ของเดิมมีแค่ วัตถุดิบ/แพ็กเกจจิ้ง ตอนนี้ตั้งชื่อประเภทเองได้ จึงต้องไล่จากข้อมูลจริง)
+  const typeOptions = useMemo(() => {
+    const set = new Set([MATERIAL, PACKAGING]);
+    items.forEach(i => { const t = String(i.itemType || '').trim(); if (t) set.add(t); });
+    return [...set].sort((a, b) => a.localeCompare(b, 'th'));
+  }, [items]);
+
   // รายชื่อหมวดสโตร์ที่มีจริงในชีท (ใช้ทั้งกรองและแนะนำในฟอร์มแก้ไข — ชีทมีตัวสะกดไม่เป๊ะปนอยู่)
   const storeCategories = useMemo(
     () => [...new Set(items.map(i => i.storeCategory).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
@@ -240,8 +266,12 @@ export default function QcRdItems() {
       if (statusFilter && i.status !== statusFilter) return false;
       if (storeFilter === NO_STORE) { if (i.storeCategory) return false; }
       else if (storeFilter && (i.storeCategory || '') !== storeFilter) return false;
-      if (typeFilter === PACKAGING && i.itemType !== PACKAGING) return false;
-      if (typeFilter === MATERIAL && i.itemType === PACKAGING) return false;
+      // ประเภทตั้งชื่อเองได้แล้ว จึงเทียบตรง ๆ — ยกเว้น "วัตถุดิบ" ที่ต้องรวมของเก่าที่ช่องยังว่างด้วย
+      // (ทะเบียนเดิมปล่อยว่างไว้แปลว่าวัตถุดิบ ค่าจะถูกเขียนลงไปเมื่อบันทึกครั้งถัดไป)
+      if (typeFilter) {
+        const t = String(i.itemType || '').trim();
+        if (typeFilter === MATERIAL ? (t && t !== MATERIAL) : t !== typeFilter) return false;
+      }
       if (branchFilter === NO_BRANCH) { if ((i.usedBranches || []).length) return false; }
       else if (branchFilter && !(i.usedBranches || []).includes(branchFilter)) return false;
       if (posFilter === NO_POS && i.posItemId) return false;
@@ -328,7 +358,9 @@ export default function QcRdItems() {
       // ถ้าไม่เติมตรงนี้ กดบันทึกทีเดียวจะกลายเป็นส่งค่าว่างไปล้างของเดิมในฐานทิ้ง
       posItemId: i.posItemId || '', requestUnit: i.requestUnit || '',
       storeCategory: i.storeCategory || '', addingNewStore: false,
-      itemType: i.itemType === PACKAGING ? PACKAGING : MATERIAL, usedWhen: i.usedWhen || '',
+      // ประเภทเก็บค่าตามที่อยู่ในทะเบียนจริง (ว่าง = วัตถุดิบ) ไม่บีบให้เหลือ 2 ค่าอีกแล้ว
+      itemType: i.itemType || MATERIAL, newTypeName: '', usedWhen: i.usedWhen || '',
+      useUnit: i.useUnit || '',
     });
   };
 
@@ -339,9 +371,36 @@ export default function QcRdItems() {
       code: '', name: '', status: 'ใช้งาน', subs: [],
       price: '', unit: '', converter: '', branches: [], posItemId: '', requestUnit: '',
       storeCategory: '', addingNewStore: false,
-      itemType: MATERIAL, usedWhen: '',
+      itemType: MATERIAL, newTypeName: '', usedWhen: '', useUnit: '',
     });
   };
+
+  /**
+   * เลือกจากตัวเลือก "เพิ่มจากฐานข้อมูล" ทีละตัว = เปิดฟอร์มที่กรอกให้แล้ว ยังไม่บันทึก
+   * ช่องที่ต้นทางไม่มี (สาขาที่ใช้ · หมวดสโตร์ · itemID) ปล่อยว่างให้กรอกต่อเหมือนเพิ่มเอง
+   */
+  const openFromSource = (row) => {
+    setFormMsg(null);
+    const t = String(row.itemType || '').trim();
+    setEditItem({
+      isNew: true,
+      code: String(row.code || '').trim(), name: String(row.name || '').trim(),
+      status: 'ใช้งาน', subs: [],
+      price: row.price === null || row.price === undefined ? '' : String(row.price),
+      unit: String(row.unit || '').trim(),
+      converter: row.converter === null || row.converter === undefined ? '' : String(row.converter),
+      branches: [], posItemId: '', requestUnit: '',
+      storeCategory: '', addingNewStore: false,
+      // ต้นทางรู้จักแค่ 'วัตถุดิบ/แพ็กเกจจิ้ง' (แท็กในสูตร) ชื่อประเภทอื่นค่อยเลือกในฟอร์ม
+      itemType: t === PACKAGING ? PACKAGING : MATERIAL, newTypeName: '',
+      usedWhen: '', useUnit: '',
+    });
+  };
+
+  /** ประเภทที่จะบันทึกจริง — เลือก "พิมพ์ชื่อใหม่" ก็เอาชื่อที่พิมพ์ ไม่งั้นเอาค่าที่เลือก */
+  const itemTypeOf = (f) => (f.itemType === NEW_TYPE
+    ? (String(f.newTypeName || '').trim() || MATERIAL)
+    : (String(f.itemType || '').trim() || MATERIAL));
 
   const toggleBranch = (b) => setEditItem(m => ({
     ...m, branches: m.branches.includes(b) ? m.branches.filter(x => x !== b) : [...m.branches, b],
@@ -365,9 +424,12 @@ export default function QcRdItems() {
       branches: editItem.branches, storeCategory: (editItem.storeCategory || '').trim(),
       // itemID ของ POS + หน่วยเบิก — ฝั่งสต๊อก/ตัดยอดขายใช้สองช่องนี้ เดิมแก้ได้ที่ชีทเท่านั้น
       posItemId: (editItem.posItemId || '').trim(), requestUnit: (editItem.requestUnit || '').trim(),
-      // ประเภท/ใช้กับ — ไว้แยกต้นทุนบรรจุภัณฑ์ระหว่างทานที่ร้านกับห่อกลับบ้าน
-      itemType: editItem.itemType === PACKAGING ? PACKAGING : MATERIAL,
-      usedWhen: editItem.itemType === PACKAGING ? (editItem.usedWhen || USED_WHEN[0]) : '',
+      // ประเภท — ตั้งชื่อเองได้ ('แพ็กเกจจิ้ง' ยังมีความหมายพิเศษ ไว้แยกต้นทุนบรรจุภัณฑ์
+      // ระหว่างทานที่ร้านกับห่อกลับบ้าน ส่วนชื่ออื่นถือเป็นวัตถุดิบธรรมดาตอนคิดต้นทุน)
+      itemType: itemTypeOf(editItem),
+      usedWhen: itemTypeOf(editItem) === PACKAGING ? (editItem.usedWhen || USED_WHEN[0]) : '',
+      // หน่วยใช้ = หน่วยเล็กที่สูตรใช้จริง คู่กับตัวแปลงหน่วยซึ่งบอกแค่ตัวเลข
+      useUnit: (editItem.useUnit || '').trim(),
     };
     const isNew = editItem.isNew;
     try {
@@ -429,9 +491,10 @@ export default function QcRdItems() {
   // นำหน้าด้วย BOM ไม่งั้น Excel เปิดแล้วภาษาไทยเป็นตัวยึกยือ
   const exportCsv = () => {
     const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const head = ['รหัส', 'itemID (POS)', 'ชื่อ', 'หน่วย', 'หน่วยเบิก', 'ราคาต้นทุน', 'ตัวแปลง', 'สถานะ', 'หมวดสโตร์', 'สาขาที่ใช้'];
+    const head = ['รหัส', 'itemID (POS)', 'ชื่อ', 'หน่วย', 'หน่วยเบิก', 'ราคาต้นทุน', 'ตัวแปลง', 'หน่วยใช้', 'ประเภท', 'สถานะ', 'หมวดสโตร์', 'สาขาที่ใช้'];
     const body = filtered.map(i => [
       i.code, i.posItemId, i.name, i.unit, i.requestUnit, i.price ?? '', i.converter ?? '',
+      i.useUnit || '', i.itemType || '',
       i.status, i.storeCategory, (i.usedBranches || []).join(' '),
     ].map(cell).join(','));
     const blob = new Blob(['\ufeff' + [head.map(cell).join(','), ...body].join('\n')], { type: 'text/csv;charset=utf-8' });
@@ -506,6 +569,11 @@ export default function QcRdItems() {
               className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 disabled:text-slate-300 border border-slate-200 text-slate-600 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
               <Download size={14} /> โหลด CSV ({filtered.length.toLocaleString()})
             </button>
+            <button onClick={() => setSrcModal(true)} disabled={degraded}
+              title={degraded ? LOCK_HINT : 'ดึงวัตถุดิบที่มีอยู่จริงในสูตรเมนู / แพลนสั่งของ / ปิดรอบ แต่ยังไม่มีในทะเบียนนี้'}
+              className="inline-flex items-center gap-2 bg-white hover:bg-emerald-50 disabled:bg-slate-100 disabled:text-slate-400 text-emerald-600 border border-emerald-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+              <Database size={14} /> เพิ่มจากฐานข้อมูล
+            </button>
             <button onClick={openNew} disabled={degraded}
               title={degraded ? LOCK_HINT : 'เพิ่มวัตถุดิบใหม่ลงทะเบียนวัตถุดิบ'}
               className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
@@ -555,8 +623,9 @@ export default function QcRdItems() {
           <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
             className="border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
             <option value="">ทุกประเภท</option>
-            <option value={MATERIAL}>{MATERIAL}</option>
-            <option value={PACKAGING}>{PACKAGING} ({packagingCount})</option>
+            {typeOptions.map(t => (
+              <option key={t} value={t}>{t === PACKAGING ? `${t} (${packagingCount})` : t}</option>
+            ))}
           </select>
           {/* กรองตามสาขาที่ใช้ไอเทม — จัดของทีละสาขาได้โดยไม่ต้องไล่หาในรายการรวมห้าพันกว่าแถว */}
           <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)}
@@ -649,6 +718,11 @@ export default function QcRdItems() {
                   <td className="px-4 py-2 text-right font-mono">{fmt(i.price)}</td>
                   <td className="px-3 py-2 text-right font-mono text-slate-500">
                     {i.converter != null && !isNaN(i.converter) ? Number(i.converter).toLocaleString() : <span className="text-slate-300">—</span>}
+                    {i.useUnit && (
+                      <span title="หน่วยใช้ (หน่วยเล็กในสูตร)" className="ml-1 inline-block px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-sans align-middle">
+                        {i.useUnit}
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     {/* กรองสาขาอยู่ = ดันสาขานั้นขึ้นมาไว้หน้าสุดแล้วเน้นสี ไม่งั้นอาจโดนตัดอยู่ใน "+n" */}
@@ -773,6 +847,17 @@ export default function QcRdItems() {
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-mono text-right focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
                 <div>
+                  {/* หน่วยใช้ = หน่วยของตัวเลขในช่องตัวแปลงหน่วย และเป็นหน่วยที่กรอกยอดใช้ในสูตร
+                      ของเดิมมีแต่ตัวเลข 1000 โดยไม่บอกว่ากรัมหรือมิลลิลิตร ต้องจำกันเอง */}
+                  <label className="text-xs font-bold text-slate-500">หน่วยใช้ <span className="font-normal">(หน่วยเล็กในสูตร เช่น กรัม / มล.)</span></label>
+                  <input list="qcrd-use-units" value={editItem.useUnit || ''}
+                    onChange={e => setEditItem(m => ({ ...m, useUnit: e.target.value }))} placeholder="เช่น กรัม"
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  <datalist id="qcrd-use-units">
+                    {USE_UNITS.map(u => <option key={u} value={u} />)}
+                  </datalist>
+                </div>
+                <div>
                   <label className="text-xs font-bold text-slate-500">หน่วยเบิก <span className="font-normal">(หน่วยที่สาขาใช้เบิกของ)</span></label>
                   <input value={editItem.requestUnit}
                     onChange={e => setEditItem(m => ({ ...m, requestUnit: e.target.value }))} placeholder="เช่น ถุง"
@@ -803,13 +888,25 @@ export default function QcRdItems() {
                 <div>
                   <label className="text-xs font-bold text-slate-500">ประเภท</label>
                   <select value={editItem.itemType}
-                    onChange={e => setEditItem(m => ({ ...m, itemType: e.target.value, usedWhen: e.target.value === PACKAGING ? (m.usedWhen || USED_WHEN[0]) : '' }))}
+                    onChange={e => setEditItem(m => ({
+                      ...m,
+                      itemType: e.target.value,
+                      newTypeName: e.target.value === NEW_TYPE ? m.newTypeName : '',
+                      usedWhen: e.target.value === PACKAGING ? (m.usedWhen || USED_WHEN[0]) : '',
+                    }))}
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                    <option value={MATERIAL}>{MATERIAL}</option>
-                    <option value={PACKAGING}>{PACKAGING}</option>
+                    {/* ประเภทที่ร้านใช้อยู่จริงทั้งหมด (รวม 2 ค่าเดิมเสมอ) + ตัวเลือกพิมพ์ชื่อใหม่ */}
+                    {typeOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                    <option value={NEW_TYPE}>＋ พิมพ์ชื่อประเภทใหม่…</option>
                   </select>
+                  {editItem.itemType === NEW_TYPE && (
+                    <input autoFocus value={editItem.newTypeName || ''}
+                      onChange={e => setEditItem(m => ({ ...m, newTypeName: e.target.value }))}
+                      placeholder="ชื่อประเภทใหม่ เช่น เนื้อสัตว์"
+                      className="mt-2 w-full border border-emerald-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                  )}
                 </div>
-                {editItem.itemType === PACKAGING && (
+                {itemTypeOf(editItem) === PACKAGING && (
                   <div>
                     <label className="text-xs font-bold text-slate-500">ใช้กับ</label>
                     <select value={editItem.usedWhen || USED_WHEN[0]}
@@ -820,7 +917,7 @@ export default function QcRdItems() {
                   </div>
                 )}
               </div>
-              {editItem.itemType === PACKAGING && (
+              {itemTypeOf(editItem) === PACKAGING && (
                 <p className="-mt-1 text-[11px] text-violet-600">
                   ทำเครื่องหมายเป็นบรรจุภัณฑ์ไว้ เพื่อให้แยกต้นทุนระหว่างลูกค้าทานที่ร้านกับห่อกลับบ้านได้ในอนาคต
                 </p>
@@ -993,6 +1090,16 @@ export default function QcRdItems() {
           </div>
         </div>
       )}
+      {srcModal && (
+        <ItemSourcePicker
+          existing={existingKeys}
+          onClose={() => setSrcModal(false)}
+          onPick={(row) => { setSrcModal(false); openFromSource(row); }}
+          onSaved={(n) => {
+            setToast({ ok: true, msg: `เพิ่มวัตถุดิบจากฐานข้อมูล ${n} รายการแล้ว` });
+            load({ quiet: true });
+          }} />
+      )}
     </div>
   );
 }
@@ -1041,6 +1148,281 @@ function SubPicker({ items, exclude, onPick }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ─────────────────────── เพิ่มวัตถุดิบจากฐานข้อมูล ───────────────────────
+   ต้นทางคือข้อมูลที่ใช้งานอยู่จริงในฐาน InventoryNarai ฐานเดียวกับทะเบียนวัตถุดิบ:
+     สูตรเมนู (qcrd_bom) · แพลนสั่งของ (stock_plan) · ปิดรอบสิ้นเดือน (stock_closing)
+   ฝั่ง SQL คัด "ตัวที่ยังไม่มีใน stock_item" มาให้แล้ว (ดู lib/itemSourceSql.mjs)
+   ที่นี่กรองซ้ำด้วยรายการที่หน้านี้โหลดมาจริงอีกชั้น เผื่อโหมดชีทที่ทะเบียนตัวจริงคือชีท
+
+   กดที่แถว = เปิดฟอร์มเพิ่มวัตถุดิบที่กรอกให้แล้ว (ยังไม่บันทึก — ต้องเลือกสาขา/หน่วยใช้ต่อ)
+   ติ๊กช่องซ้าย = เลือกหลายตัวแล้วบันทึกรวดเดียว ด้วย action addItem ตัวเดิมทีละรายการ   */
+const ITEM_SRC_TABS = [
+  { id: 'bom', label: 'สูตรเมนู' },
+  { id: 'plan', label: 'แพลนสั่งของ' },
+  { id: 'closing', label: 'ปิดรอบสิ้นเดือน' },
+];
+
+async function askItemSource(params) {
+  const res = await fetch(`/api/qcrd-item-source?${params}`, { cache: 'no-store' });
+  const json = await res.json().catch(() => ({ status: 'error', message: 'เซิร์ฟเวอร์ตอบกลับมาไม่ใช่ JSON' }));
+  if (json.status !== 'success') throw new Error(json.message || 'อ่านข้อมูลไม่สำเร็จ');
+  return json.data;
+}
+
+function ItemSourcePicker({ existing, onClose, onPick, onSaved }) {
+  const [schema, setSchema] = useState(null);      // ต้นทางไหนอ่านได้ + เหลือให้เพิ่มกี่ตัว
+  const [schemaErr, setSchemaErr] = useState('');  // อ่านสรุปไม่ได้ — ไม่ควรบังตารางที่ยังใช้ได้
+  const [tab, setTab] = useState('bom');
+  const [typed, setTyped] = useState('');
+  const [query, setQuery] = useState('');          // ค่าที่หน่วงแล้ว (ยิงจริงด้วยตัวนี้)
+  const [result, setResult] = useState(null);      // { rows, limited, source }
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [picked, setPicked] = useState({});        // 'src:code' -> แถวที่เลือกไว้ (ข้ามแท็บได้)
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState(null);  // { done, total, name }
+  const [saved, setSaved] = useState(null);        // { ok: [], fail: [] }
+
+  useEffect(() => {
+    let alive = true;
+    askItemSource('schema=1')
+      .then(d => { if (alive) { setSchema(d); setSchemaErr(''); } })
+      .catch(err => { if (alive) setSchemaErr(err.message); });
+    return () => { alive = false; };
+  }, []);
+
+  // หน่วงพิมพ์ก่อนยิง — ทุกครั้งที่ยิงคือคำสั่ง SQL ที่เครื่องร้าน ไม่ควรยิงทุกตัวอักษร
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(typed.trim()), 350);
+    return () => clearTimeout(t);
+  }, [typed]);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError('');
+    const qs = new URLSearchParams({ src: tab, limit: '100' });
+    if (query) qs.set('q', query);
+    askItemSource(qs.toString())
+      .then(d => { if (alive) { setResult(d); setLoading(false); } })
+      .catch(err => { if (alive) { setError(err.message); setResult(null); setLoading(false); } });
+    return () => { alive = false; };
+  }, [tab, query]);
+
+  const src = result?.source || {};
+  const keyOf = (r, id = src.id) => `${id}:${r.code}`;
+  const isDup = (r) => existing.has(normKey(r.code));
+  // ต้นทางส่งมาเฉพาะตัวที่ไม่มีใน stock_item — ที่เหลือเป็นตัวซ้ำเฉพาะโหมดชีท ซ่อนไปเลยไม่ต้องอธิบาย
+  const rows = (result?.rows || []).filter(r => !isDup(r));
+  const hiddenDup = (result?.rows || []).length - rows.length;
+
+  const pickedList = Object.values(picked);
+  const allPicked = rows.length > 0 && rows.every(r => picked[keyOf(r)]);
+
+  const toggle = (r) => setPicked(prev => {
+    const k = keyOf(r);
+    const next = { ...prev };
+    if (next[k]) delete next[k];
+    else next[k] = { ...r, srcId: src.id };   // จำต้นทางไว้ในตัวมันเอง (เลือกข้ามแท็บได้)
+    return next;
+  });
+  const toggleAll = () => setPicked(prev => {
+    const next = { ...prev };
+    if (allPicked) rows.forEach(r => delete next[keyOf(r)]);
+    else rows.forEach(r => { next[keyOf(r)] = { ...r, srcId: src.id }; });
+    return next;
+  });
+
+  const doSave = async () => {
+    if (!pickedList.length) return;
+    setSaving(true);
+    setSaved(null);
+    const ok = [];
+    const fail = [];
+    for (let i = 0; i < pickedList.length; i++) {
+      const row = pickedList[i];
+      setProgress({ done: i, total: pickedList.length, name: row.name });
+      try {
+        // ช่องเดียวกับฟอร์ม "เพิ่มวัตถุดิบ" ทุกช่อง — ที่ต้นทางไม่มีก็ว่างไว้ให้ไปแก้ต่อในทะเบียน
+        await apiCall('addItem', {
+          code: row.code, name: row.name, status: 'ใช้งาน', subs: [],
+          price: row.price === null || row.price === undefined ? '' : String(row.price),
+          unit: row.unit || '',
+          converter: row.converter === null || row.converter === undefined ? '' : String(row.converter),
+          branches: [], storeCategory: '', posItemId: '', requestUnit: '',
+          itemType: row.itemType === PACKAGING ? PACKAGING : MATERIAL, usedWhen: '', useUnit: '',
+        });
+        ok.push(row);
+      } catch (err) {
+        fail.push({ row, msg: err.message || 'บันทึกไม่สำเร็จ' });
+      }
+    }
+    setProgress(null);
+    setSaving(false);
+    setSaved({ ok, fail });
+    // เอาตัวที่เข้าแล้วออกจากรายการที่เลือกไว้ เหลือไว้เฉพาะตัวที่ยังไม่ผ่าน กดซ้ำได้เลย
+    setPicked(Object.fromEntries(fail.map(f => [keyOf(f.row, f.row.srcId), f.row])));
+    if (ok.length) onSaved(ok.length);
+  };
+
+  const active = (schema || []).find(s => s.id === tab);
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Database size={18} className="text-emerald-500" /> เพิ่มวัตถุดิบจากฐานข้อมูล
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              ของที่ <b>มีอยู่จริงในข้อมูลที่ใช้งานอยู่</b> แต่ยังไม่มีในทะเบียนวัตถุดิบ ·
+              <b> กดที่แถว</b> = เปิดฟอร์มที่กรอกรหัส/ชื่อ/หน่วย/ราคาให้แล้ว เลือกสาขาและหน่วยใช้ต่อได้เลย
+              · <b>ติ๊กช่องซ้าย</b> = เลือกหลายตัวแล้วบันทึกรวดเดียว (ยังไม่มีสาขา ค่อยมาใส่ทีหลัง)
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 flex-shrink-0"><X size={20} /></button>
+        </div>
+
+        {/* แท็บต้นทาง — ต้นทางที่อ่านไม่ได้ยังกดเข้าไปดูสาเหตุได้ ไม่ซ่อนทิ้งเฉย ๆ */}
+        <div className="px-5 pt-3 flex flex-wrap gap-2">
+          {(schema || ITEM_SRC_TABS).map(sc => (
+            <button key={sc.id} onClick={() => setTab(sc.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${
+                tab === sc.id ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+              {sc.label}
+              {sc.ok === false && <span className="ml-1.5 text-rose-500">• อ่านไม่ได้</span>}
+              {sc.ok && <span className="ml-1.5 font-mono text-[10px] text-slate-400">{sc.missing?.toLocaleString?.() ?? ''}</span>}
+            </button>
+          ))}
+        </div>
+
+        <div className="px-5 pt-3 pb-3 flex flex-wrap gap-2 items-center">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={typed} onChange={e => setTyped(e.target.value)} placeholder="ค้นหารหัส / ชื่อวัตถุดิบในต้นทางนี้…"
+              className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+          </div>
+          {active?.ok && <span className="text-[11px] text-slate-400">{active.note}</span>}
+          {active?.ok && <span className="text-[11px] text-slate-400 font-mono">{active.table}</span>}
+        </div>
+
+        {error && (
+          <div className="mx-5 mb-3 p-3 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 whitespace-pre-wrap">{error}</div>
+        )}
+        {/* อ่านสรุปต้นทางไม่ได้ = แท็บไม่มีจำนวนให้ดู แต่การค้นหายังใช้ได้ตามปกติ
+            จึงเป็นข้อความเตือนสีเหลือง ไม่ใช่กล่องแดงที่ดูเหมือนทั้งหน้าต่างใช้ไม่ได้ */}
+        {!error && schemaErr && (
+          <div className="mx-5 mb-3 p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-700 whitespace-pre-wrap">
+            ดูสรุปของแต่ละต้นทางไม่ได้ (ค้นหาและบันทึกยังใช้ได้ตามปกติ): {schemaErr}
+          </div>
+        )}
+        {!error && active?.ok === false && (
+          <div className="mx-5 mb-3 p-3 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 whitespace-pre-wrap">{active.error}</div>
+        )}
+
+        <div className="flex-1 overflow-y-auto border-t border-slate-100">
+          {loading ? (
+            <div className="p-10 text-center text-slate-400 text-sm">
+              <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />กำลังอ่านข้อมูล…
+            </div>
+          ) : !rows.length ? (
+            <div className="p-10 text-center text-slate-400 text-sm">
+              {query ? `ไม่เจอวัตถุดิบที่ตรงกับ "${query}"`
+                : 'ไม่มีตัวไหนในต้นทางนี้ที่ยังไม่มีในทะเบียน — ครบแล้ว'}
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 sticky top-0">
+                <tr className="text-left text-[11px] uppercase text-slate-400">
+                  <th className="px-4 py-2 w-10">
+                    <input type="checkbox" checked={allPicked} onChange={toggleAll} className="rounded" title="เลือกทั้งหน้า" />
+                  </th>
+                  <th className="px-4 py-2">รหัส</th>
+                  <th className="px-4 py-2">ชื่อวัตถุดิบ</th>
+                  <th className="px-4 py-2">หน่วย</th>
+                  <th className="px-4 py-2 text-right">ราคา</th>
+                  <th className="px-4 py-2">เจอที่ไหน</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => {
+                  const on = Boolean(picked[keyOf(r)]);
+                  return (
+                    <tr key={keyOf(r)} onClick={() => onPick && onPick(r)}
+                      title="กดเพื่อเปิดฟอร์มเพิ่มวัตถุดิบตัวนี้"
+                      className={`border-b border-slate-50 cursor-pointer ${on ? 'bg-emerald-50/60' : 'hover:bg-slate-50'}`}>
+                      {/* ติ๊กช่องนี้ = เลือกไว้บันทึกรวดเดียวหลายตัว (ไม่เปิดฟอร์ม) จึงต้องกันไม่ให้คลิกทะลุไปถึงแถว */}
+                      <td className="px-4 py-2" onClick={e => { e.stopPropagation(); toggle(r); }}>
+                        <input type="checkbox" checked={on} readOnly className="rounded"
+                          title="เลือกไว้บันทึกพร้อมกันหลายตัว" />
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs text-slate-500">{r.code}</td>
+                      <td className="px-4 py-2">
+                        {r.name || <span className="text-slate-300">(ไม่มีชื่อในต้นทาง)</span>}
+                        {r.converter > 0 && (
+                          <span className="ml-1.5 px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded-full text-[10px] font-mono align-middle">
+                            ÷{r.converter}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-slate-500">{r.unit || '—'}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{r.price === null ? '—' : fmt(r.price)}</td>
+                      <td className="px-4 py-2 text-[11px] text-slate-400">
+                        {tab === 'bom' ? `ใช้ใน ${r.uses} เมนู` : `${r.uses} ครั้ง${r.seen ? ` · ล่าสุด ${r.seen}` : ''}`}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          {result?.limited && (
+            <p className="px-4 py-3 text-[11px] text-amber-700 bg-amber-50 border-t border-amber-100">
+              แสดงได้สูงสุด 100 รายการต่อครั้ง — พิมพ์ค้นหาให้แคบลงถ้ายังไม่เจอตัวที่ต้องการ
+            </p>
+          )}
+        </div>
+
+        {saved && (
+          <div className="px-5 py-3 border-t border-slate-100 text-xs space-y-1">
+            {saved.ok.length > 0 && (
+              <p className="text-emerald-700 flex items-start gap-1.5">
+                <CheckCircle size={13} className="mt-0.5 flex-shrink-0" />
+                <span>เพิ่มแล้ว {saved.ok.length} รายการ: {saved.ok.map(r => r.code).join(', ')}</span>
+              </p>
+            )}
+            {saved.fail.map(f => (
+              <p key={keyOf(f.row, f.row.srcId)} className="text-rose-700 flex items-start gap-1.5">
+                <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+                <span>{f.row.code} {f.row.name} — {f.msg}</span>
+              </p>
+            ))}
+          </div>
+        )}
+
+        <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            เลือกไว้ <b className="text-slate-700">{pickedList.length}</b> รายการ
+            {hiddenDup > 0 && <span className="ml-1.5 text-slate-400">· ซ่อนตัวที่มีในทะเบียนแล้ว {hiddenDup}</span>}
+            {progress && (
+              <span className="ml-2 text-emerald-600">กำลังบันทึก {progress.done + 1}/{progress.total} — {progress.name}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ปิด</button>
+            <button onClick={doSave} disabled={!pickedList.length || saving}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              บันทึก {pickedList.length || ''} รายการ
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

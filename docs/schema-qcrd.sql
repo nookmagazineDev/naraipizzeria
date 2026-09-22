@@ -164,6 +164,13 @@ IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_ite
     ALTER TABLE dbo.stock_item ADD used_when NVARCHAR(50) NULL;    -- P ใช้กับ (ทั้งสอง/ทานที่ร้าน/ห่อกลับบ้าน)
 GO
 
+/* หน่วยใช้ = หน่วยเล็กที่สูตรใช้จริง (กรัม/มล./ชิ้น) — คู่กับ converter ที่บอกว่า
+   1 หน่วยซื้อเท่ากับกี่หน่วยเล็ก ของเดิมเก็บแต่ตัวเลข ไม่เคยเก็บว่าเลขนั้นหน่วยอะไร
+   คนกรอกสูตรจึงต้องจำเอาเองว่า 1000 ของไอเทมนี้คือกรัมหรือมิลลิลิตร */
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'use_unit') IS NULL
+    ALTER TABLE dbo.stock_item ADD use_unit NVARCHAR(50) NULL;     -- Q หน่วยใช้ (หน่วยเล็กในสูตร)
+GO
+
 /* ==================== สิทธิ์ของ login ที่เว็บ/API ใช้ ====================
    ฐานนี้ถูกเรียกใช้จากหลายทาง และแต่ละทางใช้ login คนละตัวได้:
      - Vercel ต่อ SQL ตรง   ใช้ QCRD_DB_USER หรือ ZK_DB_USER (ตัวเดียวกับหน้าสแกนหน้า) หรือ HR_DB_USER

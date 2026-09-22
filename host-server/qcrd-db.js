@@ -15,6 +15,8 @@
 //    GET  /qcrd/rcp-lines?rtsId=..        บรรทัดวัตถุดิบของสูตรนั้น
 //    GET  /qcrd/menu-source-schema        ตาราง/คอลัมน์ที่จับคู่ได้ของ Aoringo/HumlaiPOS/NaraiPos
 //    GET  /qcrd/menu-source?src=..&q=..   ทะเบียนเมนูของฐานนั้น (ไว้เพิ่มเข้าทะเบียนหลัก)
+//    GET  /qcrd/item-source-schema        ต้นทางวัตถุดิบ (สูตรเมนู/แพลนสั่งของ/ปิดรอบ) เหลือให้เพิ่มกี่ตัว
+//    GET  /qcrd/item-source?src=..&q=..   วัตถุดิบที่มีในข้อมูลจริงแต่ยังไม่มีในทะเบียน
 //    POST /qcrd/save   { action, ... }    เขียน (ต้องมี header x-api-key)
 //
 //  ⚠️ เขียนได้ต้องตั้ง env QCRD_WRITE_KEY บนเครื่องโฮสต์ก่อน แล้วตั้งค่าเดียวกันเป็น
@@ -116,6 +118,17 @@ function getMenuSource() {
       .catch(err => { menuSrcPromise = null; throw err; });
   }
   return menuSrcPromise;
+}
+
+/** ต้นทางวัตถุดิบในฐานเดียวกัน (qcrd_bom/stock_plan/stock_closing) — โหลดเมื่อหน้าเว็บเรียกใช้ */
+let itemSrcPromise = null;
+function getItemSource() {
+  if (!itemSrcPromise) {
+    itemSrcPromise = importFirst(['../lib/itemSourceSql.mjs', './itemSourceSql.mjs'])
+      .then(m => m.createItemSource({ q }))
+      .catch(err => { itemSrcPromise = null; throw err; });
+  }
+  return itemSrcPromise;
 }
 
 /** ตัวย้ายข้อมูล (โหลดเมื่อเรียก /qcrd/migrate เท่านั้น) */
@@ -325,6 +338,25 @@ function mountQcrd(app) {
       limit: req.query.limit,
       includeInactive: str(req.query.includeInactive) === '1',
     })), 'menu-source');
+  });
+
+  // ── วัตถุดิบที่มีอยู่ในข้อมูลจริงแต่ยังไม่มีในทะเบียน — หน้า QC/RD > วัตถุดิบ เอาไปเพิ่ม ──
+  //
+  //    สูตรเมนู (qcrd_bom) · แพลนสั่งของ (stock_plan) · ปิดรอบสิ้นเดือน (stock_closing)
+  //    ทั้งสามอยู่ในฐาน InventoryNarai เดียวกับ stock_item จึงคัด "ตัวที่ยังไม่มีในทะเบียน"
+  //    ได้ที่ฝั่ง SQL เลย ตรรกะอยู่ใน lib/itemSourceSql.mjs (ไฟล์เดียวกับที่ฝั่ง Vercel ใช้)
+  //
+  //    อ่านอย่างเดียว ไม่ต้องมีกุญแจ — การเขียนยังไปทาง /qcrd/save (action addItem) เหมือนเดิม
+  app.get('/qcrd/item-source-schema', (req, res) =>
+    send(res, getItemSource().then(m => m.schema()), 'item-source-schema'));
+
+  app.get('/qcrd/item-source', (req, res) => {
+    const src = str(req.query.src);
+    if (!src) return res.status(400).json({ status: 'error', message: 'ต้องส่ง ?src= (bom | plan | closing)' });
+    send(res, getItemSource().then(m => m.search(src, {
+      q: str(req.query.q),
+      limit: req.query.limit,
+    })), 'item-source');
   });
 
   // ── ย้ายข้อมูลจากชีท -> SQL (ทำที่เครื่องนี้ เพราะต่อ SQL ได้ตรงและเปิดเน็ตอ่านชีทได้) ──
