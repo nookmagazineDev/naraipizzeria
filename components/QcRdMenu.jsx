@@ -1086,6 +1086,7 @@ async function askMenuSource(params) {
 
 function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
   const [schema, setSchema] = useState(null);      // ผลการจับคู่ของทั้งสามต้นทาง
+  const [schemaErr, setSchemaErr] = useState('');  // อ่านผลจับคู่ไม่ได้ — ไม่ควรบังตารางที่ยังใช้ได้
   const [tab, setTab] = useState('aoringo');
   const [typed, setTyped] = useState('');
   const [query, setQuery] = useState('');          // ค่าที่หน่วงแล้ว (ยิงจริงด้วยตัวนี้)
@@ -1103,8 +1104,8 @@ function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
   useEffect(() => {
     let alive = true;
     askMenuSource('schema=1')
-      .then(d => { if (alive) setSchema(d); })
-      .catch(err => { if (alive) setError(err.message); });
+      .then(d => { if (alive) { setSchema(d); setSchemaErr(''); } })
+      .catch(err => { if (alive) setSchemaErr(err.message); });
     return () => { alive = false; };
   }, []);
 
@@ -1223,6 +1224,13 @@ function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
 
         {error && (
           <div className="mx-5 mb-3 p-3 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 whitespace-pre-wrap">{error}</div>
+        )}
+        {/* อ่านผลจับคู่คอลัมน์ไม่ได้ = แท็บไม่มีจำนวนแถวให้ดู แต่การค้นหายังใช้ได้ตามปกติ
+            จึงเป็นข้อความเตือนสีเหลือง ไม่ใช่กล่องแดงที่ดูเหมือนทั้งหน้าต่างใช้ไม่ได้ */}
+        {!error && schemaErr && (
+          <div className="mx-5 mb-3 p-3 bg-amber-50 border border-amber-100 rounded-xl text-xs text-amber-700 whitespace-pre-wrap">
+            ดูรายละเอียดตาราง/คอลัมน์ของต้นทางไม่ได้ (ค้นหาและบันทึกยังใช้ได้ตามปกติ): {schemaErr}
+          </div>
         )}
         {!error && active?.ok === false && (
           <div className="mx-5 mb-3 p-3 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 whitespace-pre-wrap">{active.error}</div>
