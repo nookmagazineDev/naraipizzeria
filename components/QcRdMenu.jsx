@@ -202,6 +202,32 @@ export default function QcRdMenu() {
     return set;
   }, [menus]);
 
+  // เลขรันนิ่งล่าสุดของรหัสที่ระบบออกให้เอง (เช่น HM000042) แยกตามตัวนำหน้า
+  // นับเฉพาะรูปแบบ "ตัวอักษร + ตัวเลข 6 หลักพอดี" — รหัสยาวกว่านั้นเป็นของคนละกติกา
+  // (เช่น HM + id 13 หลักที่เคยเผลอบันทึกไว้) ไม่ควรดันเลขรันนิ่งให้กระโดดไปเป็นหลักล้านล้าน
+  const runningBase = useMemo(() => {
+    const max = {};
+    menus.forEach(m => {
+      const hit = /^([A-Za-z]+)(\d{6})$/.exec(String(m.code || '').trim());
+      if (!hit) return;
+      const p = hit[1].toUpperCase();
+      const n = parseInt(hit[2], 10);
+      if (Number.isFinite(n)) max[p] = Math.max(max[p] || 0, n);
+    });
+    return max;
+  }, [menus]);
+
+  // ชื่อเมนูที่มีอยู่แล้ว แยกตามตัวนำหน้ารหัส — ต้นทางที่ระบบออกรหัสให้เองเทียบรหัสซ้ำไม่ได้
+  // (รหัสยังไม่เกิดจนกว่าจะกดบันทึก) จึงต้องกันซ้ำด้วยชื่อเมนูภายในตัวนำหน้าเดียวกันแทน
+  const existingNames = useMemo(() => {
+    const by = {};
+    menus.forEach(m => {
+      const p = (/^([A-Za-z]+)/.exec(String(m.code || '').trim())?.[1] || '').toUpperCase();
+      (by[p] = by[p] || new Set()).add(normMenuName(m.name));
+    });
+    return by;
+  }, [menus]);
+
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
   const pageRows = filtered.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
@@ -1036,6 +1062,8 @@ export default function QcRdMenu() {
       {srcModal && (
         <MenuSourcePicker
           existing={existingCodes}
+          existingNames={existingNames}
+          runningBase={runningBase}
           groupList={groupList}
           onClose={() => setSrcModal(false)}
           onSaved={(n) => {
@@ -1071,9 +1099,17 @@ function normCodeKeys(code) {
   return stripped && stripped !== s ? [s, stripped] : [s];
 }
 
+/** ชื่อเมนูสำหรับเทียบซ้ำ — ตัดช่องว่างหัวท้าย ยุบช่องว่างซ้ำ และไม่สนตัวพิมพ์ */
+function normMenuName(name) {
+  return String(name ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** เลขรันนิ่ง 6 หลัก (1 -> '000001') */
+const pad6 = (n) => String(n).padStart(6, '0');
+
 const SOURCE_NOTE = {
   aoringo: 'บันทึกแล้วรหัสจะขึ้นต้นด้วย AO',
-  humlai: 'บันทึกแล้วรหัสจะขึ้นต้นด้วย HM',
+  humlai: 'ระบบออกรหัสให้เป็น HM + เลขรันนิ่ง 6 หลัก (ต้นทางมีแต่ id 13 หลัก)',
   naraipos: 'ใช้รหัสเดิมไม่เติมตัวนำหน้า จึงจับคู่กับยอดขายในรายงานได้',
 };
 
@@ -1084,7 +1120,7 @@ async function askMenuSource(params) {
   return json.data;
 }
 
-function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
+function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onClose, onSaved }) {
   const [schema, setSchema] = useState(null);      // ผลการจับคู่ของทั้งสามต้นทาง
   const [schemaErr, setSchemaErr] = useState('');  // อ่านผลจับคู่ไม่ได้ — ไม่ควรบังตารางที่ยังใช้ได้
   const [tab, setTab] = useState('aoringo');
@@ -1129,20 +1165,54 @@ function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
   }, [tab, query, includeInactive]);
 
   const rows = result?.rows || [];
-  const isDup = (r) => normCodeKeys(r.newCode).some(k => existing.has(k));
+  const src = result?.source || {};
+  const running = src.codeMode === 'running6';   // ระบบออกรหัสให้เอง ไม่ได้ใช้รหัสของต้นทาง
+
+  // คีย์ของแถวที่เลือกไว้ — ขึ้นต้นด้วยชื่อต้นทางเสมอ เพื่อไม่ให้กลายเป็นคีย์ตัวเลขล้วน
+  // (คีย์ที่เป็นเลขล้วนจะถูกเรียงใหม่ตามค่า ทำให้ลำดับที่ผู้ใช้เลือกหายไป ซึ่งเลขรันนิ่งใช้ลำดับนั้น)
+  const keyOf = (r, id = src.id) => `${id}:${r.code}`;
+
+  // รหัสซ้ำ: ต้นทางปกติเทียบด้วยรหัส · ต้นทางที่ระบบออกรหัสให้เองเทียบด้วยชื่อเมนู
+  // ภายในตัวนำหน้าเดียวกัน (รหัสยังไม่เกิดจนกว่าจะบันทึก จึงเอามาเทียบไม่ได้)
+  const isDup = (r) => (running
+    ? Boolean(existingNames?.[String(src.prefix || '').toUpperCase()]?.has(normMenuName(r.name)))
+    : normCodeKeys(r.newCode).some(k => existing.has(k)));
+
   const pickable = rows.filter(r => !isDup(r));
   const pickedList = Object.values(picked);
-  const allPicked = pickable.length > 0 && pickable.every(r => picked[r.newCode]);
+  const allPicked = pickable.length > 0 && pickable.every(r => picked[keyOf(r)]);
+
+  // เลขรันนิ่งที่จะออกให้ — ไล่ตามลำดับที่เลือก แยกนับตามตัวนำหน้า นับต่อจากที่มีในทะเบียนแล้ว
+  // คิดจาก pickedList (ทุกแท็บ) ไม่ใช่จากแถวที่เห็นอยู่ เพราะผู้ใช้สลับแท็บแล้วกดบันทึกได้
+  const assigned = useMemo(() => {
+    const out = {};
+    const counter = {};
+    pickedList.forEach(r => {
+      if (r.codeMode !== 'running6') return;
+      const p = String(r.prefix || '').toUpperCase();
+      counter[p] = (counter[p] === undefined ? (runningBase?.[p] || 0) : counter[p]) + 1;
+      out[keyOf(r, r.srcId)] = `${p}${pad6(counter[p])}`;
+    });
+    return out;
+  }, [pickedList, runningBase]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** รหัสที่จะบันทึกจริงของแถวนั้น ('' = ยังไม่ได้เลือก จึงยังไม่ออกเลขให้) */
+  const codeFor = (r) => (r.codeMode === 'running6' || running
+    ? (assigned[keyOf(r, r.srcId || src.id)] || '')
+    : r.newCode);
 
   const toggle = (r) => setPicked(prev => {
+    const k = keyOf(r);
     const next = { ...prev };
-    if (next[r.newCode]) delete next[r.newCode]; else next[r.newCode] = r;
+    if (next[k]) delete next[k];
+    // จำต้นทางของแถวไว้ในตัวมันเอง — ตอนกดบันทึกอ่านจาก pickedList ซึ่งข้ามแท็บกันได้
+    else next[k] = { ...r, srcId: src.id, prefix: src.prefix, codeMode: src.codeMode };
     return next;
   });
   const toggleAll = () => setPicked(prev => {
     const next = { ...prev };
-    if (allPicked) pickable.forEach(r => delete next[r.newCode]);
-    else pickable.forEach(r => { next[r.newCode] = r; });
+    if (allPicked) pickable.forEach(r => delete next[keyOf(r)]);
+    else pickable.forEach(r => { next[keyOf(r)] = { ...r, srcId: src.id, prefix: src.prefix, codeMode: src.codeMode }; });
     return next;
   });
 
@@ -1155,24 +1225,27 @@ function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
     for (let i = 0; i < pickedList.length; i++) {
       const row = pickedList[i];
       setProgress({ done: i, total: pickedList.length, name: row.name });
+      const code = row.codeMode === 'running6'
+        ? (assigned[keyOf(row, row.srcId)] || row.newCode)
+        : row.newCode;
       try {
         // ช่องเดียวกับฟอร์ม "เพิ่มเมนู" ทุกช่อง — เมนูที่เพิ่งเพิ่มยังไม่มีสูตร (items ว่าง)
         await apiCall('saveMenu', {
-          code: row.newCode,
+          code,
           name: row.name,
           price: row.price === null || row.price === undefined ? '' : String(row.price),
           group, newGroupName: '', yieldQty: '', yieldUnit: '', items: [],
         });
-        ok.push(row);
+        ok.push({ ...row, savedCode: code });
       } catch (err) {
-        fail.push({ row, msg: err.message || 'บันทึกไม่สำเร็จ' });
+        fail.push({ row: { ...row, savedCode: code }, msg: err.message || 'บันทึกไม่สำเร็จ' });
       }
     }
     setProgress(null);
     setSaving(false);
     setSaved({ ok, fail });
     // เอาตัวที่เข้าแล้วออกจากรายการที่เลือกไว้ เหลือไว้เฉพาะตัวที่ยังไม่ผ่าน กดซ้ำได้เลย
-    setPicked(Object.fromEntries(fail.map(f => [f.row.newCode, f.row])));
+    setPicked(Object.fromEntries(fail.map(f => [keyOf(f.row, f.row.srcId), f.row])));
     if (ok.length) onSaved(ok.length);
   };
 
@@ -1261,9 +1334,10 @@ function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
               <tbody>
                 {rows.map(r => {
                   const dup = isDup(r);
-                  const on = Boolean(picked[r.newCode]);
+                  const on = Boolean(picked[keyOf(r)]);
+                  const willBe = codeFor(r);
                   return (
-                    <tr key={`${r.code}-${r.newCode}`}
+                    <tr key={keyOf(r)}
                       onClick={() => !dup && toggle(r)}
                       className={`border-b border-slate-50 ${dup ? 'bg-slate-50/70 text-slate-400' : `cursor-pointer ${on ? 'bg-indigo-50/60' : 'hover:bg-slate-50'}`}`}>
                       <td className="px-4 py-2">
@@ -1272,7 +1346,14 @@ function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
                       <td className="px-4 py-2 font-mono text-xs">
                         <span className="text-slate-400">{r.code}</span>
                         <span className="mx-1.5 text-slate-300">→</span>
-                        <span className="font-semibold text-indigo-600">{r.newCode}</span>
+                        {willBe ? (
+                          <span className="font-semibold text-indigo-600">{willBe}</span>
+                        ) : (
+                          // ต้นทางที่ระบบออกเลขให้: เลขจะรู้ก็ต่อเมื่อเลือกแล้ว เพราะไล่ตามลำดับที่เลือก
+                          <span className="text-slate-300" title="เลือกแถวนี้แล้วระบบจะออกเลขรันนิ่งให้">
+                            {String(src.prefix || '')}······
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-2">{r.name}</td>
                       <td className="px-4 py-2 text-right font-mono text-xs">{r.price === null ? '—' : fmt(r.price)}</td>
@@ -1303,13 +1384,13 @@ function MenuSourcePicker({ existing, groupList, onClose, onSaved }) {
             {saved.ok.length > 0 && (
               <p className="text-emerald-700 flex items-start gap-1.5">
                 <CheckCircle size={13} className="mt-0.5 flex-shrink-0" />
-                <span>เพิ่มแล้ว {saved.ok.length} เมนู: {saved.ok.map(r => r.newCode).join(', ')}</span>
+                <span>เพิ่มแล้ว {saved.ok.length} เมนู: {saved.ok.map(r => r.savedCode || r.newCode).join(', ')}</span>
               </p>
             )}
             {saved.fail.map(f => (
-              <p key={f.row.newCode} className="text-rose-700 flex items-start gap-1.5">
+              <p key={keyOf(f.row, f.row.srcId)} className="text-rose-700 flex items-start gap-1.5">
                 <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
-                <span>{f.row.newCode} {f.row.name} — {f.msg}</span>
+                <span>{f.row.savedCode || f.row.newCode} {f.row.name} — {f.msg}</span>
               </p>
             ))}
           </div>
