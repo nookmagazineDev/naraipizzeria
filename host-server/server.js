@@ -27,10 +27,12 @@
 //    GET /tables                 → รายชื่อตารางทั้งหมด
 //    GET /columns?table=ชื่อ      → คอลัมน์ของตาราง (default = Ctrans)
 //    GET /sample?table=ชื่อ       → ตัวอย่าง 1 แถว (แปลงชื่อคอลัมน์แล้ว)
+//    GET /pos/latest[?days=14]   → ฐาน/เครื่องที่เส้นนี้ต่ออยู่จริง + บิลล่าสุด + บิลต่อวัน
 //    GET /ping                   → เช็กว่า API ยังมีชีวิต
 //
 //  *** ไม่มี API key — ใครเข้าถึง URL ได้ก็ดึงข้อมูลได้ ***
 // ════════════════════════════════════════════════════════════
+const os = require('os');
 const express = require('express');
 const sql = require('mssql');
 const cors = require('cors');
@@ -310,6 +312,59 @@ app.get('/cpaidbetweendate', async (req, res) => {
     res.json({ data: result.recordset.map(mapRow) });
   } catch (e) {
     console.error('cpaid query error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── /pos/latest : ฐานที่ "เส้นนี้" ต่ออยู่จริง + บิลล่าสุดที่มองเห็น ──
+//
+// ไว้ตอบคำถามเดียวที่ตอบยากที่สุดตอนยอดขายหาย: "หน้าเว็บมองเห็นฐานตัวเดียวกับที่เราเปิด
+// SSMS ดูอยู่หรือเปล่า" — อาการที่เจอคือ SSMS บอกว่ามีบิลถึงเมื่อคืน แต่ /cpaidbetweendate
+// คืน {"data":[]} ซึ่งเป็นไปได้สองทางที่หน้าตาเหมือนกันเป๊ะ:
+//   - host-server ต่ออยู่คนละ instance/คนละฐาน (เช่น localhost vs localhost\SQLEXPRESS
+//     หรือฐานสำเนาเก่าที่ชื่อเหมือนกัน) → serverName/dbName/totalBills จะไม่ตรงกับ SSMS
+//   - โดเมนที่ Vercel ยิงเข้ามาไม่ได้วิ่งมาที่เครื่องนี้ → เปิดผ่านโดเมนแล้วได้ hostname
+//     คนละตัวกับตอนเปิด localhost
+// เปิดเทียบสองทางแล้วรู้ผลทันที (ดู pages/api/pos-latest.js ที่เรียกเส้นนี้ให้จากฝั่ง Vercel)
+//
+// ตั้งใจให้เบา: นับทั้งตาราง Cpaid (หลักแสนแถว) ไม่ใช่ Ctrans (หลักล้าน) จึงเร็วพอ
+// แม้ยังไม่ได้สร้าง index (ดู docs/fix-slow-sales-index.sql)
+app.get('/pos/latest', async (req, res) => {
+  const days = Math.min(Math.max(parseInt(req.query.days, 10) || 14, 1), 60);
+  try {
+    const pool = await getPool();
+    const head = await pool.request().query(`
+      SELECT
+        @@SERVERNAME AS serverName,
+        DB_NAME()    AS dbName,
+        (SELECT COUNT_BIG(*) FROM ${PAID_TABLE})                  AS totalBills,
+        (SELECT MAX([${PAID_DATE_COL}]) FROM ${PAID_TABLE})       AS latestBill,
+        (SELECT MIN([${PAID_DATE_COL}]) FROM ${PAID_TABLE})       AS oldestBill
+    `);
+    const recent = await pool.request().input('n', sql.Int, days).query(`
+      SELECT TOP (@n)
+        CONVERT(varchar(10), [${PAID_DATE_COL}], 23) AS day,
+        COUNT(*) AS bills
+      FROM ${PAID_TABLE}
+      GROUP BY CONVERT(varchar(10), [${PAID_DATE_COL}], 23)
+      ORDER BY day DESC
+    `);
+    res.json({
+      ok: true,
+      host: os.hostname(),                 // เครื่องที่ตอบคำขอนี้จริง ๆ
+      table: PAID_TABLE,
+      dateColumn: PAID_DATE_COL,
+      connectedTo: {                       // ค่าที่ host-server ใช้ต่อ (ไม่มีรหัสผ่าน)
+        server: dbConfig.server,
+        port: dbConfig.port,
+        database: dbConfig.database,
+        user: dbConfig.user,
+      },
+      ...head.recordset[0],
+      recentDays: recent.recordset,        // บิลต่อวัน ใหม่→เก่า ไว้ดูว่าข้อมูลหยุดวันไหน
+    });
+  } catch (e) {
+    console.error('pos/latest error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

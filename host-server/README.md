@@ -206,6 +206,33 @@ powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart
 เช็กให้ชัวร์ก่อนกลับไปดูหน้าเว็บ: เปิด `http://localhost:14365/sheets/ping` ต้องได้ JSON
 ที่มีจำนวนแถวของ 5 ตารางและ `writeEnabled: true`
 
+## 🔍 ยอดขายหาย แต่ฐานมีข้อมูล — ไล่ด้วย `/pos/latest`
+
+อาการที่หลอกที่สุดของหน้ายอดขาย: SSMS บอกว่ามีบิลถึงเมื่อคืน แต่หน้าเว็บขึ้นว่า
+"ไม่พบข้อมูลของช่วงนี้" และดึงทั้งเดือนมาไม่ครบทุกวัน โดย `/cpaidbetweendate` คืน
+`{"data":[]}` พร้อมสถานะ 200 — ไม่ใช่ error หน้าเว็บจึงไม่มีอะไรให้แสดงนอกจากแถบเตือน
+
+`{"data":[]}` ตอบได้แค่ว่า "ฐานที่เส้นนี้อ่านอยู่ไม่มีบิลในช่วงนั้น" ซึ่งไม่ได้แปลว่า
+ฐานที่เปิด SSMS ดูอยู่ไม่มี เปิด `/pos/latest` **สองทาง** แล้วเทียบกัน:
+
+| เปิดจาก | URL |
+|---|---|
+| เครื่องออฟฟิศ (ตรงเข้า host-server) | `http://localhost:14365/pos/latest` |
+| ทางที่ Vercel ใช้จริง (ผ่านโดเมน/tunnel) | `https://<โดเมนของแดชบอร์ด>/api/pos-latest` |
+
+อ่านผลแบบนี้:
+
+| ต่างกันตรงไหน | แปลว่า | แก้ที่ |
+|---|---|---|
+| `base` ไม่ใช่โดเมนที่คิดไว้ | env `STORE_API_BASE` บน Vercel ชี้ผิดที่ | Vercel → Settings → Environment Variables (ต้อง redeploy) |
+| `host` (ชื่อเครื่อง) คนละตัว | โดเมน/tunnel ไม่ได้วิ่งมาที่เครื่องนี้ | ngrok/โดเมนที่ชี้ไปเครื่องเก่า |
+| `serverName`/`dbName`/`totalBills` ไม่ตรงกับ SSMS | host-server ต่อคนละ instance หรือคนละฐาน (เช่น ฐานสำเนาเก่าชื่อเดียวกัน) | `DB_SERVER`/`DB_NAME` ใน `db.env.ps1` แล้วรีสตาร์ต |
+| ตรงกันหมด แต่ `recentDays` หยุดที่วันหนึ่ง | ฐานนี้แหละถูกแล้ว แต่ไม่ได้รับบิลใหม่ตั้งแต่วันนั้น | ตัวส่งบิลจากเครื่อง POS สาขา → ฐานกลาง |
+| ตรงกันหมด และ `recentDays` มีถึงเมื่อวาน | ฐานปกติ ปัญหาอยู่ที่ตัวกรองช่วงวันของคำขอ | ดู `PAID_DATE_COL` / ชนิดข้อมูลของคอลัมน์วันที่ |
+
+> เพิ่งเพิ่มเส้นนี้ → ที่เครื่องออฟฟิศต้อง `git pull` **แล้วรีสตาร์ต** `node server.js`
+> ไม่งั้นจะได้ 404 (ดูหัวข้อ "รีสตาร์ทหลัง git pull")
+
 ## endpoint ทั้งหมด
 
 | Method | Path | คำอธิบาย |
@@ -215,6 +242,7 @@ powershell -ExecutionPolicy Bypass -File .\start-narai.ps1 -Restart
 | GET | `/tables` | รายชื่อตาราง |
 | GET | `/columns?table=ชื่อ` | คอลัมน์ของตาราง (default Ctrans) |
 | GET | `/sample?table=ชื่อ` | ตัวอย่าง 1 แถว |
+| GET | `/pos/latest?days=14` | ฐาน/เครื่องที่เส้นนี้ต่ออยู่จริง + บิลล่าสุด + จำนวนบิลต่อวัน |
 | GET | `/ping` | health check |
 | GET | `/zk/transactions?start=…&end=…&emp=…` | log สแกนนิ้ว (ZKBio: iclock_transaction) |
 | GET | `/zk/employees` | พนักงานในเครื่องสแกน + แผนก |
