@@ -1,35 +1,18 @@
 ﻿/* ============================================================================
-   ตั้ง "สาขาที่ใช้" ของวัตถุดิบใหม่ทั้งชุด — เฉพาะสาขา WRM และ WMT
-   (QC/RD > วัตถุดิบ · หน้านับสต๊อกของสาขาอ่านรายการจากตารางเดียวกันนี้)
+   ตั้ง "สาขาที่ใช้" ของวัตถุดิบใหม่ — เฉพาะสาขา WRM และ WMT
+   แก้แค่สาขาในไอเทม (dbo.stock_item_branch) เท่านั้น
+   ไม่แก้ชื่อ/รหัส/หน่วย/ราคา หรือช่องอื่นของวัตถุดิบ และไม่แตะสาขาอื่น
 
-   ต้นทาง: ไฟล์ Template ใบเบิก ชีท "วากาเมะ+WMT" (กพ 2568)
-     - รายการตั้งแต่หัวตารางลงมาจนถึงผักสด  -> ใช้ทั้ง WRM และ WMT  (148 รหัส)
-     - ช่วง "เฉพาะเมืองทอง" ท้ายชีท          -> WMT อย่างเดียว       (16 รหัส)
-     รวม WRM = 148 รหัส · WMT = 164 รหัส
-     (ทงคัตสึ 11050102 อยู่ในชีทสองแถว นับเป็นรหัสเดียว)
+   ต้นทาง: ไฟล์ Template ใบเบิก ชีท "วากาเมะ+WMT"
+     - รายการหลัก                -> WRM + WMT  (148 รหัส)
+     - ช่วง "เฉพาะเมืองทอง"      -> WMT อย่างเดียว (16 รหัส)
 
-   ทำอะไร
-     1) สำรวจ: รหัสในไฟล์ที่ยังไม่มีในทะเบียน (dbo.stock_item) และตัวที่ปิดการใช้งานอยู่
-     2) สำรองแถวเดิมของ wrm/wmt ไว้ที่ dbo.stock_item_branch_bak_wrm_wmt (ครั้งแรกเท่านั้น)
-     3) ลบ wrm/wmt ออกจากทุกวัตถุดิบ แล้วใส่กลับเฉพาะรหัสในไฟล์ที่มีในทะเบียน (ใน transaction)
-     4) สรุปจำนวนหลังตั้งค่า
-   สาขาอื่นไม่ถูกแตะเลย — แก้เฉพาะแถว branch = 'wrm' / 'wmt'
-   รหัสสาขาในตารางนี้เก็บเป็นตัวพิมพ์เล็ก (กติกาเดียวกับ writeItemBranches ใน lib/qcrdSql.mjs)
-   item_key = รหัสสินค้าที่ตัด 0 นำหน้าออก (กติกาเดียวกับ normCode)
-
-   ⚠️ รหัสที่ขึ้นในข้อ 1 ว่า "ไม่มีในทะเบียน" จะไม่ถูกผูกสาขา — เพิ่มวัตถุดิบตัวนั้นในหน้า QC/RD
-      แล้วติ๊ก WRM/WMT เอง (หรือเพิ่มเข้าทะเบียนแล้วรันไฟล์นี้ซ้ำ รันซ้ำกี่รอบก็ได้ผลเท่าเดิม)
+   จับคู่ไอเทมด้วยรหัสสินค้าก่อน ถ้ารหัสไม่เจอค่อยจับด้วยชื่อไอเทมที่ตรงกันทุกตัวอักษร
+   (ไม่นับช่องว่างหน้า/ท้าย) — ตัวที่จับไม่ได้ทั้งสองทางจะแสดงในผลลัพธ์ และไม่ถูกผูกสาขา
 
    วิธีรัน
      node scripts/run-sql.mjs docs/reset-branch-items-wrm-wmt.sql
-   หรือ SSMS: เปิดไฟล์ เลือกฐาน InventoryNarai แล้วกด F5
-
-   ย้อนกลับ (ถ้าต้องการ):
-     BEGIN TRAN;
-       DELETE FROM dbo.stock_item_branch WHERE branch IN (N'wrm', N'wmt');
-       INSERT INTO dbo.stock_item_branch (item_key, branch)
-       SELECT item_key, branch FROM dbo.stock_item_branch_bak_wrm_wmt;
-     COMMIT;
+   หรือ SSMS: เลือกฐาน InventoryNarai แล้วกด F5
    ============================================================================ */
 USE InventoryNarai;
 GO
@@ -209,60 +192,41 @@ INSERT INTO @want (item_code, item_key, scope, item_name) VALUES
     (N'11000441', N'11000441', N'wmt', N'เนื้อออสสันคอ(3kg,up)กก.'),
     (N'11800162', N'11800162', N'wmt', N'แอลกอฮอล์แข็งเฟอร์โน่15กรัม(500/กล่อง)ก้อน');
 
+/* ไอเทมในทะเบียนที่ตรงกับไฟล์ — รหัสก่อน ไม่เจอค่อยใช้ชื่อ */
+DECLARE @match TABLE (item_code NVARCHAR(50) NOT NULL, item_key NVARCHAR(50) NOT NULL);
+INSERT INTO @match (item_code, item_key)
+SELECT w.item_code, i.item_key
+  FROM @want w
+  JOIN dbo.stock_item i ON i.item_key = w.item_key;
+INSERT INTO @match (item_code, item_key)
+SELECT w.item_code, i.item_key
+  FROM @want w
+  JOIN dbo.stock_item i ON LTRIM(RTRIM(i.item_name)) = LTRIM(RTRIM(w.item_name))
+ WHERE NOT EXISTS (SELECT 1 FROM @match m WHERE m.item_code = w.item_code);
+
 DECLARE @target TABLE (item_key NVARCHAR(50) NOT NULL, branch NVARCHAR(10) NOT NULL, PRIMARY KEY (item_key, branch));
 INSERT INTO @target (item_key, branch)
-SELECT DISTINCT w.item_key, b.branch
+SELECT DISTINCT m.item_key, b.branch
   FROM @want w
+  JOIN @match m ON m.item_code = w.item_code
   CROSS APPLY (VALUES (N'wrm'), (N'wmt')) b(branch)
  WHERE w.scope = N'both' OR b.branch = N'wmt';
 
-/* ---------------------------------------------------------------------------
-   1) สำรวจ — รหัสในไฟล์ที่ไม่มีในทะเบียน / ปิดการใช้งานอยู่
-   --------------------------------------------------------------------------- */
-SELECT N'ไม่มีในทะเบียน — ผูกสาขาไม่ได้' AS note, w.item_code, w.item_name, w.scope
-  FROM @want w
- WHERE NOT EXISTS (SELECT 1 FROM dbo.stock_item i WHERE i.item_key = w.item_key)
-UNION ALL
-SELECT N'ปิดการใช้งานอยู่ — ผูกให้แต่หน้านับสต๊อกจะไม่แสดง', w.item_code, i.item_name, w.scope
-  FROM @want w
-  JOIN dbo.stock_item i ON i.item_key = w.item_key
- WHERE ISNULL(i.status, N'') = N'ปิดการใช้งาน'
-ORDER BY note, item_code;
-
-/* ---------------------------------------------------------------------------
-   2) สำรองแถวเดิมของ wrm/wmt (ครั้งแรกเท่านั้น — รันซ้ำจะไม่ทับสำรองชุดแรก)
-   --------------------------------------------------------------------------- */
-IF OBJECT_ID(N'dbo.stock_item_branch_bak_wrm_wmt', N'U') IS NULL
-BEGIN
-    SELECT item_key, branch, SYSDATETIME() AS backed_up_at
-      INTO dbo.stock_item_branch_bak_wrm_wmt
-      FROM dbo.stock_item_branch
-     WHERE branch IN (N'wrm', N'wmt');
-END
-
-/* ---------------------------------------------------------------------------
-   3) ตั้งใหม่ทั้งชุด
-   --------------------------------------------------------------------------- */
-DECLARE @removed INT, @added INT;
+/* แก้สาขา: เอา wrm/wmt ออกจากทุกไอเทม แล้วใส่กลับเฉพาะไอเทมในไฟล์ */
 BEGIN TRAN;
     DELETE FROM dbo.stock_item_branch WHERE branch IN (N'wrm', N'wmt');
-    SET @removed = @@ROWCOUNT;
-
     INSERT INTO dbo.stock_item_branch (item_key, branch)
-    SELECT t.item_key, t.branch
-      FROM @target t
-     WHERE EXISTS (SELECT 1 FROM dbo.stock_item i WHERE i.item_key = t.item_key);
-    SET @added = @@ROWCOUNT;
+    SELECT item_key, branch FROM @target;
 COMMIT;
 
-/* ---------------------------------------------------------------------------
-   4) สรุป
-   --------------------------------------------------------------------------- */
-SELECT @removed AS removed_rows, @added AS inserted_rows;
+/* ผลลัพธ์: จำนวนไอเทมต่อสาขา + รายการในไฟล์ที่หาไอเทมในทะเบียนไม่เจอ */
+SELECT branch, COUNT(*) AS items
+  FROM dbo.stock_item_branch
+ WHERE branch IN (N'wrm', N'wmt')
+ GROUP BY branch;
 
-SELECT b.branch, COUNT(*) AS items
-  FROM dbo.stock_item_branch b
- WHERE b.branch IN (N'wrm', N'wmt')
- GROUP BY b.branch
- ORDER BY b.branch;
+SELECT N'ไม่เจอไอเทมในทะเบียน (ทั้งรหัสและชื่อ)' AS note, w.item_code, w.item_name, w.scope
+  FROM @want w
+ WHERE NOT EXISTS (SELECT 1 FROM @match m WHERE m.item_code = w.item_code)
+ ORDER BY w.item_code;
 GO
