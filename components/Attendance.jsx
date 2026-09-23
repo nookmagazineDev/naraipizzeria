@@ -63,14 +63,21 @@ const lateCell = (v) => {
 };
 
 /**
- * ระยะเบรคที่ลงตารางไว้ — แสดงตามที่สาขากรอก ('1 ชม.' / 'ไม่เบรค')
- * ไม่ได้กรอกไว้ก็ยังบอกเป็นนาทีได้ถ้าอ่านค่าออก (เผื่อสาขากรอกมาเป็นรูปแบบอื่น)
+ * ระยะเบรคที่ลงตารางไว้เป็น 'ช:นน' ('1 ชม.' -> '1:00', 'ไม่เบรค' -> '0:00') ให้อ่านแบบเดียวกับช่องเวลาอื่น
+ * อ่านค่าที่สาขากรอกไม่ออก ค่อยแสดงข้อความตามที่กรอกไว้แทน
  */
+const breakPlanText = (plan) => {
+  if (plan?.breakAllowed != null) {
+    const m = Math.max(0, Math.round(plan.breakAllowed));
+    return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+  }
+  return plan?.breakText || '';
+};
 const breakPlanCell = (plan) => {
-  const t = plan?.breakText || (plan?.breakAllowed != null ? `${plan.breakAllowed} นาที` : '');
+  const t = breakPlanText(plan);
   if (!t) return <Dash />;
   // ไม่เบรค = ไม่มีเวลาพักให้หัก ทำให้จางลงเพื่อไม่ให้สับสนกับวันที่มีเบรคจริง
-  return <span className={plan.breakAllowed === 0 ? 'text-slate-400' : 'text-indigo-700'}>{t}</span>;
+  return <span className={`font-mono ${plan.breakAllowed === 0 ? 'text-slate-400' : 'text-indigo-700'}`}>{t}</span>;
 };
 
 /**
@@ -449,7 +456,7 @@ export default function Attendance() {
     const tag = `${branch || 'ALL'}_${startDate}${startDate === endDate ? '' : `_${endDate}`}`;
     // เปิดเทียบตารางงานไว้ = ใส่ฝั่ง "ที่ลงไว้" กับนาทีที่สายลงไฟล์ด้วย
     const planHead = showPlan
-      ? ['ลงไว้ เข้า', 'ลงไว้ ออกเบรค', 'ลงไว้ เข้าเบรค', 'ลงไว้ ออก', 'ลงไว้ เบรค']
+      ? ['ลงไว้ เข้า', 'ลงไว้ ออกเบรค', 'ลงไว้ เข้าเบรค', 'ลงไว้ ออก', 'ลงไว้ เบรค (ชม.:นาที)']
       : [];
     // OT มาจากตารางงานเหมือนกัน แต่วางท้ายฝั่งสแกนจริงให้ตรงกับที่เห็นบนหน้าเว็บ
     const otHead = showPlan ? ['OT (ชม.)'] : [];
@@ -457,7 +464,7 @@ export default function Attendance() {
     const statusHead = showPlan ? ['สถานะ', 'หมายเหตุตารางงาน'] : [];
     const lateHead = showPlan ? ['เข้าสาย (นาที)', 'เบรคสาย (นาที)', 'ออกก่อน (นาที)', 'รวมสาย (นาที)'] : [];
     const planCells = (d) => (showPlan
-      ? [d.plan?.in || '', d.plan?.breakOut || '', d.plan?.breakIn || '', d.plan?.out || '', d.plan?.breakText || '']
+      ? [d.plan?.in || '', d.plan?.breakOut || '', d.plan?.breakIn || '', d.plan?.out || '', breakPlanText(d.plan)]
       : []);
     const otCells = (d) => (showPlan ? [d.plan?.otHours > 0 ? d.plan.otHours : ''] : []);
     const statusCells = (d) => (showPlan
