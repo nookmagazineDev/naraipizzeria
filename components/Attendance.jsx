@@ -5,7 +5,7 @@ import {
   Building2, Download, AlertCircle, RefreshCw, CalendarClock,
   Pencil, Check, X, CheckCircle
 } from 'lucide-react';
-import { hhmm, hoursToHm, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel } from '../lib/attendance';
+import { hhmm, hoursToHm, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel, totalLateOf } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 
 /*
@@ -60,11 +60,6 @@ const lateCell = (v) => {
   if (v == null) return <Dash />;
   if (v <= 0) return <span className="font-mono text-emerald-600">0</span>;
   return <span className="font-mono font-semibold text-rose-600">{v}</span>;
-};
-/** รวมสาย = เข้าสาย + เบรคสาย + ออกก่อน (นาที) — ทั้งสามช่องเทียบไม่ได้ = null */
-const totalLateOf = (d) => {
-  const vals = [d.lateIn, d.lateBreakIn, d.earlyOut].filter((v) => v != null);
-  return vals.length ? vals.reduce((sum, v) => sum + Math.max(0, v), 0) : null;
 };
 
 /**
