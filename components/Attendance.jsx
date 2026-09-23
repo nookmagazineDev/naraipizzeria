@@ -61,6 +61,11 @@ const lateCell = (v) => {
   if (v <= 0) return <span className="font-mono text-emerald-600">0</span>;
   return <span className="font-mono font-semibold text-rose-600">{v}</span>;
 };
+/** รวมสาย = เข้าสาย + เบรคสาย + ออกก่อน (นาที) — ทั้งสามช่องเทียบไม่ได้ = null */
+const totalLateOf = (d) => {
+  const vals = [d.lateIn, d.lateBreakIn, d.earlyOut].filter((v) => v != null);
+  return vals.length ? vals.reduce((sum, v) => sum + Math.max(0, v), 0) : null;
+};
 
 /**
  * ระยะเบรคที่ลงตารางไว้ — แสดงตามที่สาขากรอก ('1 ชม.' / 'ไม่เบรค')
@@ -455,7 +460,7 @@ export default function Attendance() {
     const otHead = showPlan ? ['OT (ชม.)'] : [];
     // สถานะ/ลา อยู่ก่อนช่องเวลาทำงาน ให้ลำดับคอลัมน์ในไฟล์ตรงกับที่เห็นบนหน้าเว็บ
     const statusHead = showPlan ? ['สถานะ', 'หมายเหตุตารางงาน'] : [];
-    const lateHead = showPlan ? ['เข้าสาย (นาที)', 'เบรคสาย (นาที)', 'ออกก่อน (นาที)'] : [];
+    const lateHead = showPlan ? ['เข้าสาย (นาที)', 'เบรคสาย (นาที)', 'ออกก่อน (นาที)', 'รวมสาย (นาที)'] : [];
     const planCells = (d) => (showPlan
       ? [d.plan?.in || '', d.plan?.breakOut || '', d.plan?.breakIn || '', d.plan?.out || '', d.plan?.breakText || '']
       : []);
@@ -463,7 +468,7 @@ export default function Attendance() {
     const statusCells = (d) => (showPlan
       ? [statusText(d), [...(d.plan?.reasons || []), ...chipNotes(d.plan)].join(', ')]
       : []);
-    const lateCells = (d) => (showPlan ? [d.lateIn ?? '', d.lateBreakIn ?? '', d.earlyOut ?? ''] : []);
+    const lateCells = (d) => (showPlan ? [d.lateIn ?? '', d.lateBreakIn ?? '', d.earlyOut ?? '', totalLateOf(d) ?? ''] : []);
     // ชั่วโมงทำงานลงไฟล์เป็น "เวลา" ของ Excel (เศษส่วนของวัน) แล้วตั้งรูปแบบ [h]:mm
     // อ่านได้เหมือนบนหน้าเว็บ และยังรวมยอด/ลบกันในไฟล์ได้จริง ไม่ใช่ข้อความ '9:04' ที่บวกไม่ได้
     // ปัดเป็นนาทีเต็มก่อนแปลงเป็นเศษส่วนของวัน — Excel ตัดวินาทีทิ้ง ส่วนหน้าเว็บปัดขึ้น/ลง
@@ -754,7 +759,7 @@ export default function Attendance() {
                       ))}
                       <th colSpan={5} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
                       <th colSpan={5} className="h-8 px-3 text-center sticky top-0 bg-emerald-100 text-emerald-800 border-b border-l border-slate-200 font-semibold">สแกนจริง</th>
-                      <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-slate-200 font-semibold">สาย (นาที)</th>
+                      <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-slate-200 font-semibold">สาย (นาที)</th>
                       {/* สถานะ/ลา ไม่ได้เป็นของฝั่งไหนโดยเฉพาะ (มีทั้งเหตุผลการลาและธง "ไม่มีสแกน")
                           วางไว้ติดกับ "เวลาทำงาน" เพราะอ่านคู่กัน: ชั่วโมงที่ได้มาจากวันแบบไหน (มาทำงาน/หยุด/ลา) */}
                       <th rowSpan={2} className="h-8 px-3 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200">สถานะ / ลา</th>
@@ -768,7 +773,7 @@ export default function Attendance() {
                       {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'OT'].map((h, i) => (
                         <th key={`a${h}`} className={`px-3 py-1.5 text-center sticky top-8 bg-emerald-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
                       ))}
-                      {['เข้าสาย', 'เบรคสาย', 'ออกก่อน'].map((h, i) => (
+                      {['เข้าสาย', 'เบรคสาย', 'ออกก่อน', 'รวมสาย'].map((h, i) => (
                         <th key={h} className={`px-3 py-1.5 text-center sticky top-8 bg-rose-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
                       ))}
                       {['รวม', 'พัก', 'สุทธิ'].map((h, i) => (
@@ -833,6 +838,7 @@ export default function Attendance() {
                           <td className="px-3 py-2 text-center bg-rose-50/30 border-l border-slate-200">{lateCell(d.lateIn)}</td>
                           <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.lateBreakIn)}</td>
                           <td className="px-3 py-2 text-center bg-rose-50/30">{lateCell(d.earlyOut)}</td>
+                          <td className="px-3 py-2 text-center bg-rose-100/50">{lateCell(totalLateOf(d))}</td>
                         </>
                       )}
 
