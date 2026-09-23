@@ -7,7 +7,7 @@ import {
 import { summarizeDaily, attachSchedule, hhmm, totalLateOf } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 import {
-  summarizeSalary, payableTotal, payableUnitLabel, periodDays, plannedMinutes,
+  summarizeSalary, payableTotal, payableUnitLabel, payUnitOf, periodDays, plannedMinutes,
   hhmmOfMinutes, hhmmOfHours, LEAVE_COLUMNS, loadHolidays, saveHolidays, round2,
 } from '../lib/payroll';
 
@@ -309,6 +309,11 @@ export default function SalaryReport() {
   const numText = (v) => (v ? v : '');
   const timeText = (minutes) => (minutes ? hhmmOfMinutes(minutes) : '');
   const otText = (hours) => (hours ? hhmmOfHours(hours) : '');
+  // ช่อง "วันทำงาน" ท้ายฟอร์ม — P/T คิดเป็นชั่วโมงทำงาน จึงแสดงเป็น ชม.:นาที เหมือนช่องเวลาทำงาน
+  // (ไม่ใช่ทศนิยม 66.98) · ใช้นาทีรวมตรงๆ ไม่ผ่านค่าที่ปัดเป็นชั่วโมงแล้ว ตัวเลขจึงตรงกับช่องเวลาทำงาน
+  const payableText = (r) => (payUnitOf(r.empType) === 'hourly'
+    ? timeText(r.workMinutes + r.holidayWorkMinutes)
+    : numText(r.payable));
 
   /** ค่าของแต่ละคนเรียงตามคอลัมน์ในฟอร์ม (ใช้ทั้งตารางบนจอและไฟล์ Excel) */
   const cellsOf = (r) => [
@@ -318,7 +323,7 @@ export default function SalaryReport() {
     timeText(r.workMinutes), timeText(r.holidayWorkMinutes),
     numText(r.lateMinutes), numText(r.holidayLateMinutes),
     ...LEAVE_COLUMNS.map((c) => numText(r.leaveDays[c.code] || 0)),
-    numText(r.payable), numText(r.lateMinutes + r.holidayLateMinutes),
+    payableText(r), numText(r.lateMinutes + r.holidayLateMinutes),
   ];
 
   /** ไฟล์ Excel วางทับชีต Summary ได้เลย — แถวแรกเป็นรหัสลา แถวสองเป็นหัวตาราง */
@@ -682,7 +687,7 @@ export default function SalaryReport() {
                         className={`${numCls} bg-amber-50/60 font-bold text-slate-800 border-l border-slate-200`}
                         title={`หน่วยเป็น${payableUnitLabel(r)}`}
                       >
-                        {numText(r.payable)}
+                        {payableText(r)}
                       </td>
                       <td className={cell(r.lateMinutes + r.holidayLateMinutes, 'text-rose-600')}>
                         {numText(r.lateMinutes + r.holidayLateMinutes)}
