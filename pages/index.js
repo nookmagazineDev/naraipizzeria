@@ -584,6 +584,9 @@ const DETAIL_COLUMNS = [
   { key: 'orderID', label: 'เลขที่ออเดอร์', type: 'text' },
 ];
 
+// ไอเทมค่าธรรมเนียม 2.5% — แยกออกจากยอดขายในรายงานยอดรายวัน
+const FEE_ITEM_CODE = '101119';
+
 const DAILY_COLUMNS = [
   { key: 'date', label: 'วันที่', type: 'date' },
   { key: 'outletID', label: 'รหัสสาขา', type: 'outlet' },
@@ -591,7 +594,7 @@ const DAILY_COLUMNS = [
   { key: 'dineIn', label: 'Dine-in', type: 'money' },
   { key: 'takeHome', label: 'Take-Home', type: 'money' },
   { key: 'delivery', label: 'Delivery', type: 'money' },
-  { key: 'serviceChg', label: 'Service10%', type: 'money' },
+  { key: 'serviceChg', label: 'ค่าธรรมเนียม 2.5%', type: 'money' },
   { key: 'netSales', label: 'Net Sales', type: 'money' },
   { key: 'vat', label: 'Vat', type: 'money' },
   { key: 'grossSales', label: 'Gross Sales', type: 'money' },
@@ -1288,6 +1291,19 @@ export default function App() {
     return map;
   }, [detailRaw, costMap, salesRaw]);
 
+  // ค่าธรรมเนียม 2.5% (ไอเทม 101119) ต่อบิล — ยอดก่อน VAT (grossPrice ของรายการ)
+  // ใช้แยกออกจากยอดขาย Dine-in/Take-Home/Delivery ไปแสดงในคอลัมน์ "ค่าธรรมเนียม 2.5%"
+  const feeByCheckMap = useMemo(() => {
+    const map = {};
+    detailRaw.forEach(r => {
+      if (r.void === 'V' || r.Void === 'V' || r.void) return;
+      if (String(r.itemCode || '').trim() !== FEE_ITEM_CODE) return;
+      const cid = String(r.chkCheckID);
+      map[cid] = (map[cid] || 0) + (parseFloat(r.grossPrice || 0) || 0);
+    });
+    return map;
+  }, [detailRaw]);
+
   const dailyBuffetItemsMap = useMemo(() => {
     const map = {};
     if (!detailRaw.length) return map;
@@ -1363,6 +1379,7 @@ export default function App() {
       let dineInBills = 0;
       let takeHomeBills = 0;
       let deliveryBills = 0;
+      let serviceChg = 0;
 
       bills.forEach(r => {
         // ใช้ billTotal (ยอดจริงต่อบิล) เพื่อให้ตรงกับหน้ารายงานยอดขาย
@@ -1371,7 +1388,10 @@ export default function App() {
         // เพราะ Total Sales ก็ไม่นับบิลยอดติดลบ การข้ามตรงนี้ทำให้ Gross = Total (ไม่เกิดส่วนต่างแจ้งเตือน)
         if (billTotal < 0) return;
         const vat = parseFloat(r.vat || r.Vat || 0);
-        const net = billTotal - vat;
+        // ตัดค่าธรรมเนียม 2.5% (101119) ออกจากยอดขาย → ไปรวมในคอลัมน์ค่าธรรมเนียม (serviceChg)
+        const fee = feeByCheckMap[String(r.checkID)] || 0;
+        serviceChg += fee;
+        const net = billTotal - vat - fee;
 
         const tid = parseInt(r.tableID || r.TableID || 0);
         // โต๊ะ 800 = ออเดอร์เพิ่มเติม XUM (Google Sheet) → นับเข้า Take-Home (net = ยอดก่อน VAT)
@@ -1387,11 +1407,8 @@ export default function App() {
         }
       });
 
-      // 2. Service Charge (if any)
-      const serviceChg = bills.reduce((sum, r) => sum + parseFloat(r.service || r.Service || r.serviceChg || r.ServiceChg || r.service10 || r.Service10 || 0), 0);
-
-      // 3. Net, Vat, Gross Sales
-      const netSales = dineIn + takeHome + delivery;
+      // 2. Net, Vat, Gross Sales (Net Sales รวมค่าธรรมเนียม 2.5% ด้วย เพื่อให้ Gross = Total Sales เท่าเดิม)
+      const netSales = dineIn + takeHome + delivery + serviceChg;
       // vat รวมเฉพาะบิลที่ไม่ติดลบ (ให้สอดคล้องกับการตัดบิลยอดติดลบเป็น 0 ด้านบน)
       const vat = bills.reduce((sum, r) => {
         const bt = parseFloat(r.billTotal || r.BillTotal || r.amount || 0);
@@ -1563,7 +1580,7 @@ export default function App() {
         costPct
       };
     }).sort((a, b) => b.date.localeCompare(a.date) || a.outletID - b.outletID);
-  }, [salesRaw, dailyCostSplitMap, dailyBuffetItemsMap]);
+  }, [salesRaw, dailyCostSplitMap, dailyBuffetItemsMap, feeByCheckMap]);
 
   const filteredDailyReport = useMemo(() => {
     let d = [...dailyReportData];
