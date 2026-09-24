@@ -356,6 +356,41 @@ export default function QcRdItems() {
     setCopyForm({ from: '', to: branchFilter && branchFilter !== NO_BRANCH ? branchFilter : '', mode: 'add' });
   };
 
+  /**
+   * ทางถอยของ copyBranch — เขียนทีละวัตถุดิบผ่าน saveItem (ยิงพร้อมกันทีละ 5)
+   * ใช้เมื่อ host-server ยังไม่ได้อัปเดตให้รู้จัก copyBranchItems
+   * สาขาชุดใหม่คิดจากตารางที่โหลดไว้ แตะเฉพาะสาขาปลายทาง สาขาอื่นของแต่ละตัวส่งกลับไปเหมือนเดิม
+   */
+  const copyBranchPerItem = async (from, to, mode) => {
+    const jobs = [];
+    items.forEach(i => {
+      const b = i.usedBranches || [];
+      const hasFrom = b.includes(from), hasTo = b.includes(to);
+      if (hasFrom && !hasTo) jobs.push({ code: String(i.code).trim(), branches: [...b, to], add: true });
+      else if (mode === 'replace' && !hasFrom && hasTo) jobs.push({ code: String(i.code).trim(), branches: b.filter(x => x !== to), add: false });
+    });
+    let added = 0, removed = 0, done = 0;
+    const failed = [];
+    for (let n = 0; n < jobs.length; n += 5) {
+      await Promise.all(jobs.slice(n, n + 5).map(async j => {
+        try {
+          await apiCall('saveItem', { code: j.code, branches: j.branches });
+          if (j.add) added++; else removed++;
+        } catch (e) {
+          failed.push(`${j.code}: ${e.message}`);
+        }
+        done++;
+        setFormMsg({ ok: true, msg: `กำลังบันทึกทีละรายการ ${done.toLocaleString()} / ${jobs.length.toLocaleString()}…` });
+      }));
+    }
+    if (failed.length) {
+      load({ quiet: true });
+      throw new Error(`บันทึกได้ ${(added + removed).toLocaleString()} รายการ ไม่สำเร็จ ${failed.length.toLocaleString()} รายการ `
+        + `(กดคัดลอกซ้ำได้ ระบบจะทำเฉพาะตัวที่ยังขาด) — ${failed.slice(0, 3).join(' · ')}`);
+    }
+    return { added, removed };
+  };
+
   const copyBranch = async () => {
     if (degraded) { setFormMsg({ ok: false, msg: LOCK_HINT }); return; }
     const { from, to, mode } = copyForm;
@@ -367,8 +402,15 @@ export default function QcRdItems() {
     setFormMsg(null);
     setToast(null);
     try {
-      const res = await apiCall('copyBranchItems', { from, to, mode });
-      const d = res.data || {};
+      let d;
+      try {
+        d = (await apiCall('copyBranchItems', { from, to, mode })).data || {};
+      } catch (err) {
+        // ต่อ SQL ตรงไม่ติดแล้วถอยไป host API ที่เครื่องออฟฟิศ ซึ่งยังรันโค้ดรุ่นก่อนมี action นี้
+        // → ทำทีละรายการด้วย saveItem ที่เครื่องนั้นรู้จักอยู่แล้วแทน (ส่งแค่ code + branches = ช่องอื่นคงเดิม)
+        if (!/unknown action/i.test(err.message || '')) throw err;
+        d = await copyBranchPerItem(from, to, mode);
+      }
       setToast({
         ok: true,
         msg: `คัดลอกวัตถุดิบ ${from} → ${to} แล้ว · เพิ่ม ${(d.added ?? 0).toLocaleString()}`
