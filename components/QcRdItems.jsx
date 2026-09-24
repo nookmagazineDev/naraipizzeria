@@ -361,6 +361,8 @@ export default function QcRdItems() {
     const { from, to, mode } = copyForm;
     if (!from || !to) { setFormMsg({ ok: false, msg: 'เลือกสาขาต้นแบบและสาขาปลายทางก่อน' }); return; }
     if (from === to) { setFormMsg({ ok: false, msg: 'สาขาต้นแบบกับสาขาปลายทางต้องไม่ใช่สาขาเดียวกัน' }); return; }
+    // กดครั้งแรก = ขึ้นคำเตือนให้อ่านก่อน กดยืนยันอีกรอบถึงจะเขียนจริง (เขียนทีละหลายร้อยแถว ย้อนกลับเองไม่ได้)
+    if (!copyForm.confirm) { setFormMsg(null); setCopyForm(f => ({ ...f, confirm: true })); return; }
     setCopying(true);
     setFormMsg(null);
     setToast(null);
@@ -1167,7 +1169,7 @@ export default function QcRdItems() {
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-semibold text-slate-500">สาขาต้นแบบ</span>
-                  <select value={copyForm.from} onChange={e => setCopyForm(f => ({ ...f, from: e.target.value }))}
+                  <select value={copyForm.from} onChange={e => setCopyForm(f => ({ ...f, from: e.target.value, confirm: false }))}
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
                     <option value="">— เลือก —</option>
                     {branchOptions.map(b => (
@@ -1179,7 +1181,7 @@ export default function QcRdItems() {
                 </label>
                 <label className="block">
                   <span className="text-xs font-semibold text-slate-500">ไปที่สาขา</span>
-                  <select value={copyForm.to} onChange={e => setCopyForm(f => ({ ...f, to: e.target.value }))}
+                  <select value={copyForm.to} onChange={e => setCopyForm(f => ({ ...f, to: e.target.value, confirm: false }))}
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
                     <option value="">— เลือก —</option>
                     {BRANCHES.filter(b => b !== copyForm.from).map(b => (
@@ -1195,7 +1197,7 @@ export default function QcRdItems() {
                 ].map(([v, label, hint]) => (
                   <label key={v} className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer ${copyForm.mode === v ? 'border-sky-300 bg-sky-50' : 'border-slate-200'}`}>
                     <input type="radio" name="copyMode" checked={copyForm.mode === v}
-                      onChange={() => setCopyForm(f => ({ ...f, mode: v }))} className="mt-0.5" />
+                      onChange={() => setCopyForm(f => ({ ...f, mode: v, confirm: false }))} className="mt-0.5" />
                     <span>
                       <span className="block text-sm font-semibold text-slate-700">{label}</span>
                       <span className="block text-xs text-slate-500">{hint}</span>
@@ -1216,15 +1218,29 @@ export default function QcRdItems() {
             </div>
             <div className="p-4 border-t border-slate-100 space-y-3">
               {formMsg && <FormMsg {...formMsg} />}
+              {copyForm.confirm && copyPreview && (
+                <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-200">
+                  <AlertTriangle size={18} className="flex-shrink-0 text-amber-500 mt-0.5" />
+                  <div className="text-sm text-amber-800">
+                    <p className="font-bold">ยืนยันคัดลอกวัตถุดิบ {copyForm.from} → {copyForm.to}?</p>
+                    <p className="mt-0.5">
+                      เพิ่ม {copyPreview.add.toLocaleString()} รายการ
+                      {copyForm.mode === 'replace' && <> · เอาออก <b className="text-rose-600">{copyPreview.remove.toLocaleString()}</b> รายการ</>}
+                      {' '}— บันทึกลงฐานทันที ย้อนกลับอัตโนมัติไม่ได้
+                    </p>
+                  </div>
+                </div>
+              )}
               <div className="flex items-center justify-end gap-2">
-                <button onClick={() => setCopyForm(null)} disabled={copying}
+                <button onClick={() => (copyForm.confirm ? setCopyForm(f => ({ ...f, confirm: false })) : setCopyForm(null))} disabled={copying}
                   className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
                 <button onClick={copyBranch}
                   disabled={copying || degraded || !copyPreview || !copyPreview.source || (!copyPreview.add && !copyPreview.remove)}
                   title={degraded ? LOCK_HINT : ''}
-                  className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-sky-600 hover:bg-sky-700 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+                  className={`inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white disabled:bg-slate-200 disabled:text-slate-400 rounded-xl ${copyForm.confirm
+                    ? 'bg-amber-500 hover:bg-amber-600' : 'bg-sky-600 hover:bg-sky-700'}`}>
                   {copying ? <Loader2 size={15} className="animate-spin" /> : <Copy size={15} />}
-                  {copying ? 'กำลังคัดลอก…' : 'คัดลอก'}
+                  {copying ? 'กำลังคัดลอก…' : copyForm.confirm ? 'ยืนยันคัดลอก' : 'คัดลอก'}
                 </button>
               </div>
             </div>
