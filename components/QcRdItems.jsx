@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud, Download, Database } from 'lucide-react';
+import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud, Download, Database, Copy } from 'lucide-react';
 import { apiCall, syncNote, syncOk, syncSql } from '../lib/qcrdApi';
 import { useBranches } from '../lib/useBranches';
 
@@ -16,6 +16,8 @@ import { useBranches } from '../lib/useBranches';
  * - ปุ่ม "เพิ่มจากฐานข้อมูล" ดึงวัตถุดิบที่มีอยู่จริงในข้อมูลที่ใช้งานอยู่ (ฐาน InventoryNarai:
  *   สูตรเมนู qcrd_bom · แพลนสั่งของ stock_plan · ปิดรอบ stock_closing) แต่ยังไม่มีในทะเบียนนี้
  *   ผ่าน /api/qcrd-item-source แล้วบันทึกด้วย action addItem ตัวเดิม — ดู ItemSourcePicker ท้ายไฟล์
+ * - ปุ่ม "คัดลอกจากสาขาอื่น" (โหมด SQL) ให้สาขาหนึ่งมีวัตถุดิบชุดเดียวกับสาขาต้นแบบในครั้งเดียว
+ *   ผ่าน action copyBranchItems — เพิ่มเข้าไป หรือให้เหมือนต้นแบบเป๊ะ (เอาตัวที่ต้นแบบไม่ใช้ออกด้วย)
  */
 
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -127,6 +129,9 @@ export default function QcRdItems() {
   // บันทึกไปก็ไม่เห็นผลบนจอ (จอโหลดจากชีท) = อาการ "บันทึกสำเร็จแต่ข้อมูลไม่เปลี่ยน" จึงล็อกไว้เลย
   const [degraded, setDegraded] = useState(false);
   const [syncing, setSyncing] = useState(false);   // กำลังดันชีทขึ้น SQL เอง (ปุ่ม "อัพขึ้น SQL")
+  // คัดลอกวัตถุดิบจากสาขาต้นแบบไปอีกสาขา — { from, to, mode: 'add' | 'replace' } (ดู copyBranch)
+  const [copyForm, setCopyForm] = useState(null);
+  const [copying, setCopying] = useState(false);
 
   // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งตาราง (ใช้หลังกดบันทึก — ตารางเดิมยังอ่านได้ระหว่างรอ)
   //
@@ -325,6 +330,56 @@ export default function QcRdItems() {
       setToast({ ok: false, msg: err.message || 'อัพขึ้น SQL ไม่สำเร็จ' });
     } finally {
       setSyncing(false);
+    }
+  };
+
+  /**
+   * ตัวเลขตัวอย่างก่อนกดคัดลอก — นับจากตารางที่โหลดไว้แล้ว ให้เห็นก่อนว่าจะเพิ่ม/เอาออกกี่รายการ
+   * ของจริงนับใหม่ที่ฐานตอนเขียน (copyBranchItems ใน lib/qcrdSql.mjs) ตัวเลขนี้ไว้ตัดสินใจเท่านั้น
+   */
+  const copyPreview = useMemo(() => {
+    if (!copyForm?.from || !copyForm?.to || copyForm.from === copyForm.to) return null;
+    const { from, to } = copyForm;
+    let source = 0, add = 0, remove = 0;
+    items.forEach(i => {
+      const b = i.usedBranches || [];
+      const hasFrom = b.includes(from), hasTo = b.includes(to);
+      if (hasFrom) source++;
+      if (hasFrom && !hasTo) add++;
+      if (!hasFrom && hasTo) remove++;
+    });
+    return { source, add, remove: copyForm.mode === 'replace' ? remove : 0, keep: remove };
+  }, [copyForm, items]);
+
+  const openCopy = () => {
+    setFormMsg(null);
+    setCopyForm({ from: '', to: branchFilter && branchFilter !== NO_BRANCH ? branchFilter : '', mode: 'add' });
+  };
+
+  const copyBranch = async () => {
+    if (degraded) { setFormMsg({ ok: false, msg: LOCK_HINT }); return; }
+    const { from, to, mode } = copyForm;
+    if (!from || !to) { setFormMsg({ ok: false, msg: 'เลือกสาขาต้นแบบและสาขาปลายทางก่อน' }); return; }
+    if (from === to) { setFormMsg({ ok: false, msg: 'สาขาต้นแบบกับสาขาปลายทางต้องไม่ใช่สาขาเดียวกัน' }); return; }
+    setCopying(true);
+    setFormMsg(null);
+    setToast(null);
+    try {
+      const res = await apiCall('copyBranchItems', { from, to, mode });
+      const d = res.data || {};
+      setToast({
+        ok: true,
+        msg: `คัดลอกวัตถุดิบ ${from} → ${to} แล้ว · เพิ่ม ${(d.added ?? 0).toLocaleString()}`
+          + (mode === 'replace' ? ` · เอาออก ${(d.removed ?? 0).toLocaleString()}` : '')
+          + (d.total != null ? ` · ${to} มีทั้งหมด ${d.total.toLocaleString()} รายการ` : ''),
+      });
+      setCopyForm(null);
+      setBranchFilter(to);   // เปิดดูสาขาปลายทางให้เลย จะได้ตรวจของที่เพิ่งคัดลอกได้ทันที
+      load({ quiet: true });
+    } catch (err) {
+      setFormMsg({ ok: false, msg: err.message || 'คัดลอกไม่สำเร็จ' });
+    } finally {
+      setCopying(false);
     }
   };
 
@@ -569,6 +624,14 @@ export default function QcRdItems() {
               className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 disabled:text-slate-300 border border-slate-200 text-slate-600 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
               <Download size={14} /> โหลด CSV ({filtered.length.toLocaleString()})
             </button>
+            {/* การเขียนทีละหลายพันแถวทำบนฐานทีเดียว — โหมดชีทไม่มีทางนี้ จึงแสดงเฉพาะโหมด SQL */}
+            {source === 'sql' && (
+              <button onClick={openCopy} disabled={degraded || loading}
+                title={degraded ? LOCK_HINT : 'ให้สาขาหนึ่งมีวัตถุดิบชุดเดียวกับอีกสาขา — ไม่ต้องไล่ติ๊กสาขาทีละรายการ'}
+                className="inline-flex items-center gap-2 bg-white hover:bg-sky-50 disabled:bg-slate-100 disabled:text-slate-400 text-sky-600 border border-sky-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+                <Copy size={14} /> คัดลอกจากสาขาอื่น
+              </button>
+            )}
             <button onClick={() => setSrcModal(true)} disabled={degraded}
               title={degraded ? LOCK_HINT : 'ดึงวัตถุดิบที่มีอยู่จริงในสูตรเมนู / แพลนสั่งของ / ปิดรอบ แต่ยังไม่มีในทะเบียนนี้'}
               className="inline-flex items-center gap-2 bg-white hover:bg-emerald-50 disabled:bg-slate-100 disabled:text-slate-400 text-emerald-600 border border-emerald-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
@@ -1084,6 +1147,84 @@ export default function QcRdItems() {
                   className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-rose-500 hover:bg-rose-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
                   {deleting ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
                   {deleting ? 'กำลังลบ…' : 'ลบเลย'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {copyForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !copying && setCopyForm(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-sky-50 text-sky-600 rounded-xl"><Copy size={18} /></div>
+                <h3 className="font-bold text-slate-800">คัดลอกวัตถุดิบจากสาขาอื่น</h3>
+              </div>
+              <button onClick={() => setCopyForm(null)} disabled={copying} className="text-slate-400 hover:text-slate-600"><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-semibold text-slate-500">สาขาต้นแบบ</span>
+                  <select value={copyForm.from} onChange={e => setCopyForm(f => ({ ...f, from: e.target.value }))}
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    <option value="">— เลือก —</option>
+                    {branchOptions.map(b => (
+                      <option key={b.code} value={b.code}>
+                        {b.code} ({(branchCounts[b.code] || 0).toLocaleString()}){b.retired ? ' — ปิดแล้ว' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <span className="text-xs font-semibold text-slate-500">ไปที่สาขา</span>
+                  <select value={copyForm.to} onChange={e => setCopyForm(f => ({ ...f, to: e.target.value }))}
+                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-sky-500">
+                    <option value="">— เลือก —</option>
+                    {BRANCHES.filter(b => b !== copyForm.from).map(b => (
+                      <option key={b} value={b}>{b} ({(branchCounts[b] || 0).toLocaleString()})</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="space-y-2">
+                {[
+                  ['add', 'เพิ่มเข้าไป', 'ของที่สาขาปลายทางมีอยู่แล้วเก็บไว้เหมือนเดิม'],
+                  ['replace', 'ให้เหมือนต้นแบบเป๊ะ', 'ตัวที่สาขาต้นแบบไม่ใช้ จะเอาสาขาปลายทางออกด้วย'],
+                ].map(([v, label, hint]) => (
+                  <label key={v} className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer ${copyForm.mode === v ? 'border-sky-300 bg-sky-50' : 'border-slate-200'}`}>
+                    <input type="radio" name="copyMode" checked={copyForm.mode === v}
+                      onChange={() => setCopyForm(f => ({ ...f, mode: v }))} className="mt-0.5" />
+                    <span>
+                      <span className="block text-sm font-semibold text-slate-700">{label}</span>
+                      <span className="block text-xs text-slate-500">{hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {copyPreview && (
+                <div className="text-sm p-3 rounded-xl bg-slate-50 border border-slate-100 text-slate-600">
+                  {copyForm.from} ใช้ {copyPreview.source.toLocaleString()} รายการ →
+                  เพิ่มให้ {copyForm.to} <b className="text-emerald-600">{copyPreview.add.toLocaleString()}</b> รายการ
+                  {copyForm.mode === 'replace'
+                    ? <> · เอาออก <b className="text-rose-600">{copyPreview.remove.toLocaleString()}</b> รายการ</>
+                    : copyPreview.keep > 0 && <> · มีเฉพาะ {copyForm.to} อยู่แล้ว {copyPreview.keep.toLocaleString()} รายการ (คงไว้)</>}
+                  <p className="text-xs text-slate-400 mt-1">เปลี่ยนเฉพาะสาขา {copyForm.to} สาขาอื่นของแต่ละวัตถุดิบไม่เปลี่ยน</p>
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-slate-100 space-y-3">
+              {formMsg && <FormMsg {...formMsg} />}
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={() => setCopyForm(null)} disabled={copying}
+                  className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
+                <button onClick={copyBranch}
+                  disabled={copying || degraded || !copyPreview || !copyPreview.source || (!copyPreview.add && !copyPreview.remove)}
+                  title={degraded ? LOCK_HINT : ''}
+                  className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-sky-600 hover:bg-sky-700 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+                  {copying ? <Loader2 size={15} className="animate-spin" /> : <Copy size={15} />}
+                  {copying ? 'กำลังคัดลอก…' : 'คัดลอก'}
                 </button>
               </div>
             </div>
