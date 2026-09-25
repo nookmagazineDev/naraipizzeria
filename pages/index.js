@@ -50,6 +50,7 @@ import Attendance from '../components/Attendance';
 import BranchList from '../components/BranchList';
 import BranchUserList from '../components/BranchUserList';
 import SalaryReport from '../components/SalaryReport';
+import UniformReport from '../components/UniformReport';
 import OtherExpense from '../components/OtherExpense';
 import TaxInvoice from '../components/TaxInvoice';
 import QcRdMenu from '../components/QcRdMenu';
@@ -714,7 +715,7 @@ const MENU_ICONS = {
   dashboard: LayoutDashboard, sales: TrendingUp, dailySale: Receipt, details: Layers,
   itemSearch: Search, taxInvoice: FileText, otherExpense: DollarSign,
   stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar,
-  employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, branchList: Building2,
+  employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, uniformReport: ShoppingBag, branchList: Building2,
   branchUsers: KeyRound,
   qcrdMenu: FileText, qcrdItems: PackageSearch,
   planList: ClipboardList, branchRequisition: PackageOpen,
@@ -2634,6 +2635,7 @@ export default function App() {
                 {activeTab === 'branchList' && <Building2 size={20} className="text-amber-600" />}
                 {activeTab === 'branchUsers' && <KeyRound size={20} className="text-amber-600" />}
                 {activeTab === 'salaryReport' && <Wallet size={20} className="text-amber-600" />}
+                {activeTab === 'uniformReport' && <ShoppingBag size={20} className="text-amber-600" />}
                 {activeTab === 'taxInvoice' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdMenu' && <FileText size={20} className="text-amber-600" />}
@@ -2660,6 +2662,7 @@ export default function App() {
                   : activeTab === 'branchList' ? 'จัดการสาขา'
                   : activeTab === 'branchUsers' ? 'login สาขา (บัญชีที่สาขาใช้เข้าระบบลงตารางงาน)'
                   : activeTab === 'salaryReport' ? 'รายงานเงินเดือน'
+                  : activeTab === 'uniformReport' ? 'ยูนิฟอร์ม — สรุปยูนิฟอร์มของสาขา'
                   : activeTab === 'taxInvoice' ? 'ใบกำกับภาษี (เต็มรูป / อย่างย่อ ABB)'
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
@@ -2746,6 +2749,9 @@ export default function App() {
 
             {/* HR: รายงานเงินเดือน — สรุปวันทำงาน/วันลา/OT รายคน ตามสาขาและช่วงวันที่ แล้วสั่งพิมพ์ */}
             {activeTab === 'salaryReport' && <SalaryReport />}
+
+            {/* HR: ยูนิฟอร์ม — รายงานสรุปจาก InventoryNarai.dbo.UniformBranch (ดูอย่างเดียว) */}
+            {activeTab === 'uniformReport' && <UniformReport />}
 
             {/* ACC: ค่าใช้จ่ายอื่นๆ (กรอก+บันทึกลง Google Sheet) */}
             {activeTab === 'otherExpense' && <OtherExpense />}

@@ -22,6 +22,7 @@
 //    GET  /sheets/month-end-summary        สรุปรายสาขา: ปิดยอดรอบล่าสุดถึงวันไหน กี่รายการ มูลค่าเท่าไหร่
 //    GET  /sheets/month-end?month=&branch=&limit= แถวปิดรอบเดือนจาก dbo.stock_month_end (ไม่ระบุเดือน = เดือนล่าสุด)
 //    GET  /sheets/month-end-months         เดือนที่มีข้อมูลปิดรอบ ('YYYY-MM' ใหม่ก่อน)
+//    GET  /sheets/uniform-branch?limit=    ยูนิฟอร์มของสาขา (dbo.UniformBranch) ครบทุกคอลัมน์ ใหม่ก่อน
 //    GET  /sheets/scan-edit?start=&end=    เวลาสแกนนิ้วที่แก้ด้วยมือ (แถวล่าสุดของแต่ละช่อง)
 //    GET  /sheets/scan-edit-history?date=&emp=   ประวัติการแก้ของคนหนึ่งในวันหนึ่ง
 //    POST /sheets/save   { action, ... }   เขียน (ต้องมี header x-api-key)
@@ -99,6 +100,18 @@ function getMonthEnd() {
       .catch(err => { monthEndPromise = null; throw err; });
   }
   return monthEndPromise;
+}
+
+// ยูนิฟอร์มของสาขา (dbo.UniformBranch) อยู่ฐานเดียวกัน — ตรรกะอยู่ใน lib/uniformSql.mjs
+// ตารางนี้ไม่ได้สร้างจากรีโปนี้ ตัวอ่านจับคู่ชื่อคอลัมน์เอาเองตอนรัน (ดูหัวไฟล์นั้น)
+let uniformPromise = null;
+function getUniform() {
+  if (!uniformPromise) {
+    uniformPromise = import('../lib/uniformSql.mjs')
+      .then(m => m.createUniform({ q }))
+      .catch(err => { uniformPromise = null; throw err; });
+  }
+  return uniformPromise;
 }
 
 // เวลาสแกนนิ้วที่แก้ด้วยมือ (dbo.attendance_edit) อยู่ฐานเดียวกัน — ตรรกะอยู่ใน lib/scanEditSql.mjs
@@ -193,6 +206,11 @@ function mountSheets(app) {
 
   app.get('/sheets/month-end-months', (req, res) =>
     send(res, getMonthEnd().then(c => c.readMonthEndMonths()), 'readMonthEndMonths'));
+
+  // ยูนิฟอร์มของสาขา — หน้า HR → ยูนิฟอร์ม (ดูอย่างเดียว ไม่มีฝั่งเขียน)
+  app.get('/sheets/uniform-branch', (req, res) => send(res, getUniform().then(c => c.readUniformBranch({
+    limit: Number(str(req.query.limit)) || undefined,
+  })), 'readUniformBranch'));
 
   // เวลาสแกนที่แก้ด้วยมือ — ช่วงวันที่เดียวกับที่หน้า "ดูสแกนหน้า" ดึงเวลาสแกนมา
   app.get('/sheets/scan-edit', (req, res) => send(res, getScanEdits().then(c => c.readScanEdits({
