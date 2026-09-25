@@ -6,6 +6,11 @@
    ข้อมูลเดิมสำรองไว้ที่ dbo.stock_item_branch_bak_wrm_wmt */
 USE InventoryNarai;
 GO
+/* ตารางสำรอง — สร้างแยกชุดก่อน ให้ชุดหลักอ้างถึงได้แน่นอน */
+IF OBJECT_ID(N'dbo.stock_item_branch_bak_wrm_wmt', N'U') IS NULL
+    CREATE TABLE dbo.stock_item_branch_bak_wrm_wmt (
+        backup_at DATETIME NOT NULL, item_key NVARCHAR(50) NOT NULL, branch NVARCHAR(50) NOT NULL);
+GO
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
@@ -113,10 +118,6 @@ BEGIN
     SELECT N'ดูอย่างเดียว ยังไม่ได้แก้ข้อมูล — ถ้าถูกต้องแก้เป็น SET @apply = 1 แล้วรันใหม่' AS [สถานะ];
     RETURN;
 END;
-
-IF OBJECT_ID(N'dbo.stock_item_branch_bak_wrm_wmt', N'U') IS NULL
-    CREATE TABLE dbo.stock_item_branch_bak_wrm_wmt (
-        backup_at DATETIME NOT NULL, item_key NVARCHAR(50) NOT NULL, branch NVARCHAR(50) NOT NULL);
 
 DECLARE @now DATETIME, @removed INT, @added INT;
 SET @now = GETDATE();
