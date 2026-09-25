@@ -195,6 +195,7 @@ export default function UniformReport() {
   const [branchPick, setBranchPick] = useState('');  // สาขาที่กดเข้าไปดูรายชื่อพนักงาน
   const [itemPick, setItemPick] = useState('');      // ไอเทมที่กดเข้าไปดูว่าใครเบิก
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');        // ตัวกรองสถานะของการ์ดขอเบิก
   const [savingIds, setSavingIds] = useState(() => new Set());   // ใบที่กำลังบันทึกสถานะ
 
   const load = useCallback(() => {
@@ -293,7 +294,20 @@ export default function UniformReport() {
   }, [issuedRows, branchPick]);
 
   /* ---- การ์ด 3: ใบขอเบิกยูนิฟอร์ม ---- */
-  const requestRows = useMemo(() => requests.data?.rows || [], [requests.data]);
+  const allRequestRows = useMemo(() => requests.data?.rows || [], [requests.data]);
+
+  /** จำนวนใบแต่ละสถานะ (ก่อนกรอง) — ขึ้นบนปุ่มตัวกรอง */
+  const statusCounts = useMemo(() => {
+    const c = { all: allRequestRows.length, pending: 0, waiting_order: 0, shipping: 0 };
+    allRequestRows.forEach((r) => { c[r.status || 'pending'] = (c[r.status || 'pending'] || 0) + 1; });
+    return c;
+  }, [allRequestRows]);
+
+  // รายไอเทมและรายใบข้างล่างคิดจากใบที่ผ่านตัวกรองสถานะ ; ตัวเลขบนการ์ดคิดจากทุกใบ
+  const requestRows = useMemo(
+    () => (statusFilter === 'all' ? allRequestRows : allRequestRows.filter((r) => (r.status || 'pending') === statusFilter)),
+    [allRequestRows, statusFilter],
+  );
 
   const byItem = useMemo(() => {
     const map = new Map();
@@ -316,7 +330,7 @@ export default function UniformReport() {
   );
 
   const issuedTotal = issuedRows.reduce((s, r) => s + r.qty, 0);
-  const requestTotal = requestRows.reduce((s, r) => s + r.qty, 0);
+  const requestTotal = allRequestRows.reduce((s, r) => s + r.qty, 0);
   const needle = search.trim().toLowerCase();
 
   const openView = (v) => { setView(v); setBranchPick(''); setItemPick(''); setSearch(''); };
@@ -423,7 +437,7 @@ export default function UniformReport() {
                   <td className="px-4 py-3 text-right text-gray-400"><ChevronRight size={16} className="inline" /></td>
                 </tr>
               ))}
-              {!list.length && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">ยังไม่มีใบขอเบิกยูนิฟอร์ม</td></tr>}
+              {!list.length && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{statusFilter === 'all' ? 'ยังไม่มีใบขอเบิกยูนิฟอร์ม' : `ไม่มีใบที่สถานะ "${STATUS[statusFilter]?.label}"`}</td></tr>}
             </tbody>
             {list.length > 0 && (
               <tfoot className="bg-gray-50 font-semibold"><tr>
@@ -508,9 +522,23 @@ export default function UniformReport() {
           sub={`${fmt0(byBranch.length)} สาขา · กดเพื่อดูรายสาขาและรายชื่อพนักงาน`}
           loading={issued.loading} error={issued.error} active={view === 'branch'} onClick={() => openView('branch')} />
         <SummaryCard icon={ClipboardList} tone="sky" title="ขอเบิกยูนิฟอร์ม" value={fmt0(requestTotal)} unit="ชิ้น"
-          sub={`${fmt0(byItem.length)} รายการ · รออนุมัติ ${fmt0(byItem.reduce((s, i) => s + i.pending, 0))} ใบ · กดเพื่อดูรายละเอียด`}
+          sub={`${fmt0(byItem.length)} รายการ · รออนุมัติ ${fmt0(statusCounts.pending)} ใบ · กดเพื่อดูรายละเอียด`}
           loading={requests.loading} error={requests.error} active={view === 'request'} onClick={() => openView('request')} />
       </div>
+
+      {view === 'request' && !requests.error && requests.data && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-gray-500 mr-1">สถานะ:</span>
+          {[['all', 'ทั้งหมด'], ...Object.entries(STATUS).map(([k, v]) => [k, v.label])].map(([k, text]) => (
+            <button key={k} onClick={() => { setStatusFilter(k); setSearch(''); }}
+              className={`px-3 py-1.5 text-sm rounded-xl border transition ${statusFilter === k
+                ? 'bg-sky-600 text-white border-sky-600'
+                : 'bg-white text-gray-600 border-gray-200 hover:bg-sky-50'}`}>
+              {text} <span className={statusFilter === k ? 'text-sky-100' : 'text-gray-400'}>({fmt0(statusCounts[k] || 0)})</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {detail}
 
