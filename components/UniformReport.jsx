@@ -113,7 +113,8 @@ export default function UniformReport() {
 
   const columns = data?.layout?.columns || [];
   const fields = data?.layout?.fields || {};
-  const dateCol = fields.date || NONE;
+  // host-server ที่เครื่องออฟฟิศอาจยังเป็นเวอร์ชันที่จับคอลัมน์วันที่ไม่ได้ — ถอยไปใช้คอลัมน์ชนิดวันที่ตัวแรก
+  const dateCol = fields.date || columns.find((c) => c.kind === 'date')?.name || NONE;
   const numericCols = columns.filter((c) => c.kind === 'number');
 
   /* ---- กรองแถว ---- */
