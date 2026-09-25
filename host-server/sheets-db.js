@@ -29,7 +29,7 @@
 //    POST /sheets/save   { action, ... }   เขียน (ต้องมี header x-api-key)
 //                                          action: saveOtherExpense · bulkImport ·
 //                                          deleteExpenseByMonth · saveEmployee · saveScanEdit ·
-//                                          saveBranch · deleteBranch
+//                                          saveBranch · deleteBranch · setUniformRequestStatus
 //
 //  ⚠️ เขียนได้ต้องตั้ง env SHEETS_WRITE_KEY (หรือใช้ QCRD_WRITE_KEY เดิมก็ได้) บนเครื่องโฮสต์
 //     แล้วตั้งค่าเดียวกันบน Vercel — ไม่ตั้ง = ปิดการเขียนไว้ (อ่านได้อย่างเดียว)
@@ -239,10 +239,10 @@ function mountSheets(app) {
     }
     const body = req.body || {};
     const action = str(body.action);
-    return send(res, Promise.all([getCore(), getScanEdits(), getBranches(), getBranchUsers()])
-      .then(([core, scanEdits, branches, branchUsers]) => {
+    return send(res, Promise.all([getCore(), getScanEdits(), getBranches(), getBranchUsers(), getUniform()])
+      .then(([core, scanEdits, branches, branchUsers, uniform]) => {
       const fn = core.actions[action] || scanEdits.actions[action]
-        || branches.actions[action] || branchUsers.actions[action];
+        || branches.actions[action] || branchUsers.actions[action] || uniform.actions[action];
       if (!fn) throw Object.assign(new Error(`unknown action: ${action}`), { badRequest: true });
       return fn(body);
     }), action);
