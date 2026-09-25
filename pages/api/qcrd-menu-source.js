@@ -10,6 +10,14 @@
 export const config = { maxDuration: 30 };
 
 import { fetchMenuSource, fetchMenuSourceSchema, QCRD_API_BASE } from '../../lib/qcrdSource';
+import { bentoSchema, bentoSearch } from '../../lib/bentoMenuSheet';
+
+// ต้นทางบน SQL — ใช้ตอนอ่าน schema ฝั่ง SQL ไม่ได้ทั้งก้อน แท็บจะได้ยังขึ้นครบพร้อมเหตุผล
+const SQL_TABS = [
+  { id: 'aoringo', label: 'Aoringo', prefix: 'AO' },
+  { id: 'humlai', label: 'HumlaiPOS', prefix: 'HM', codeMode: 'running6' },
+  { id: 'naraipos', label: 'NaraiPos', prefix: '' },
+];
 
 /** host-server รุ่นก่อนหน้านี้ยังไม่มีเส้น /qcrd/menu-source — express ตอบ 404 เป็นหน้า HTML
  *  ซึ่งอ่านแล้วนึกว่า tunnel พัง ทั้งที่แค่ยังไม่ได้รีสตาร์ต node หลัง git pull */
@@ -26,13 +34,27 @@ export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   try {
     if (String(req.query.schema || '') === '1') {
-      const data = await fetchMenuSourceSchema({ fresh: String(req.query.fresh || '') === '1' });
-      return res.status(200).json({ status: 'success', data });
+      const fresh = String(req.query.fresh || '') === '1';
+      // ข้าวกล่องอ่านจาก Google Sheet ไม่ผ่าน SQL — ฐานที่ร้านต่อไม่ติดก็ยังต้องใช้แท็บนี้ได้
+      const [sql, bento] = await Promise.allSettled([fetchMenuSourceSchema({ fresh }), bentoSchema({ fresh })]);
+      const sqlTabs = sql.status === 'fulfilled'
+        ? sql.value
+        : SQL_TABS.map(t => ({ ...t, codeMode: t.codeMode || 'source', ok: false, error: explain(sql.reason) }));
+      return res.status(200).json({ status: 'success', data: [...sqlTabs, bento.value] });
     }
 
     const src = String(req.query.src || '').trim();
     if (!src) {
-      return res.status(400).json({ status: 'error', message: 'ต้องส่ง ?src= (aoringo | humlai | naraipos) หรือ ?schema=1' });
+      return res.status(400).json({ status: 'error', message: 'ต้องส่ง ?src= (aoringo | humlai | naraipos | bento) หรือ ?schema=1' });
+    }
+
+    const opts = {
+      q: String(req.query.q || '').trim(),
+      limit: Number(req.query.limit) || 50,
+      includeInactive: String(req.query.includeInactive || '') === '1',
+    };
+    if (src === 'bento') {
+      return res.status(200).json({ status: 'success', data: await bentoSearch(opts) });
     }
 
     const data = await fetchMenuSource(src, {
