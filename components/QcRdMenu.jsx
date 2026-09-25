@@ -1125,7 +1125,7 @@ const SOURCE_NOTE = {
   aoringo: 'บันทึกแล้วรหัสจะขึ้นต้นด้วย AO',
   humlai: 'ระบบออกรหัสให้เป็น HM + เลขรันนิ่ง 6 หลัก (ต้นทางมีแต่ id 13 หลัก)',
   naraipos: 'ใช้รหัสเดิมไม่เติมตัวนำหน้า จึงจับคู่กับยอดขายในรายงานได้',
-  bento: 'เมนูข้าวกล่องจาก Google Sheet — บันทึกแล้วรหัสจะขึ้นต้นด้วย BX',
+  naraiboxset: 'เมนูข้าวกล่อง (NaraiBoxSet) จาก Google Sheet — บันทึกแล้วรหัสจะขึ้นต้นด้วย BX',
 };
 
 async function askMenuSource(params) {
@@ -1300,7 +1300,7 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
 
         {/* แท็บต้นทาง — ต้นทางที่อ่านไม่ได้ยังกดเข้าไปดูสาเหตุได้ ไม่ซ่อนทิ้งเฉย ๆ */}
         <div className="px-5 pt-3 flex flex-wrap gap-2">
-          {(schema || [{ id: 'aoringo', label: 'Aoringo' }, { id: 'humlai', label: 'HumlaiPOS' }, { id: 'naraipos', label: 'NaraiPos' }, { id: 'bento', label: 'ข้าวกล่อง (ชีท)' }]).map(sc => (
+          {(schema || [{ id: 'aoringo', label: 'Aoringo' }, { id: 'humlai', label: 'HumlaiPOS' }, { id: 'naraipos', label: 'NaraiPos' }, { id: 'naraiboxset', label: 'NaraiBoxSet' }]).map(sc => (
             <button key={sc.id} onClick={() => setTab(sc.id)}
               className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${
                 tab === sc.id ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>

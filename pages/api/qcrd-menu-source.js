@@ -45,7 +45,7 @@ export default async function handler(req, res) {
 
     const src = String(req.query.src || '').trim();
     if (!src) {
-      return res.status(400).json({ status: 'error', message: 'ต้องส่ง ?src= (aoringo | humlai | naraipos | bento) หรือ ?schema=1' });
+      return res.status(400).json({ status: 'error', message: 'ต้องส่ง ?src= (aoringo | humlai | naraipos | naraiboxset) หรือ ?schema=1' });
     }
 
     const opts = {
@@ -53,7 +53,7 @@ export default async function handler(req, res) {
       limit: Number(req.query.limit) || 50,
       includeInactive: String(req.query.includeInactive || '') === '1',
     };
-    if (src === 'bento') {
+    if (src === 'naraiboxset') {
       return res.status(200).json({ status: 'success', data: await bentoSearch(opts) });
     }
 
