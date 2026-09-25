@@ -4,6 +4,8 @@
 //
 //   GET /api/uniform-branch              -> แถวล่าสุดไม่เกิน 20000 แถว ครบทุกคอลัมน์
 //   GET /api/uniform-branch?limit=50000  -> ขอแถวเพิ่ม (สูงสุด 50000)
+//   GET /api/uniform-branch?view=requests -> ใบขอเบิกยูนิฟอร์มของสาขา (dbo.stock_request)
+//        { rows: [{ requestId, branch, itemKey, itemCode, itemName, unit, qty, requester, savedAt }] }
 //
 // คืน: { status:'success', data: { rows[], total, truncated, limit, layout, source } }
 //   layout.columns = คอลัมน์จริงในตาราง [{ name, type, kind: 'text'|'number'|'date' }]
@@ -12,15 +14,15 @@
 //
 // ทางไปถึงฐานเลือกให้ที่ lib/sheetsSource.js (ต่อ SQL ตรง แล้วถอยไป host API ที่เครื่องออฟฟิศ)
 // ไม่มีชีทให้ถอย — ต่อฐานไม่ได้ = ตอบ error ให้หน้าเว็บขึ้นข้อความ
-import { readUniformBranch } from '../../lib/sheetsSource';
+import { readUniformBranch, readUniformRequests } from '../../lib/sheetsSource';
 
 // ต่อ SQL ตรงไม่ติดแล้วถอยไป host API กินเวลาเกินเพดาน 10 วิของ Vercel ได้
 export const config = { maxDuration: 60 };
 
 /** แปลง error ที่ผู้ใช้แก้เองได้ ให้เป็นข้อความที่บอกวิธีแก้ */
 function explain(msg) {
-  if (/Cannot GET \/sheets\/uniform-branch|HTTP 404/i.test(msg)) {
-    return 'host-server ที่เครื่องออฟฟิศเป็นเวอร์ชันเก่า (ยังไม่มี /sheets/uniform-branch) — ' +
+  if (/Cannot GET \/sheets\/uniform-|HTTP 404|ไม่ใช่ JSON \(HTTP 404/i.test(msg)) {
+    return 'host-server ที่เครื่องออฟฟิศเป็นเวอร์ชันเก่า (ยังไม่มี endpoint ยูนิฟอร์มตัวใหม่) — ' +
       'ที่เครื่องนั้น: git pull แล้วรัน start-narai.ps1 -Restart';
   }
   if (/permission was denied|SELECT permission/i.test(msg)) {
@@ -35,8 +37,15 @@ export default async function handler(req, res) {
   }
 
   const limit = Number(String(req.query.limit || '').trim()) || 0;
+  const view = String(req.query.view || '').trim().toLowerCase();
 
   try {
+    if (view === 'requests') {
+      const data = await readUniformRequests({ limit: limit > 0 ? limit : undefined });
+      res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+      return res.status(200).json({ status: 'success', data, meta: { rows: data.rows.length, source: data.source } });
+    }
+
     const data = await readUniformBranch({ limit: limit > 0 ? limit : undefined });
     res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
     return res.status(200).json({
