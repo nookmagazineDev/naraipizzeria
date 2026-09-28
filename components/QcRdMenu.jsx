@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save, Database, Copy } from 'lucide-react';
-import { apiCall, syncNote, syncOk } from '../lib/qcrdApi';
+import { apiCall, syncNote, syncOk, fillUseUnits } from '../lib/qcrdApi';
 import { rcpNameKey, rcpItemKey } from '../lib/rcpMatch';
 import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
 import { rcpLinesToBom, toSaveItems } from '../lib/rcpCopy.mjs';
@@ -471,10 +471,13 @@ export default function QcRdMenu() {
       let unitSaved = 0;
       let fillsOk = false;
       const overOk = [];
+      let fillsSaved = new Set();
       if (fills.length) {
         try {
-          unitSaved += Number((await apiCall('updateItemUseUnits', { units: fills })).data?.updated) || 0;
-          fillsOk = true;
+          const r = await fillUseUnits(fills);   // ถอยไปทีละรายการเองถ้า host-server ยังไม่รู้จักทางก้อนเดียว
+          unitSaved += Number(r.data?.updated) || 0;
+          fillsSaved = new Set(r.saved);
+          fillsOk = fillsSaved.size > 0;
         } catch { /* รายงานรวมท้ายสุด */ }
       }
       for (const o of overwrites) {
@@ -484,7 +487,7 @@ export default function QcRdMenu() {
       // แปะลงทะเบียนในเครื่องทันที — เปิดฟอร์มเมนูอื่นที่ใช้วัตถุดิบตัวเดียวกันต่อเลยต้องเห็นหน่วยใหม่
       // ไม่ต้องรอโหลดทะเบียนใหม่เบื้องหลังเสร็จ (ช่องที่ทะเบียนมีค่าอยู่แล้ว ฝั่งฐานไม่ทับ ตรงนี้ก็ไม่ทับ)
       if (fillsOk || overOk.length) {
-        const fillBy = new Map((fillsOk ? fills : []).map(f => [f.code, f]));
+        const fillBy = new Map(fills.filter(f => fillsSaved.has(f.code)).map(f => [f.code, f]));
         const overBy = new Map(overOk.map(o => [o.code, o.useUnit]));
         setItems(prev => prev.map(i => {
           if (overBy.has(i.code)) return { ...i, useUnit: overBy.get(i.code) };
@@ -610,12 +613,12 @@ export default function QcRdMenu() {
     let fillFail = '';
     if (todo.length) {
       try {
-        await apiCall('updateItemUseUnits', {
-          units: todo.map(f => ({ code: f.code, useUnit: f.useUnit, converter: f.converter ?? '' })),
-        });
-        todo.forEach(f => useUnitDone.current.add(f.code));
-        filled = todo;
-        const by = new Map(todo.map(f => [f.code, f]));
+        const r = await fillUseUnits(todo.map(f => ({ code: f.code, useUnit: f.useUnit, converter: f.converter ?? '' })));
+        const ok = new Set(r.saved);
+        filled = todo.filter(f => ok.has(f.code));
+        filled.forEach(f => useUnitDone.current.add(f.code));
+        if (r.failed.length) fillFail = `${r.failed.length} รายการ: ${r.failed[0].msg}`;
+        const by = new Map(filled.map(f => [f.code, f]));
         setItems(prev => prev.map(i => {
           const f = by.get(i.code);
           if (!f || String(i.useUnit || '').trim()) return i;

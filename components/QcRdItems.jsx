@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud, Download, Database, Copy, Ruler } from 'lucide-react';
-import { apiCall, syncNote, syncOk, syncSql } from '../lib/qcrdApi';
+import { apiCall, syncNote, syncOk, syncSql, fillUseUnits, HOST_OUTDATED_NOTE } from '../lib/qcrdApi';
 import { useBranches } from '../lib/useBranches';
 import { suggestUseUnit } from '../lib/unitFromName.mjs';
 
@@ -1503,22 +1503,31 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
     let updated = 0;
     let converters = 0;
     let last = null;
+    let fallback = false;
+    const failed = [];
     try {
       for (let i = 0; i < queue.length; i += UU_CHUNK) {
         const chunk = queue.slice(i, i + UU_CHUNK);
         setProgress({ done: i, total: queue.length });
-        last = await apiCall('updateItemUseUnits', {
-          units: chunk.map(r => { const e = eff(r); return { code: r.item.code, useUnit: e.useUnit, converter: e.converter ?? '' }; }),
-        });
+        // ทางก้อนเดียว หรือถอยไปทีละรายการถ้า host-server ยังไม่รู้จัก action นี้ (ดู fillUseUnits)
+        last = await fillUseUnits(
+          chunk.map(r => { const e = eff(r); return { code: r.item.code, useUnit: e.useUnit, converter: e.converter ?? '' }; }),
+          { onProgress: (d) => setProgress({ done: i + d, total: queue.length }) });
         updated += Number(last.data?.updated) || 0;
         converters += Number(last.data?.converters) || 0;
-        chunk.forEach(r => filled.set(r.item.code, eff(r)));
-        setDone(prev => new Set([...prev, ...chunk.map(r => r.item.code)]));
+        fallback = fallback || last.fallback;
+        failed.push(...last.failed);
+        const ok = new Set(last.saved);
+        chunk.filter(r => ok.has(r.item.code)).forEach(r => filled.set(r.item.code, eff(r)));
+        setDone(prev => new Set([...prev, ...ok]));
       }
       setMsg({
-        ok: syncOk(last),
+        ok: syncOk(last) && !failed.length,
         msg: `เติมหน่วยใช้แล้ว ${updated.toLocaleString()} รายการ`
-          + (converters ? ` · เติมตัวแปลงด้วย ${converters.toLocaleString()} รายการ` : '') + syncNote(last),
+          + (converters ? ` · เติมตัวแปลงด้วย ${converters.toLocaleString()} รายการ` : '')
+          + (failed.length ? ` · ไม่สำเร็จ ${failed.length.toLocaleString()} รายการ (ยังเลือกไว้ กดซ้ำได้): ${failed[0].code} ${failed[0].msg}` : '')
+          + (fallback ? ` · ${HOST_OUTDATED_NOTE}` : '')
+          + syncNote(last),
       });
     } catch (err) {
       setMsg({
@@ -1681,7 +1690,7 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
             เลือกไว้ <b className="text-slate-700">{queue.length.toLocaleString()}</b> รายการ
             {done.size > 0 && <span className="ml-2 text-emerald-700">เติมแล้ว {done.size.toLocaleString()}</span>}
             {progress && (
-              <span className="ml-2 text-violet-600">กำลังบันทึก {Math.min(progress.done + UU_CHUNK, progress.total).toLocaleString()}/{progress.total.toLocaleString()}…</span>
+              <span className="ml-2 text-violet-600">กำลังบันทึก {progress.done.toLocaleString()}/{progress.total.toLocaleString()}…</span>
             )}
           </div>
           <div className="flex items-center gap-2">
