@@ -292,6 +292,11 @@ export default function QcRdItems() {
     .map(i => ({ item: i, sug: suggestUseUnit({ name: i.name, unit: i.unit, converter: i.converter }) })),
   [items]);
   const useUnitFillable = useMemo(() => useUnitRows.filter(r => r.sug.useUnit).length, [useUnitRows]);
+  // รหัส -> หน่วยใช้ที่อ่านจากชื่อ (เฉพาะตัวที่ทะเบียนยังว่าง) — ตารางโชว์เป็นป้ายสีม่วงเส้นประ
+  // ให้เห็นว่ายังไม่ได้บันทึก และฟอร์มแก้ไขเอาไปเติมเป็นค่าตั้งต้นให้
+  const useUnitSug = useMemo(
+    () => new Map(useUnitRows.filter(r => r.sug.useUnit).map(r => [r.item.code, r.sug])),
+    [useUnitRows]);
   /** วัตถุดิบตัวอื่นที่ผูก itemID นี้ไว้อยู่แล้ว — ใช้เตือนตอนกรอกในฟอร์ม */
   const posOwner = (pos, exceptCode) => {
     const v = String(pos || '').trim();
@@ -495,7 +500,36 @@ export default function QcRdItems() {
       // ประเภทเก็บค่าตามที่อยู่ในทะเบียนจริง (ว่าง = วัตถุดิบ) ไม่บีบให้เหลือ 2 ค่าอีกแล้ว
       itemType: i.itemType || MATERIAL, newTypeName: '', usedWhen: i.usedWhen || '',
       useUnit: i.useUnit || '',
+      // หน่วยใช้ยังว่าง → เติมจากชื่อเป็นค่าตั้งต้นให้ (กดบันทึกแล้วลงทะเบียนจริง) ดู useUnitPrefill
+      ...useUnitPrefill(i),
     });
+  };
+
+  /**
+   * ค่าตั้งต้นของหน่วยใช้ (+ ตัวแปลงที่ยังว่าง) จากชื่อ ตอนเปิดฟอร์มแก้ไขวัตถุดิบที่ยังไม่มีหน่วยใช้
+   * แบบเดียวกับหน่วยซื้อที่ระบบวิเคราะห์ ซึ่งใส่เป็นค่าตั้งต้นให้แล้วกดบันทึกค่อยลงทะเบียน
+   *   ตรงกับตัวแปลง → หน่วยใช้
+   *   อ่านจากชื่อ (ยังไม่มีตัวแปลง) → หน่วยใช้ + ตัวแปลงของชั้นเล็กสุด
+   *   ชื่อแตกได้หลายชั้น → ไม่เติม บอกตัวเลือกให้เลือกเอง (สูตรอาจนับไม้ ไม่ใช่กรัม)
+   * useUnitHint = ข้อความใต้ช่อง บอกว่าค่ามาจากไหน ('' = ไม่ได้เติมอะไร)
+   */
+  const useUnitPrefill = (i) => {
+    if (String(i.useUnit || '').trim()) return { useUnitHint: '' };
+    const sug = useUnitSug.get(i.code);
+    if (!sug) return { useUnitHint: '' };
+    const fmtN = (n) => Number(n).toLocaleString('th-TH', { maximumFractionDigits: 4 });
+    if (sug.basis === 'match') {
+      return { useUnit: sug.useUnit, useUnitHint: `อ่านจากชื่อ (ตัวแปลง ${fmtN(sug.per)} ตรงกับชื่อ) — กดบันทึกแล้วจะเก็บลงทะเบียน` };
+    }
+    const layers = sug.options.map(o => `${o.unit} ×${fmtN(o.per)}`).join(' / ');
+    if (sug.ambiguous) return { useUnitHint: `ชื่อบอกได้หลายชั้น: ${layers} — เลือกชั้นที่สูตรใช้จริงแล้วกรอกเอง` };
+    const noConv = !(Number(i.converter) > 0);
+    return {
+      useUnit: sug.useUnit,
+      ...(noConv ? { converter: sug.per } : {}),
+      useUnitHint: `อ่านจากชื่อ (1 ${i.unit || 'หน่วยซื้อ'} = ${fmtN(sug.per)} ${sug.useUnit})`
+        + `${noConv ? ` · เติมตัวแปลง ${fmtN(sug.per)} ให้ด้วย` : ''} — กดบันทึกแล้วจะเก็บลงทะเบียน`,
+    };
   };
 
   const openNew = () => {
@@ -867,9 +901,16 @@ export default function QcRdItems() {
                   <td className="px-4 py-2 text-right font-mono">{fmt(i.price)}</td>
                   <td className="px-3 py-2 text-right font-mono text-slate-500">
                     {i.converter != null && !isNaN(i.converter) ? Number(i.converter).toLocaleString() : <span className="text-slate-300">—</span>}
-                    {i.useUnit && (
+                    {i.useUnit ? (
                       <span title="หน่วยใช้ (หน่วยเล็กในสูตร)" className="ml-1 inline-block px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-sans align-middle">
                         {i.useUnit}
+                      </span>
+                    ) : useUnitSug.has(i.code) && (
+                      // ยังไม่มีในทะเบียน — ที่เห็นคือค่าที่อ่านจากชื่อ ยังไม่ได้บันทึก (เส้นประ = ยังไม่จริง)
+                      <span title="หน่วยใช้ที่อ่านจากชื่อ — ยังไม่ได้บันทึก กดปุ่ม &quot;เติมหน่วยใช้จากชื่อ&quot; หรือเปิดแก้ไขแล้วบันทึก"
+                        className="ml-1 inline-block px-1.5 py-0.5 bg-violet-50 text-violet-600 border border-dashed border-violet-300 rounded text-[10px] font-sans align-middle">
+                        {useUnitSug.get(i.code).useUnit}
+                        {useUnitSug.get(i.code).basis === 'name' && ` ×${Number(useUnitSug.get(i.code).per).toLocaleString()}`}
                       </span>
                     )}
                   </td>
@@ -941,6 +982,7 @@ export default function QcRdItems() {
               </span>
             )}
             {' · '}หน่วยสีเหลือง = วิเคราะห์จากชื่อโดยระบบ (ยังไม่ได้เขียนลงชีท)
+            {useUnitSug.size > 0 && ' · หน่วยใช้กรอบม่วงเส้นประ = อ่านจากชื่อ ยังไม่ได้บันทึก (กด "เติมหน่วยใช้จากชื่อ" ทีเดียวทั้งหมด)'}
           </div>
         )}
       </div>
@@ -1001,7 +1043,11 @@ export default function QcRdItems() {
                   <label className="text-xs font-bold text-slate-500">หน่วยใช้ <span className="font-normal">(หน่วยเล็กในสูตร เช่น กรัม / มล.)</span></label>
                   <input list="qcrd-use-units" value={editItem.useUnit || ''}
                     onChange={e => setEditItem(m => ({ ...m, useUnit: e.target.value }))} placeholder="เช่น กรัม"
-                    className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                    className={`mt-1 w-full border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 ${editItem.useUnitHint && editItem.useUnit
+                      ? 'border-violet-200 bg-violet-50 text-violet-700' : 'border-slate-200'}`} />
+                  {editItem.useUnitHint && (
+                    <p className="mt-1 text-[11px] text-violet-600">{editItem.useUnitHint}</p>
+                  )}
                   <datalist id="qcrd-use-units">
                     {USE_UNITS.map(u => <option key={u} value={u} />)}
                   </datalist>
