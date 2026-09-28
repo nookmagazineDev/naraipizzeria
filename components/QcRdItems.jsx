@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud, Download, Database, Copy } from 'lucide-react';
+import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud, Download, Database, Copy, Ruler } from 'lucide-react';
 import { apiCall, syncNote, syncOk, syncSql } from '../lib/qcrdApi';
 import { useBranches } from '../lib/useBranches';
+import { suggestUseUnit } from '../lib/unitFromName.mjs';
 
 /*
  * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน / หมวดสโตร์
@@ -18,6 +19,8 @@ import { useBranches } from '../lib/useBranches';
  *   ผ่าน /api/qcrd-item-source แล้วบันทึกด้วย action addItem ตัวเดิม — ดู ItemSourcePicker ท้ายไฟล์
  * - ปุ่ม "คัดลอกจากสาขาอื่น" (โหมด SQL) ให้สาขาหนึ่งมีวัตถุดิบชุดเดียวกับสาขาต้นแบบในครั้งเดียว
  *   ผ่าน action copyBranchItems — เพิ่มเข้าไป หรือให้เหมือนต้นแบบเป๊ะ (เอาตัวที่ต้นแบบไม่ใช้ออกด้วย)
+ * - ปุ่ม "เติมหน่วยใช้จากชื่อ" อ่านหน่วยใช้ของวัตถุดิบที่ยังว่างจากชื่อ ("(400กรัม/ถุง) ถุง" → กรัม)
+ *   ให้ดูรายการก่อนบันทึก แล้วเขียนด้วย action updateItemUseUnits (ไม่ทับของเดิม) — ดู UseUnitFillDialog
  */
 
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -154,6 +157,7 @@ export default function QcRdItems() {
   // คัดลอกวัตถุดิบจากสาขาต้นแบบไปอีกสาขา — { from, to, mode: 'add' | 'replace' } (ดู copyBranch)
   const [copyForm, setCopyForm] = useState(null);
   const [copying, setCopying] = useState(false);
+  const [useUnitModal, setUseUnitModal] = useState(false);   // เติมหน่วยใช้จากชื่อ (ดู UseUnitFillDialog)
 
   // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งตาราง (ใช้หลังกดบันทึก — ตารางเดิมยังอ่านได้ระหว่างรอ)
   //
@@ -279,6 +283,14 @@ export default function QcRdItems() {
     return new Set(Object.keys(count).filter(c => count[c] > 1));
   }, [items]);
   const noPosCount = useMemo(() => items.filter(i => !i.posItemId).length, [items]);
+
+  // วัตถุดิบที่ยังไม่มีหน่วยใช้ + หน่วยที่อ่านได้จากชื่อ — ปุ่ม "เติมหน่วยใช้จากชื่อ"
+  // (กติกาอยู่ที่ suggestUseUnit ใน lib/unitFromName.mjs ตัวเดียวกับตอนคัดลอกสูตร POS)
+  const useUnitRows = useMemo(() => items
+    .filter(i => !String(i.useUnit || '').trim())
+    .map(i => ({ item: i, sug: suggestUseUnit({ name: i.name, unit: i.unit, converter: i.converter }) })),
+  [items]);
+  const useUnitFillable = useMemo(() => useUnitRows.filter(r => r.sug.useUnit).length, [useUnitRows]);
   /** วัตถุดิบตัวอื่นที่ผูก itemID นี้ไว้อยู่แล้ว — ใช้เตือนตอนกรอกในฟอร์ม */
   const posOwner = (pos, exceptCode) => {
     const v = String(pos || '').trim();
@@ -708,6 +720,13 @@ export default function QcRdItems() {
               className="inline-flex items-center gap-2 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
               <Plus size={14} /> เพิ่มวัตถุดิบ
             </button>
+            {useUnitRows.length > 0 && (
+              <button onClick={() => setUseUnitModal(true)} disabled={degraded || loading}
+                title={degraded ? LOCK_HINT : `วัตถุดิบที่ยังไม่มีหน่วยใช้ ${useUnitRows.length.toLocaleString()} รายการ — อ่านจากชื่อได้ ${useUnitFillable.toLocaleString()} รายการ (ดูรายการก่อนบันทึก)`}
+                className="inline-flex items-center gap-2 bg-white hover:bg-violet-50 disabled:bg-slate-100 disabled:text-slate-400 text-violet-600 border border-violet-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+                <Ruler size={14} /> เติมหน่วยใช้จากชื่อ ({useUnitFillable.toLocaleString()})
+              </button>
+            )}
             {autoCount > 0 && (
               <button onClick={saveUnits} disabled={saving || degraded}
                 title={degraded ? LOCK_HINT : 'บันทึกหน่วยที่วิเคราะห์ได้ลงช่องหน่วยของวัตถุดิบ (เฉพาะช่องที่ยังว่าง)'}
@@ -1313,6 +1332,18 @@ export default function QcRdItems() {
           </div>
         </div>
       )}
+      {useUnitModal && (
+        <UseUnitFillDialog rows={useUnitRows}
+          onClose={() => setUseUnitModal(false)}
+          onEdit={(i) => { setUseUnitModal(false); openEdit(i); }}
+          onSaved={(filled, res) => {
+            // แปะหน่วยใช้ลงตารางทันที แล้วโหลดของจริงตามมาเบื้องหลัง (ฐานไม่ทับช่องที่มีค่าอยู่แล้ว)
+            setItems(prev => prev.map(i => (filled.has(i.code) && !String(i.useUnit || '').trim()
+              ? { ...i, useUnit: filled.get(i.code) } : i)));
+            setToast({ ok: syncOk(res), msg: `เติมหน่วยใช้แล้ว ${(res.data?.updated ?? filled.size).toLocaleString()} รายการ${syncNote(res)}` });
+            load({ quiet: true });
+          }} />
+      )}
       {srcModal && (
         <ItemSourcePicker
           existing={existingKeys}
@@ -1323,6 +1354,255 @@ export default function QcRdItems() {
             load({ quiet: true });
           }} />
       )}
+    </div>
+  );
+}
+
+/* ════════════════ เติมหน่วยใช้จากชื่อวัตถุดิบ ════════════════
+ *
+ * ชื่อวัตถุดิบตั้งตามธรรมเนียม "ชื่อ(ขนาดบรรจุ)หน่วยซื้อ" จึงอ่านหน่วยใช้ได้จากชื่อ
+ * ("(0.5กก./ถุง) กก." + ตัวแปลง 1000 → กรัม) — กติกาอยู่ที่ suggestUseUnit ใน lib/unitFromName.mjs
+ *
+ *   ตรงกับตัวแปลง  ตัวแปลงในทะเบียนตรงกับขนาดที่ชื่อบอก → มั่นใจ ติ๊กไว้ให้
+ *   อ่านจากชื่อ     ทะเบียนยังไม่มีตัวแปลง → ใช้หน่วยเล็กสุดที่ชื่อบอก ติ๊กไว้ให้ ยกเว้นชื่อที่แตกได้หลายชั้น
+ *                  (ถุง → ไม้ → ลูก → กรัม) ซึ่งสูตรอาจนับชั้นอื่น ให้คนเลือกเอง
+ *   ไม่ตรงกับชื่อ   ตัวแปลงในทะเบียนไม่ตรงกับขนาดที่ชื่อบอก → ไม่เติม ต้องแก้ตัวแปลงก่อน (ดูอย่างเดียว)
+ *   ชื่อไม่บอก       ผักสด/ของใช้ที่ชื่อไม่มีหน่วย → ไม่เดา กรอกเองในฟอร์มแก้ไข
+ *
+ * บันทึกทีละ 200 รายการด้วย action updateItemUseUnits ซึ่งเขียนเฉพาะช่องที่ยังว่าง
+ * (มีคนกรอกไว้ระหว่างเปิดหน้าต่างนี้ = ไม่ทับ) พลาดกลางทางแล้วรอบที่ผ่านไปแล้วยังอยู่ กดซ้ำได้
+ */
+const UU_TABS = [
+  { id: 'fill', label: 'เติมได้' },
+  { id: 'match', label: 'ตรงกับตัวแปลง' },
+  { id: 'name', label: 'อ่านจากชื่อ (ยังไม่มีตัวแปลง)' },
+  { id: 'mismatch', label: 'ตัวแปลงไม่ตรงกับชื่อ' },
+  { id: 'noinfo', label: 'ชื่อไม่บอกหน่วย' },
+];
+const UU_CHUNK = 200;
+const UU_SHOW = 400;   // แสดงทีละไม่เกินนี้ — ทะเบียนมีหลักพัน วาดทีเดียวทั้งหมดแล้วหน้าหน่วง
+
+const uuGroup = (sug) => (sug.basis || sug.reason);
+const fmtPer = (n) => Number(n).toLocaleString('th-TH', { maximumFractionDigits: 4 });
+
+function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
+  const [list] = useState(rows);   // จำไว้ตั้งแต่เปิด — ตัวที่เติมแล้วจะหลุดจาก prop แต่ผลต้องยังโชว์อยู่
+  const [tab, setTab] = useState('fill');
+  const [q, setQ] = useState('');
+  const [picked, setPicked] = useState(() => new Set(
+    rows.filter(r => r.sug.basis === 'match' || (r.sug.basis === 'name' && !r.sug.ambiguous)).map(r => r.item.code)));
+  const [done, setDone] = useState(() => new Set());
+  const [saving, setSaving] = useState(false);
+  const [progress, setProgress] = useState(null);   // { done, total }
+  const [msg, setMsg] = useState(null);             // { ok, msg }
+
+  const count = useMemo(() => {
+    const c = { fill: 0, match: 0, name: 0, mismatch: 0, noinfo: 0 };
+    list.forEach(r => { c[uuGroup(r.sug)]++; if (r.sug.useUnit) c.fill++; });
+    return c;
+  }, [list]);
+
+  const shown = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return list.filter(r => {
+      const g = uuGroup(r.sug);
+      if (tab === 'fill' ? !r.sug.useUnit : g !== tab) return false;
+      if (!s) return true;
+      return r.item.code.toLowerCase().includes(s) || r.item.name.toLowerCase().includes(s)
+        || r.sug.useUnit.toLowerCase().includes(s);
+    });
+  }, [list, tab, q]);
+
+  const fillable = (r) => Boolean(r.sug.useUnit) && !done.has(r.item.code);
+  const queue = list.filter(r => fillable(r) && picked.has(r.item.code));
+  const shownFillable = shown.filter(fillable);
+  const allShownPicked = shownFillable.length > 0 && shownFillable.every(r => picked.has(r.item.code));
+
+  const toggle = (code) => setPicked(prev => {
+    const next = new Set(prev);
+    if (next.has(code)) next.delete(code); else next.add(code);
+    return next;
+  });
+  const toggleShown = () => setPicked(prev => {
+    const next = new Set(prev);
+    shownFillable.forEach(r => (allShownPicked ? next.delete(r.item.code) : next.add(r.item.code)));
+    return next;
+  });
+
+  const save = async () => {
+    if (!queue.length) return;
+    setSaving(true);
+    setMsg(null);
+    const filled = new Map();
+    let updated = 0;
+    let last = null;
+    try {
+      for (let i = 0; i < queue.length; i += UU_CHUNK) {
+        const chunk = queue.slice(i, i + UU_CHUNK);
+        setProgress({ done: i, total: queue.length });
+        last = await apiCall('updateItemUseUnits', {
+          units: chunk.map(r => ({ code: r.item.code, useUnit: r.sug.useUnit })),
+        });
+        updated += Number(last.data?.updated) || 0;
+        chunk.forEach(r => filled.set(r.item.code, r.sug.useUnit));
+        setDone(prev => new Set([...prev, ...chunk.map(r => r.item.code)]));
+      }
+      setMsg({ ok: syncOk(last), msg: `เติมหน่วยใช้แล้ว ${updated.toLocaleString()} รายการ${syncNote(last)}` });
+    } catch (err) {
+      setMsg({
+        ok: false,
+        msg: `${err.message || 'บันทึกไม่สำเร็จ'}${filled.size ? ` — ก่อนหน้านี้เข้าไปแล้ว ${filled.size.toLocaleString()} รายการ ที่เหลือกดซ้ำได้` : ''}`,
+      });
+    } finally {
+      setSaving(false);
+      setProgress(null);
+      if (filled.size) onSaved(filled, { ...(last || {}), data: { ...(last?.data || {}), updated } });
+    }
+  };
+
+  const note = (r) => {
+    const { sug, item } = r;
+    const unit = item.unit || 'หน่วยซื้อ';
+    if (sug.basis === 'match') {
+      return sug.per === 1 ? `ตัวแปลง 1 = ใช้เป็น ${sug.useUnit} ตรง ๆ` : `ตัวแปลง ${fmtPer(sug.per)} ตรงกับชื่อ (1 ${unit} = ${fmtPer(sug.per)} ${sug.useUnit})`;
+    }
+    if (sug.basis === 'name') {
+      return `ชื่อบอก 1 ${unit} = ${fmtPer(sug.per)} ${sug.useUnit} · ทะเบียนยังไม่มีตัวแปลง (ควรใส่ ${fmtPer(sug.per)})`
+        + (sug.ambiguous ? ' · ชื่อแตกได้หลายชั้น สูตรอาจนับหน่วยอื่น — ตรวจก่อนติ๊ก' : '');
+    }
+    if (sug.reason === 'mismatch') {
+      return `ตัวแปลง ${fmtPer(item.converter)} แต่ชื่อบอก 1 ${unit} = ${fmtPer(sug.expect.per)} ${sug.expect.unit} — แก้ตัวแปลงก่อน`;
+    }
+    return 'ชื่อไม่บอกขนาด/หน่วย — กรอกเองในฟอร์มแก้ไข';
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={() => !saving && onClose()}>
+      <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Ruler size={18} className="text-violet-500" /> เติมหน่วยใช้จากชื่อ
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              วัตถุดิบที่ยังไม่มีหน่วยใช้ {list.length.toLocaleString()} รายการ — อ่านจากชื่อตามรูปแบบ &quot;ชื่อ(ขนาดบรรจุ)หน่วยซื้อ&quot;
+              เช่น &quot;(400กรัม/ถุง) ถุง&quot; → กรัม · &quot;(0.5กก./ถุง) กก.&quot; + ตัวแปลง 1000 → กรัม
+              · เติมเฉพาะช่องที่ยังว่าง ไม่ทับของเดิม
+            </p>
+          </div>
+          <button onClick={onClose} disabled={saving} className="text-slate-400 hover:text-slate-600 flex-shrink-0 disabled:opacity-30"><X size={20} /></button>
+        </div>
+
+        <div className="px-5 pt-3 flex flex-wrap gap-2">
+          {UU_TABS.map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${tab === t.id
+                ? 'bg-violet-50 border-violet-200 text-violet-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+              {t.label} <span className="ml-1 font-mono text-[10px] opacity-70">{count[t.id].toLocaleString()}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="px-5 pt-3 pb-3">
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="ค้นหารหัส / ชื่อ / หน่วยใช้…"
+              className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400" />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto border-t border-slate-100">
+          {!shown.length ? (
+            <div className="p-10 text-center text-slate-400 text-sm">ไม่มีรายการในกลุ่มนี้</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 sticky top-0">
+                <tr className="text-left text-[11px] uppercase text-slate-400">
+                  <th className="px-4 py-2 w-10">
+                    <input type="checkbox" checked={allShownPicked} onChange={toggleShown}
+                      disabled={saving || !shownFillable.length} className="rounded" title="เลือกทั้งหมดที่แสดงอยู่" />
+                  </th>
+                  <th className="px-3 py-2">รหัส</th>
+                  <th className="px-3 py-2">ชื่อวัตถุดิบ</th>
+                  <th className="px-3 py-2">หน่วยซื้อ</th>
+                  <th className="px-3 py-2 text-right">ตัวแปลง</th>
+                  <th className="px-3 py-2">หน่วยใช้ที่จะเติม</th>
+                  <th className="px-3 py-2">ที่มา</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.slice(0, UU_SHOW).map(r => {
+                  const code = r.item.code;
+                  const isDone = done.has(code);
+                  const can = fillable(r);
+                  const on = isDone || (can && picked.has(code));
+                  const g = uuGroup(r.sug);
+                  return (
+                    <tr key={code} onClick={() => can && !saving && toggle(code)}
+                      className={`border-b border-slate-50 ${isDone ? 'bg-emerald-50/50' : can ? `cursor-pointer ${on ? 'bg-violet-50/50' : 'hover:bg-slate-50'}` : ''}`}>
+                      <td className="px-4 py-2">
+                        {r.sug.useUnit && <input type="checkbox" checked={on} disabled={!can || saving} readOnly className="rounded" />}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{code}</td>
+                      <td className="px-3 py-2 text-slate-800">{r.item.name}</td>
+                      <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">{r.item.unit || '—'}</td>
+                      <td className="px-3 py-2 text-right font-mono text-xs text-slate-500">
+                        {r.item.converter != null && !isNaN(r.item.converter) ? fmtPer(r.item.converter) : '—'}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {r.sug.useUnit ? (
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${isDone
+                            ? 'bg-emerald-100 text-emerald-700' : 'bg-violet-100 text-violet-700'}`}>
+                            {isDone && <CheckCircle size={11} />}{r.sug.useUnit}
+                          </span>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
+                      <td className={`px-3 py-2 text-[11px] ${g === 'mismatch' ? 'text-rose-600' : r.sug.ambiguous ? 'text-amber-700' : 'text-slate-500'}`}>
+                        {note(r)}
+                        {(g === 'mismatch' || g === 'noinfo') && (
+                          <button onClick={e => { e.stopPropagation(); onEdit(r.item); }} disabled={saving}
+                            className="ml-2 inline-flex items-center gap-0.5 font-semibold text-slate-600 underline hover:text-slate-900">
+                            <Pencil size={10} /> แก้ไข
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+          {shown.length > UU_SHOW && (
+            <p className="px-4 py-3 text-[11px] text-slate-500 bg-slate-50 border-t border-slate-100">
+              แสดง {UU_SHOW.toLocaleString()} จาก {shown.length.toLocaleString()} รายการ — ค้นหาเพื่อกรอง
+              (ปุ่มบันทึกเติมให้ทุกตัวที่ติ๊กไว้ รวมตัวที่ไม่ได้แสดงอยู่ด้วย)
+            </p>
+          )}
+        </div>
+
+        {msg && (
+          <div className="px-5 py-3 border-t border-slate-100"><FormMsg ok={msg.ok} msg={msg.msg} /></div>
+        )}
+
+        <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            เลือกไว้ <b className="text-slate-700">{queue.length.toLocaleString()}</b> รายการ
+            {done.size > 0 && <span className="ml-2 text-emerald-700">เติมแล้ว {done.size.toLocaleString()}</span>}
+            {progress && (
+              <span className="ml-2 text-violet-600">กำลังบันทึก {Math.min(progress.done + UU_CHUNK, progress.total).toLocaleString()}/{progress.total.toLocaleString()}…</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={onClose} disabled={saving}
+              className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-50">ปิด</button>
+            <button onClick={save} disabled={!queue.length || saving}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-violet-500 hover:bg-violet-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              เติมหน่วยใช้ {queue.length ? queue.length.toLocaleString() : ''} รายการ
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

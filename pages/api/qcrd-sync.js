@@ -42,6 +42,7 @@ export const STEPS_FOR_ACTION = {
   addItem: ['item'],
   deleteItem: ['item'],
   updateItemUnits: ['item'],
+  updateItemUseUnits: ['item'],
   sortBom: ['bom'],
 };
 
