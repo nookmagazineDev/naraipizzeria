@@ -20,7 +20,8 @@ import { suggestUseUnit } from '../lib/unitFromName.mjs';
  * - ปุ่ม "คัดลอกจากสาขาอื่น" (โหมด SQL) ให้สาขาหนึ่งมีวัตถุดิบชุดเดียวกับสาขาต้นแบบในครั้งเดียว
  *   ผ่าน action copyBranchItems — เพิ่มเข้าไป หรือให้เหมือนต้นแบบเป๊ะ (เอาตัวที่ต้นแบบไม่ใช้ออกด้วย)
  * - ปุ่ม "เติมหน่วยใช้จากชื่อ" อ่านหน่วยใช้ของวัตถุดิบที่ยังว่างจากชื่อ ("(400กรัม/ถุง) ถุง" → กรัม)
- *   ให้ดูรายการก่อนบันทึก แล้วเขียนด้วย action updateItemUseUnits (ไม่ทับของเดิม) — ดู UseUnitFillDialog
+ *   ตัวที่ยังไม่มีตัวแปลงได้ตัวแปลงจากชื่อไปด้วย (400) ให้ดูรายการก่อนบันทึก แล้วเขียนด้วย action
+ *   updateItemUseUnits (ไม่ทับของเดิม) — ดู UseUnitFillDialog
  */
 
 const fmt = v => (v === null || v === undefined || isNaN(v)) ? '—'
@@ -1337,10 +1338,19 @@ export default function QcRdItems() {
           onClose={() => setUseUnitModal(false)}
           onEdit={(i) => { setUseUnitModal(false); openEdit(i); }}
           onSaved={(filled, res) => {
-            // แปะหน่วยใช้ลงตารางทันที แล้วโหลดของจริงตามมาเบื้องหลัง (ฐานไม่ทับช่องที่มีค่าอยู่แล้ว)
-            setItems(prev => prev.map(i => (filled.has(i.code) && !String(i.useUnit || '').trim()
-              ? { ...i, useUnit: filled.get(i.code) } : i)));
-            setToast({ ok: syncOk(res), msg: `เติมหน่วยใช้แล้ว ${(res.data?.updated ?? filled.size).toLocaleString()} รายการ${syncNote(res)}` });
+            // แปะหน่วยใช้ (+ ตัวแปลงที่ยังว่าง) ลงตารางทันที แล้วโหลดของจริงตามมาเบื้องหลัง
+            // (ฐานไม่ทับช่องที่มีค่าอยู่แล้ว ตารางจึงแปะเฉพาะช่องที่ว่างเหมือนกัน)
+            setItems(prev => prev.map(i => {
+              const f = filled.get(i.code);
+              if (!f || String(i.useUnit || '').trim()) return i;
+              return { ...i, useUnit: f.useUnit, ...(f.converter && !(Number(i.converter) > 0) ? { converter: f.converter } : {}) };
+            }));
+            const nConv = res.data?.converters ?? 0;
+            setToast({
+              ok: syncOk(res),
+              msg: `เติมหน่วยใช้แล้ว ${(res.data?.updated ?? filled.size).toLocaleString()} รายการ`
+                + (nConv ? ` · เติมตัวแปลงด้วย ${nConv.toLocaleString()} รายการ` : '') + syncNote(res),
+            });
             load({ quiet: true });
           }} />
       )}
@@ -1363,19 +1373,21 @@ export default function QcRdItems() {
  * ชื่อวัตถุดิบตั้งตามธรรมเนียม "ชื่อ(ขนาดบรรจุ)หน่วยซื้อ" จึงอ่านหน่วยใช้ได้จากชื่อ
  * ("(0.5กก./ถุง) กก." + ตัวแปลง 1000 → กรัม) — กติกาอยู่ที่ suggestUseUnit ใน lib/unitFromName.mjs
  *
- *   ตรงกับตัวแปลง  ตัวแปลงในทะเบียนตรงกับขนาดที่ชื่อบอก → มั่นใจ ติ๊กไว้ให้
- *   อ่านจากชื่อ     ทะเบียนยังไม่มีตัวแปลง → ใช้หน่วยเล็กสุดที่ชื่อบอก ติ๊กไว้ให้ ยกเว้นชื่อที่แตกได้หลายชั้น
- *                  (ถุง → ไม้ → ลูก → กรัม) ซึ่งสูตรอาจนับชั้นอื่น ให้คนเลือกเอง
+ *   ตรงกับตัวแปลง  ตัวแปลงในทะเบียนตรงกับขนาดที่ชื่อบอก → มั่นใจ ติ๊กไว้ให้ (ตัวแปลงเดิมไม่แตะ)
+ *   อ่านจากชื่อ     ทะเบียนยังไม่มีตัวแปลง → ใช้หน่วยเล็กสุดที่ชื่อบอก และเติมตัวแปลงคู่กันให้ด้วย
+ *                  ("(400กรัม/ถุง) ถุง" → กรัม ×400) ติ๊กไว้ให้ ยกเว้นชื่อที่แตกได้หลายชั้น
+ *                  (ถุง → ไม้ → ลูก → กรัม) ซึ่งสูตรอาจนับชั้นอื่น — มีตัวเลือกให้เปลี่ยนชั้นได้ในแถว
  *   ไม่ตรงกับชื่อ   ตัวแปลงในทะเบียนไม่ตรงกับขนาดที่ชื่อบอก → ไม่เติม ต้องแก้ตัวแปลงก่อน (ดูอย่างเดียว)
  *   ชื่อไม่บอก       ผักสด/ของใช้ที่ชื่อไม่มีหน่วย → ไม่เดา กรอกเองในฟอร์มแก้ไข
  *
  * บันทึกทีละ 200 รายการด้วย action updateItemUseUnits ซึ่งเขียนเฉพาะช่องที่ยังว่าง
- * (มีคนกรอกไว้ระหว่างเปิดหน้าต่างนี้ = ไม่ทับ) พลาดกลางทางแล้วรอบที่ผ่านไปแล้วยังอยู่ กดซ้ำได้
+ * (มีคนกรอกไว้ระหว่างเปิดหน้าต่างนี้ = ไม่ทับ · ตัวแปลงเติมเฉพาะแถวที่หน่วยใช้ยังว่างด้วย เพราะเป็นคู่กัน)
+ * พลาดกลางทางแล้วรอบที่ผ่านไปแล้วยังอยู่ กดซ้ำได้
  */
 const UU_TABS = [
   { id: 'fill', label: 'เติมได้' },
   { id: 'match', label: 'ตรงกับตัวแปลง' },
-  { id: 'name', label: 'อ่านจากชื่อ (ยังไม่มีตัวแปลง)' },
+  { id: 'name', label: 'อ่านจากชื่อ (+ ตัวแปลง)' },
   { id: 'mismatch', label: 'ตัวแปลงไม่ตรงกับชื่อ' },
   { id: 'noinfo', label: 'ชื่อไม่บอกหน่วย' },
 ];
@@ -1392,6 +1404,8 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
   const [picked, setPicked] = useState(() => new Set(
     rows.filter(r => r.sug.basis === 'match' || (r.sug.basis === 'name' && !r.sug.ambiguous)).map(r => r.item.code)));
   const [done, setDone] = useState(() => new Set());
+  // ชั้นที่เลือกเองของแถว "อ่านจากชื่อ" ที่ชื่อแตกได้หลายชั้น: code -> index ใน sug.options (ไม่มี = หน่วยเล็กสุด)
+  const [choice, setChoice] = useState({});
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState(null);   // { done, total }
   const [msg, setMsg] = useState(null);             // { ok, msg }
@@ -1414,6 +1428,12 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
   }, [list, tab, q]);
 
   const fillable = (r) => Boolean(r.sug.useUnit) && !done.has(r.item.code);
+  /** สิ่งที่จะเขียนจริงของแถวนั้น — ตรงกับตัวแปลง: หน่วยใช้อย่างเดียว · อ่านจากชื่อ: หน่วยใช้ + ตัวแปลงของชั้นที่เลือก */
+  const eff = (r) => {
+    if (r.sug.basis !== 'name') return { useUnit: r.sug.useUnit, converter: null };
+    const opt = r.sug.options[choice[r.item.code]] || { unit: r.sug.useUnit, per: r.sug.per };
+    return { useUnit: opt.unit, converter: opt.per };
+  };
   const queue = list.filter(r => fillable(r) && picked.has(r.item.code));
   const shownFillable = shown.filter(fillable);
   const allShownPicked = shownFillable.length > 0 && shownFillable.every(r => picked.has(r.item.code));
@@ -1435,19 +1455,25 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
     setMsg(null);
     const filled = new Map();
     let updated = 0;
+    let converters = 0;
     let last = null;
     try {
       for (let i = 0; i < queue.length; i += UU_CHUNK) {
         const chunk = queue.slice(i, i + UU_CHUNK);
         setProgress({ done: i, total: queue.length });
         last = await apiCall('updateItemUseUnits', {
-          units: chunk.map(r => ({ code: r.item.code, useUnit: r.sug.useUnit })),
+          units: chunk.map(r => { const e = eff(r); return { code: r.item.code, useUnit: e.useUnit, converter: e.converter ?? '' }; }),
         });
         updated += Number(last.data?.updated) || 0;
-        chunk.forEach(r => filled.set(r.item.code, r.sug.useUnit));
+        converters += Number(last.data?.converters) || 0;
+        chunk.forEach(r => filled.set(r.item.code, eff(r)));
         setDone(prev => new Set([...prev, ...chunk.map(r => r.item.code)]));
       }
-      setMsg({ ok: syncOk(last), msg: `เติมหน่วยใช้แล้ว ${updated.toLocaleString()} รายการ${syncNote(last)}` });
+      setMsg({
+        ok: syncOk(last),
+        msg: `เติมหน่วยใช้แล้ว ${updated.toLocaleString()} รายการ`
+          + (converters ? ` · เติมตัวแปลงด้วย ${converters.toLocaleString()} รายการ` : '') + syncNote(last),
+      });
     } catch (err) {
       setMsg({
         ok: false,
@@ -1456,7 +1482,7 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
     } finally {
       setSaving(false);
       setProgress(null);
-      if (filled.size) onSaved(filled, { ...(last || {}), data: { ...(last?.data || {}), updated } });
+      if (filled.size) onSaved(filled, { ...(last || {}), data: { ...(last?.data || {}), updated, converters } });
     }
   };
 
@@ -1467,8 +1493,9 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
       return sug.per === 1 ? `ตัวแปลง 1 = ใช้เป็น ${sug.useUnit} ตรง ๆ` : `ตัวแปลง ${fmtPer(sug.per)} ตรงกับชื่อ (1 ${unit} = ${fmtPer(sug.per)} ${sug.useUnit})`;
     }
     if (sug.basis === 'name') {
-      return `ชื่อบอก 1 ${unit} = ${fmtPer(sug.per)} ${sug.useUnit} · ทะเบียนยังไม่มีตัวแปลง (ควรใส่ ${fmtPer(sug.per)})`
-        + (sug.ambiguous ? ' · ชื่อแตกได้หลายชั้น สูตรอาจนับหน่วยอื่น — ตรวจก่อนติ๊ก' : '');
+      const e = eff(r);
+      return `ชื่อบอก 1 ${unit} = ${fmtPer(e.converter)} ${e.useUnit} · ทะเบียนยังไม่มีตัวแปลง จะเติม ${fmtPer(e.converter)} ให้ด้วย`
+        + (sug.ambiguous ? ' · ชื่อแตกได้หลายชั้น สูตรอาจนับหน่วยอื่น — เลือกชั้นแล้วตรวจก่อนติ๊ก' : '');
     }
     if (sug.reason === 'mismatch') {
       return `ตัวแปลง ${fmtPer(item.converter)} แต่ชื่อบอก 1 ${unit} = ${fmtPer(sug.expect.per)} ${sug.expect.unit} — แก้ตัวแปลงก่อน`;
@@ -1487,7 +1514,7 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
             <p className="text-xs text-slate-500 mt-0.5">
               วัตถุดิบที่ยังไม่มีหน่วยใช้ {list.length.toLocaleString()} รายการ — อ่านจากชื่อตามรูปแบบ &quot;ชื่อ(ขนาดบรรจุ)หน่วยซื้อ&quot;
               เช่น &quot;(400กรัม/ถุง) ถุง&quot; → กรัม · &quot;(0.5กก./ถุง) กก.&quot; + ตัวแปลง 1000 → กรัม
-              · เติมเฉพาะช่องที่ยังว่าง ไม่ทับของเดิม
+              · ตัวที่ยังไม่มีตัวแปลงจะได้ตัวแปลงจากชื่อไปด้วย · เติมเฉพาะช่องที่ยังว่าง ไม่ทับของเดิม
             </p>
           </div>
           <button onClick={onClose} disabled={saving} className="text-slate-400 hover:text-slate-600 flex-shrink-0 disabled:opacity-30"><X size={20} /></button>
@@ -1527,6 +1554,7 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
                   <th className="px-3 py-2">หน่วยซื้อ</th>
                   <th className="px-3 py-2 text-right">ตัวแปลง</th>
                   <th className="px-3 py-2">หน่วยใช้ที่จะเติม</th>
+                  <th className="px-3 py-2 text-right">ตัวแปลงที่จะเติม</th>
                   <th className="px-3 py-2">ที่มา</th>
                 </tr>
               </thead>
@@ -1549,13 +1577,31 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
                       <td className="px-3 py-2 text-right font-mono text-xs text-slate-500">
                         {r.item.converter != null && !isNaN(r.item.converter) ? fmtPer(r.item.converter) : '—'}
                       </td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        {r.sug.useUnit ? (
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${isDone
-                            ? 'bg-emerald-100 text-emerald-700' : 'bg-violet-100 text-violet-700'}`}>
-                            {isDone && <CheckCircle size={11} />}{r.sug.useUnit}
-                          </span>
-                        ) : <span className="text-slate-300">—</span>}
+                      <td className="px-3 py-2 whitespace-nowrap" onClick={e => r.sug.options.length > 1 && e.stopPropagation()}>
+                        {!r.sug.useUnit ? <span className="text-slate-300">—</span>
+                          : r.sug.options.length > 1 && !isDone ? (
+                            // ชื่อบอกได้หลายชั้น — ให้เลือกชั้นที่สูตรใช้จริง (เลือกแล้วติ๊กให้เลย)
+                            <select value={choice[code] ?? r.sug.options.findIndex(o => o.unit === r.sug.useUnit)}
+                              disabled={saving}
+                              onChange={e => {
+                                const idx = Number(e.target.value);
+                                setChoice(c => ({ ...c, [code]: idx }));
+                                setPicked(prev => new Set(prev).add(code));
+                              }}
+                              className="px-2 py-0.5 rounded-lg text-xs font-semibold bg-violet-100 text-violet-700 border border-violet-200 focus:outline-none">
+                              {r.sug.options.map((o, idx) => <option key={o.unit} value={idx}>{o.unit}</option>)}
+                            </select>
+                          ) : (
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${isDone
+                              ? 'bg-emerald-100 text-emerald-700' : 'bg-violet-100 text-violet-700'}`}>
+                              {isDone && <CheckCircle size={11} />}{eff(r).useUnit}
+                            </span>
+                          )}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-xs whitespace-nowrap">
+                        {r.sug.basis === 'name'
+                          ? <span className={isDone ? 'text-emerald-700' : 'text-violet-700 font-semibold'}>{fmtPer(eff(r).converter)}</span>
+                          : <span className="text-slate-300" title="ตัวแปลงเดิมในทะเบียนไม่แตะ">—</span>}
                       </td>
                       <td className={`px-3 py-2 text-[11px] ${g === 'mismatch' ? 'text-rose-600' : r.sug.ambiguous ? 'text-amber-700' : 'text-slate-500'}`}>
                         {note(r)}
