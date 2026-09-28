@@ -101,7 +101,29 @@ const LOCK_HINT = 'ตอนนี้อ่านข้อมูลจาก SQL
 
 export default function QcRdItems() {
   // ปิดการใช้งานสาขาไหนในทะเบียน สาขานั้นจะหายจากตัวเลือกนี้ แต่ค่าที่เคยติ๊กไว้ในชีทยังอยู่เหมือนเดิม
-  const { codes: BRANCHES } = useBranches();
+  const { codes: REGISTRY_BRANCHES } = useBranches();
+
+  // สาขาที่ระบบสาขา (Narai-branch — ระบบตารางงาน) มี แต่ยังไม่อยู่ในทะเบียนกลาง
+  // ต้องมีปุ่มให้ติ๊กด้วย ไม่งั้นสาขาใหม่ที่เปิดใช้ในแอปสาขาแล้วจะหาวัตถุดิบไม่เจอเลยจนกว่าจะมีคนไปเพิ่มในทะเบียน
+  // ใช้ผลเทียบของ /api/branches?compare=1 (missingInRegistry) — สาขาที่ปิดในทะเบียนแล้วไม่ถูกดึงกลับมา
+  // ดึงไม่ได้ (เครื่องออฟฟิศดับ) ก็ใช้แค่ทะเบียนกลางตามเดิม
+  const [appBranches, setAppBranches] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/branches?compare=1')
+      .then(r => r.json())
+      .then(res => {
+        if (!alive || !res?.compare?.ok) return;
+        setAppBranches((res.compare.missingInRegistry || []).map(c => String(c).trim().toUpperCase()).filter(Boolean));
+      })
+      .catch(() => { /* ใช้ทะเบียนกลางอย่างเดียว */ });
+    return () => { alive = false; };
+  }, []);
+  const BRANCHES = useMemo(
+    () => [...REGISTRY_BRANCHES, ...appBranches.filter(c => !REGISTRY_BRANCHES.includes(c)).sort()],
+    [REGISTRY_BRANCHES, appBranches],
+  );
+  const fromAppOnly = (code) => appBranches.includes(code) && !REGISTRY_BRANCHES.includes(code);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -1093,13 +1115,15 @@ export default function QcRdItems() {
                     const on = editItem.branches.includes(b);
                     return (
                       <button key={b} onClick={() => toggleBranch(b)}
-                        title={retired ? `${b} ไม่อยู่ในทะเบียนสาขาที่เปิดใช้งานแล้ว — กดเพื่อเอาออกจากไอเทมนี้` : b}
+                        title={retired ? `${b} ไม่อยู่ในทะเบียนสาขาที่เปิดใช้งานแล้ว — กดเพื่อเอาออกจากไอเทมนี้`
+                          : fromAppOnly(b) ? `${b} มีในระบบสาขา (Narai-branch) แต่ยังไม่อยู่ในทะเบียน HR → จัดการสาขา` : b}
                         className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${on
                           ? (retired
                             ? 'bg-amber-500 border-amber-500 text-white'
                             : 'bg-emerald-500 border-emerald-500 text-white')
                           : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
                         {b}{retired && <span className="ml-1 text-[9px] font-normal opacity-80">ปิดแล้ว</span>}
+                        {!retired && fromAppOnly(b) && <span className="ml-1 text-[9px] font-normal opacity-70">ระบบสาขา</span>}
                       </button>
                     );
                   })}
