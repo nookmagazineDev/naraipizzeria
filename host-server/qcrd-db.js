@@ -5,7 +5,7 @@
 //  ไฟล์นี้คือฝั่ง "ทำงานจริง" ที่มาแทน qcrd-apps-script.gs ทั้งไฟล์
 //  ทุก action ที่หน้าเว็บเคยยิงไป Apps Script มีครบที่นี่ ชื่อและรูปแบบ payload เหมือนเดิม
 //    saveMenu · saveMenuStatus · saveMenuGroup · saveItem · addItem · deleteItem
-//    · updateItemUnits · sortBom
+//    · updateItemUnits · updateItemUseUnits · sortBom
 //
 //  endpoint
 //    GET  /qcrd/ping                      เช็กว่าต่อฐาน InventoryNarai ได้ไหม

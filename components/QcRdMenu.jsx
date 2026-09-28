@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save, Database } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save, Database, Copy } from 'lucide-react';
 import { apiCall, syncNote, syncOk } from '../lib/qcrdApi';
 import { rcpNameKey, rcpItemKey } from '../lib/rcpMatch';
 import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
+import { rcpLinesToBom, toSaveItems } from '../lib/rcpCopy.mjs';
+import { stockUnitOf } from '../lib/unitFromName.mjs';
 
 /*
  * QC/RD — เมนู: รายชื่อเมนู + สูตร (BOM) ของแต่ละเมนู
@@ -13,7 +15,9 @@ import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
  *
  * เมนูที่ยังไม่มีสูตรในแท็บ BOM จะไปหยิบสูตรฝั่ง POS (RcpDtls) มาแสดงแทนผ่าน /api/rcp
  * จับคู่ด้วยชื่อเมนู (rcpNameKey) เพราะ RcpDtls ไม่มีคอลัมน์รหัสเมนูให้ join — ดู lib/rcpMatch.js
- * สูตรชุดนั้น "อ่านอย่างเดียว" แก้ไม่ได้จากหน้านี้ เพราะเป็นข้อมูลของฝั่ง POS ไม่ใช่ของชีทต้นทุนเมนู
+ * สูตรชุดนั้น "อ่านอย่างเดียว" แก้ในที่ไม่ได้ เพราะเป็นข้อมูลของฝั่ง POS ไม่ใช่ของชีทต้นทุนเมนู
+ * แต่ "คัดลอก" มาเป็นสูตรจริงของเมนูได้ (ปุ่มในหน้าต่างดูสูตร และปุ่ม "คัดลอกสูตร POS" บนหัวหน้า
+ * สำหรับหลายเมนูรวดเดียว) — บันทึกด้วย saveMenu ตัวเดิม การแปลงบรรทัดอยู่ใน lib/rcpCopy.mjs
  *
  * ปุ่ม "เพิ่มจากฐานข้อมูล" เปิดตัวเลือกเมนูจาก POS ฐานอื่น (Aoringo / HumlaiPOS / NaraiPos)
  * ผ่าน /api/qcrd-menu-source แล้วบันทึกด้วย action saveMenu ตัวเดิม — ดู MenuSourcePicker ท้ายไฟล์
@@ -52,6 +56,12 @@ export default function QcRdMenu() {
   const [rcpWarn, setRcpWarn] = useState('');
   const [rcpLines, setRcpLines] = useState({});   // rtsId -> items[] (แคชไว้ ไม่โหลดซ้ำ)
   const [rcpLoading, setRcpLoading] = useState(false);
+  const [rcpCopyModal, setRcpCopyModal] = useState(false); // คัดลอกสูตร POS หลายเมนูรวดเดียว (ดู RcpCopyDialog)
+  const [copyingCode, setCopyingCode] = useState(null);    // เมนูที่กำลังคัดลอกสูตร POS จากหน้าต่างดูสูตร
+  const [viewMsg, setViewMsg] = useState(null);            // ผลการคัดลอกในหน้าต่างดูสูตร
+  // รหัสวัตถุดิบที่เติมหน่วยใช้ไปแล้วในรอบนี้ — ตัวคัดลอกหลายเมนูเห็น itemByKey ชุดตอนเริ่มลูป
+  // วัตถุดิบที่ใช้ซ้ำหลายเมนูจะถูกสั่งเติมซ้ำทุกเมนูถ้าไม่จำไว้
+  const useUnitDone = useRef(new Set());
   const [groupModal, setGroupModal] = useState(false);
   const [srcModal, setSrcModal] = useState(false);   // ตัวเลือกเมนูจากฐานอื่น (ดู MenuSourcePicker)
   const [loading, setLoading] = useState(true);
@@ -487,6 +497,130 @@ export default function QcRdMenu() {
     }
   };
 
+  // ───── คัดลอกสูตรฝั่ง POS (RcpDtls) มาเป็นสูตรจริงของเมนู ─────
+
+  // บรรทัดวัตถุดิบของสูตร POS หนึ่งสูตร — ใช้ของที่โหลดไว้ตอนเปิดดูสูตรถ้ามี
+  const fetchRcpLines = async (rtsId) => {
+    if (rcpLines[rtsId]?.length) return rcpLines[rtsId];
+    const r = await fetch(`/api/rcp?rtsId=${rtsId}`);
+    const j = await r.json().catch(() => ({ status: 'error', message: `เซิร์ฟเวอร์ตอบกลับไม่ใช่ JSON (HTTP ${r.status})` }));
+    if (j.status !== 'success' || !j.data) throw new Error(j.message || `อ่านสูตร POS (rts_id ${rtsId}) ไม่ได้`);
+    const lines = j.data.items || [];
+    setRcpLines(prev => ({ ...prev, [rtsId]: lines }));
+    return lines;
+  };
+
+  /**
+   * คัดลอกสูตร POS ของเมนูหนึ่งลงฐานเป็นสูตรจริง — saveMenu ตัวเดียวกับปุ่มบันทึกในฟอร์ม
+   * ส่งราคา/หมวด/ปริมาณที่ได้ของเดิมกลับไปครบเหมือนเปิดฟอร์มแล้วกดบันทึก จะได้ไม่มีช่องไหนถูกล้าง
+   *
+   * อัปเดตตารางด้วย setState แบบฟังก์ชัน ไม่ใช่ patchSavedMenu({ menus, bom }) ตรง ๆ แบบ handleSave
+   * เพราะตัวคัดลอกหลายเมนูเรียกฟังก์ชันนี้ต่อกันในลูปเดียว — ถ้าใช้ state ที่จับไว้ตอนเริ่มลูป
+   * ผลของเมนูก่อนหน้าจะถูกเมนูถัดไปแปะทับหาย (patchSavedMenu แยกส่วน menus กับ bom กันอยู่แล้ว)
+   */
+  const copyRcpToBom = async (m, rcp) => {
+    if (degraded) throw new Error(LOCK_HINT);
+    if (bomCount(m.code)) throw new Error('เมนูนี้มีสูตรในฐานอยู่แล้ว — ไม่คัดลอกทับ');
+    const conv = rcpLinesToBom(await fetchRcpLines(rcp.rtsId), itemByKey);
+    if (!conv.rows.length) throw new Error('สูตร POS ไม่มีบรรทัดที่คัดลอกได้ (ไม่มีรหัสวัตถุดิบ หรือยอดใช้เป็น 0 ทุกบรรทัด)');
+    const y = rcpYield(m, rcp, conv);
+
+    const res = await apiCall('saveMenu', {
+      code: m.code, name: m.name, price: m.price ?? '',
+      group: m.group || '', newGroupName: '',
+      yieldQty: y.qty ?? '', yieldUnit: y.unit,
+      items: toSaveItems(conv.rows),
+    });
+    const saved = {
+      code: m.code, name: m.name,   // ราคา/หมวดไม่ได้เปลี่ยน — ไม่ส่งไป = ไม่แตะของเดิมในตาราง
+      cost: res.data?.totalCost ?? estCost(conv.rows),
+      yieldQty: y.qty, yieldUnit: y.unit,
+      rows: bomRowsFromForm(conv.rows, priceMap),
+      cascaded: res.data?.cascaded || [],
+    };
+    setMenus(prev => patchSavedMenu({ menus: prev, bom: {} }, saved).menus);
+    setBom(prev => patchSavedMenu({ menus: [], bom: prev }, saved).bom);
+
+    // เติม "หน่วยใช้" ให้วัตถุดิบในทะเบียนที่ยังว่าง (อ่านจากชื่อ + ตัวแปลง — ดู lib/rcpCopy.mjs)
+    // ทีละตัว ช่องอื่นไม่แตะ (saveItem เขียนเฉพาะช่องที่ส่งไป) · พลาดก็ไม่ทำให้การคัดลอกสูตรล้ม
+    const filled = [];
+    let fillFail = '';
+    for (const f of conv.useUnitFills) {
+      if (useUnitDone.current.has(f.code)) continue;
+      try {
+        await apiCall('saveItem', { code: f.code, useUnit: f.useUnit });
+        useUnitDone.current.add(f.code);
+        filled.push(f);
+      } catch (err) {
+        fillFail = fillFail || err.message || 'บันทึกหน่วยใช้ไม่สำเร็จ';
+      }
+    }
+    if (filled.length) {
+      const by = new Map(filled.map(f => [f.code, f.useUnit]));
+      setItems(prev => prev.map(i => (by.has(i.code) ? { ...i, useUnit: by.get(i.code) } : i)));
+    }
+    return { ...conv, res, yieldSet: y.set ? y.qty : null, yieldUnit: y.unit, yieldDiff: y.diff, filled, fillFail };
+  };
+
+  // ปริมาณที่ได้ต่อสูตร: เมนูยังไม่ได้ตั้งไว้ + POS บอกว่ารอบหนึ่งทำได้มากกว่า 1 → ใช้ของ POS
+  // หน่วยอ่านจากคำท้ายชื่อเมนู ("FC แซลมอนตัดชิ้น(5ชิ้น/แพ็ค)ชิ้น" → ชิ้น) เพราะ Rcp_Qty นับเป็นหน่วยนั้น
+  // เมนูที่ตั้งไว้แล้วไม่แตะ แต่ถ้าไม่ตรงกับ POS ต้องฟ้อง — ยอดใช้ที่คัดลอกมาเป็นของ "ทั้งรอบ" ตาม POS
+  const rcpYield = (m, rcp, conv) => {
+    const has = Number(m.yieldQty) > 0;
+    const pos = conv.yieldQty;
+    if (!has && pos > 1) {
+      return { qty: pos, unit: m.yieldUnit || stockUnitOf(m.name) || stockUnitOf(rcp.name) || '', set: true, diff: null };
+    }
+    return {
+      qty: m.yieldQty ?? null, unit: m.yieldUnit || '', set: false,
+      diff: has && pos > 0 && Number(m.yieldQty) !== pos ? pos : null,
+    };
+  };
+
+  // คัดลอกจากหน้าต่างดูสูตร — สำเร็จแล้วหน้าต่างเดิมจะสลับไปโชว์สูตรจริงที่เพิ่งบันทึก (มีต้นทุนแล้ว)
+  const copyOne = async (m, rcp) => {
+    setCopyingCode(m.code);
+    setViewMsg(null);
+    try {
+      const out = await copyRcpToBom(m, rcp);
+      setViewMsg({
+        ok: syncOk(out.res),
+        msg: `คัดลอกสูตร POS ของ "${m.name}" ลงฐานแล้ว — ${rcpCopySummary(out)}` + syncNote(out.res),
+      });
+      // หัวหน้าเอาแค่สั้น ๆ รายละเอียดอยู่ในหน้าต่างดูสูตรแล้ว (ข้อความยาวดันปุ่มบนหัวหน้าตกบรรทัด)
+      setToast({ ok: syncOk(out.res), msg: `คัดลอกสูตร POS ของ "${m.name}" ลงฐานแล้ว (${out.rows.length} วัตถุดิบ)` + syncNote(out.res) });
+      if (out.res.data?.cascaded?.length) loadAll({ quiet: true, only: ['bom'] });
+    } catch (err) {
+      setViewMsg({ ok: false, msg: err.message || 'คัดลอกไม่สำเร็จ' });
+    } finally {
+      setCopyingCode(null);
+    }
+  };
+
+  // คัดลอกสูตร POS เข้าฟอร์มแก้สูตรแต่ยังไม่บันทึก — ไว้ตรวจ/แก้ก่อน (ฟอร์มฟ้องตัวแปลงหน่วยที่ไม่ตรงทะเบียนให้)
+  const openEditFromRcp = (m, rcp, lines) => {
+    const conv = rcpLinesToBom(lines, itemByKey);
+    const y = rcpYield(m, rcp, conv);
+    openEdit(m);
+    setEditMenu(e => ({
+      ...e,
+      items: conv.rows.length ? conv.rows.map(r => ({ ...r })) : [emptyIng()],
+      ...(y.set ? { yieldQty: String(y.qty), yieldUnit: y.unit } : {}),
+    }));
+    setFormMsg({
+      ok: true,
+      msg: `คัดลอกสูตร POS มาให้แล้ว — ${rcpCopySummary({ ...conv, yieldSet: y.set ? y.qty : null, yieldUnit: y.unit, yieldDiff: y.diff })}`
+        + ' · ตรวจแล้วกด "บันทึกเมนู" (ยังไม่ได้บันทึก · หน่วยใช้ของวัตถุดิบจะเติมให้เฉพาะตอนกด "คัดลอกลงฐานข้อมูล")',
+    });
+  };
+
+  // เมนูที่คัดลอกสูตร POS ได้ ตามตัวกรองที่ใช้อยู่ตอนนี้ (ค้นหา/หมวด/สถานะ) — ปุ่มบนหัวหน้า
+  const rcpCandidates = useMemo(
+    () => filtered.map(m => ({ menu: m, rcp: rcpFor(m) })).filter(c => c.rcp),
+    [filtered]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { setViewMsg(null); }, [viewCode]);
+
   const viewMenu = viewCode ? menus.find(m => m.code === viewCode) : null;
   const viewBom = viewCode ? (bom[viewCode]?.items || []) : [];
   // เมนูที่ไม่มีสูตรในชีท แต่จับคู่กับสูตรฝั่ง POS ได้ — ดัชนีมีแค่หัวสูตร
@@ -558,6 +692,15 @@ export default function QcRdMenu() {
               <span className={`inline-flex items-center gap-1 text-xs font-semibold ${toast.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
                 {toast.ok ? <CheckCircle size={13} /> : <AlertCircle size={13} />}{toast.msg}
               </span>
+            )}
+            {nFromRcp > 0 && (
+              <button onClick={() => setRcpCopyModal(true)} disabled={degraded || !rcpCandidates.length}
+                title={degraded ? LOCK_HINT
+                  : rcpCandidates.length ? 'คัดลอกสูตรฝั่ง POS (RcpDtls) ลงฐานเป็นสูตรจริงของเมนู — เฉพาะเมนูตามตัวกรองที่ใช้อยู่'
+                    : 'ไม่มีเมนูที่เติมจากสูตร POS ในตัวกรองนี้'}
+                className="inline-flex items-center gap-2 bg-white hover:bg-amber-50 disabled:bg-slate-100 disabled:text-slate-400 text-amber-700 border border-amber-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+                <Copy size={14} /> คัดลอกสูตร POS ลงฐาน ({rcpCandidates.length.toLocaleString()})
+              </button>
             )}
             <button onClick={() => setSrcModal(true)} disabled={degraded} title={degraded ? LOCK_HINT : 'ดึงเมนูจากฐาน Aoringo / HumlaiPOS / NaraiPos'}
               className="inline-flex items-center gap-2 bg-white hover:bg-indigo-50 disabled:bg-slate-100 disabled:text-slate-400 text-indigo-600 border border-indigo-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
@@ -714,15 +857,41 @@ export default function QcRdMenu() {
                   )}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => { openEdit(viewMenu); setViewCode(null); }} disabled={degraded}
-                  title={degraded ? LOCK_HINT : (viewRcp ? 'เปิดฟอร์มสูตรของชีทต้นทุนเมนู (เริ่มจากว่าง) — สูตร POS ข้างล่างไม่ได้ถูกคัดลอกมาให้' : '')}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 disabled:opacity-50">
-                  <Pencil size={12} /> {viewRcp ? 'สร้างสูตรในชีท' : 'แก้ไขสูตร'}
-                </button>
-                <button onClick={() => setViewCode(null)} className="text-slate-400 hover:text-slate-700"><X size={20} /></button>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {viewRcp ? (
+                  <>
+                    <button onClick={() => { openEditFromRcp(viewMenu, viewRcp, viewRcpItems || []); setViewCode(null); }}
+                      disabled={degraded || !viewRcpItems?.length || Boolean(copyingCode)}
+                      title={degraded ? LOCK_HINT : 'เปิดฟอร์มแก้สูตรที่คัดลอกสูตร POS ใส่ไว้ให้แล้ว — ตรวจ/แก้ก่อน แล้วค่อยกดบันทึกเอง'}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 disabled:opacity-50">
+                      <Pencil size={12} /> คัดลอกไปแก้ก่อน
+                    </button>
+                    <button onClick={() => copyOne(viewMenu, viewRcp)}
+                      disabled={degraded || !viewRcpItems?.length || Boolean(copyingCode)}
+                      title={degraded ? LOCK_HINT : 'บันทึกสูตร POS ข้างล่างเป็นสูตรจริงของเมนูนี้ทันที (แก้ต่อทีหลังได้)'}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-500 rounded-lg hover:bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400">
+                      {copyingCode === viewMenu.code ? <Loader2 size={12} className="animate-spin" /> : <Copy size={12} />}
+                      {copyingCode === viewMenu.code ? 'กำลังคัดลอก…' : 'คัดลอกลงฐานข้อมูล'}
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => { openEdit(viewMenu); setViewCode(null); }} disabled={degraded}
+                    title={degraded ? LOCK_HINT : ''}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 disabled:opacity-50">
+                    <Pencil size={12} /> แก้ไขสูตร
+                  </button>
+                )}
+                <button onClick={() => setViewCode(null)} disabled={copyingCode === viewMenu.code}
+                  className="text-slate-400 hover:text-slate-700 disabled:opacity-30"><X size={20} /></button>
               </div>
             </div>
+            {viewMsg && (
+              <div className={`mx-5 mt-3 px-3 py-2 rounded-lg text-xs font-semibold flex items-start gap-1.5 ${viewMsg.ok
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'}`}>
+                {viewMsg.ok ? <CheckCircle size={13} className="flex-shrink-0 mt-0.5" /> : <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />}
+                <span>{viewMsg.msg}</span>
+              </div>
+            )}
             <div className="overflow-auto p-5">
               {viewRcp ? (
                 <>
@@ -732,7 +901,10 @@ export default function QcRdMenu() {
                       เมนูนี้ยังไม่มีสูตรในชีทต้นทุนเมนู — ที่เห็นคือสูตรฝั่ง POS จากแท็บ RcpDtls
                       (จับคู่ด้วยชื่อ &quot;{viewRcp.name}&quot; · rts_id {viewRcp.rtsId})
                       <div className="mt-1 text-amber-700">
-                        อ่านอย่างเดียว แก้จากหน้านี้ไม่ได้ และไม่มีข้อมูลต้นทุน เพราะ RcpDtls ไม่ได้เก็บราคาไว้
+                        แก้ในที่ไม่ได้ และยังไม่มีต้นทุน เพราะ RcpDtls ไม่ได้เก็บราคาไว้ — กด <b>คัดลอกลงฐานข้อมูล</b>
+                        {' '}เพื่อบันทึกเป็นสูตรจริงของเมนูนี้ (ยอดใช้ = ปริมาณใช้ · ตัวแปลงหน่วย = สัดส่วน/หน่วย
+                        · ตั้งปริมาณที่ได้ตาม &quot;ต่อสูตร&quot; · เติมหน่วยใช้ของวัตถุดิบที่ยังว่างจากชื่อ)
+                        แล้วระบบจะคิดต้นทุนจากราคาวัตถุดิบให้และแก้ต่อได้ตามปกติ
                       </div>
                     </div>
                   </div>
@@ -1059,6 +1231,15 @@ export default function QcRdMenu() {
           onSaved={() => loadAll({ quiet: true, only: ['menugroup', 'menu'] })} />
       )}
 
+      {rcpCopyModal && (
+        <RcpCopyDialog candidates={rcpCandidates} onCopy={copyRcpToBom}
+          onClose={() => setRcpCopyModal(false)}
+          onDone={({ ok, cascaded }) => {
+            setToast({ ok: true, msg: `คัดลอกสูตร POS ลงฐานแล้ว ${ok} เมนู` });
+            if (cascaded) loadAll({ quiet: true, only: ['bom'] });
+          }} />
+      )}
+
       {srcModal && (
         <MenuSourcePicker
           existing={existingCodes}
@@ -1084,6 +1265,212 @@ export default function QcRdMenu() {
             loadAll({ quiet: true, only: ['menu'] });
           }} />
       )}
+    </div>
+  );
+}
+
+/** สรุปผลการคัดลอกสูตร POS สั้น ๆ — บอกจำนวน แล้วเฉพาะเรื่องที่ควรเปิดดูต่อ */
+function rcpCopySummary({
+  rows, skipped, notInRegistry, convMismatch, nameMismatch = [],
+  yieldSet = null, yieldUnit = '', yieldDiff = null, filled = null, fillFail = '',
+}) {
+  const codes = notInRegistry.slice(0, 5).join(', ') + (notInRegistry.length > 5 ? ', …' : '');
+  const nm = nameMismatch[0];
+  return [
+    `${rows.length} วัตถุดิบ`,
+    yieldSet ? `สูตรนี้ทำได้ ${yieldSet.toLocaleString()} ${yieldUnit || 'หน่วย'}ต่อรอบ (ตั้งปริมาณที่ได้ให้แล้ว)` : '',
+    yieldDiff ? `⚠ POS บอกว่าทำได้ ${yieldDiff.toLocaleString()} ต่อรอบ ไม่ตรงกับปริมาณที่ได้ที่เมนูตั้งไว้ ควรเปิดตรวจ` : '',
+    filled?.length ? `เติมหน่วยใช้ให้วัตถุดิบ ${filled.length} รายการ (${filled.slice(0, 3).map(f => `${f.code}=${f.useUnit}`).join(', ')}${filled.length > 3 ? ', …' : ''})` : '',
+    fillFail ? `⚠ เติมหน่วยใช้ไม่สำเร็จ: ${fillFail}` : '',
+    skipped ? `ข้าม ${skipped} บรรทัด (ไม่มีรหัส/ยอดใช้ 0)` : '',
+    notInRegistry.length ? `ไม่มีในทะเบียนวัตถุดิบ ${notInRegistry.length} รายการ (${codes}) จึงยังไม่มีต้นทุน` : '',
+    convMismatch ? `ตัวแปลงหน่วยของ POS ไม่ตรงกับทะเบียน ${convMismatch} รายการ ควรเปิดตรวจ` : '',
+    nm ? `⚠ สัดส่วน/หน่วยของ POS ไม่ตรงกับขนาดในชื่อ ${nameMismatch.length} รายการ`
+      + ` (เช่น ${nm.code}: POS ใส่ ${nm.portion.toLocaleString()} แต่ชื่อบอก ${nm.expect.per.toLocaleString()} ${nm.expect.unit})` : '',
+  ].filter(Boolean).join(' · ');
+}
+
+/* ════════════════ คัดลอกสูตรฝั่ง POS ลงฐานหลายเมนูรวดเดียว ════════════════
+ *
+ * รายการ = เมนูที่ยังไม่มีสูตรในฐาน แต่จับคู่ชื่อกับสูตร POS (RcpDtls) ได้ ตามตัวกรองของหน้าตอนกดเปิด
+ * บันทึกทีละเมนูตามลำดับด้วย onCopy (= copyRcpToBom → saveMenu) เหตุผลเดียวกับ MenuSourcePicker:
+ * พลาดกลางทางต้องบอกได้ว่าเมนูไหนเข้าแล้ว เมนูไหนยัง แล้วกดซ้ำเฉพาะตัวที่ไม่ผ่านได้
+ *
+ * จำรายการไว้ตั้งแต่เปิด ไม่อ่านตาม prop — เมนูที่คัดลอกเสร็จจะหลุดจาก rcpFor ทันที (มีสูตรในฐานแล้ว)
+ * ถ้าอ่านตาม prop แถวจะหายไปต่อหน้าต่อตาพร้อมผลของมัน
+ */
+function RcpCopyDialog({ candidates, onCopy, onClose, onDone }) {
+  const [list] = useState(candidates);
+  const [picked, setPicked] = useState(() => new Set(candidates.map(c => c.menu.code)));
+  const [running, setRunning] = useState(false);
+  const [current, setCurrent] = useState(null);   // { code, i, total, name }
+  const [result, setResult] = useState({});       // code -> { ok, msg, warn }
+  const stopRef = useRef(false);
+
+  const pickable = list.filter(c => !result[c.menu.code]?.ok);   // คัดลอกสำเร็จแล้วเลือกซ้ำไม่ได้
+  const queue = pickable.filter(c => picked.has(c.menu.code));
+  const allPicked = pickable.length > 0 && pickable.every(c => picked.has(c.menu.code));
+  const nOk = Object.values(result).filter(r => r.ok).length;
+  const nFail = Object.values(result).filter(r => !r.ok).length;
+
+  const toggle = (code) => setPicked(prev => {
+    const next = new Set(prev);
+    if (next.has(code)) next.delete(code); else next.add(code);
+    return next;
+  });
+  const toggleAll = () => setPicked(allPicked ? new Set() : new Set(pickable.map(c => c.menu.code)));
+
+  const run = async () => {
+    if (!queue.length) return;
+    stopRef.current = false;
+    setRunning(true);
+    let ok = 0;
+    let cascaded = false;
+    for (let i = 0; i < queue.length; i++) {
+      if (stopRef.current) break;
+      const { menu, rcp } = queue[i];
+      setCurrent({ code: menu.code, i, total: queue.length, name: menu.name });
+      try {
+        const out = await onCopy(menu, rcp);
+        ok++;
+        if (out.res.data?.cascaded?.length) cascaded = true;
+        setResult(r => ({
+          ...r,
+          [menu.code]: {
+            ok: true,
+            msg: rcpCopySummary(out) + syncNote(out.res),
+            warn: Boolean(out.notInRegistry.length || out.convMismatch || out.nameMismatch.length
+              || out.yieldDiff || out.fillFail || !syncOk(out.res)),
+          },
+        }));
+      } catch (err) {
+        setResult(r => ({ ...r, [menu.code]: { ok: false, msg: err.message || 'คัดลอกไม่สำเร็จ' } }));
+      }
+    }
+    setCurrent(null);
+    setRunning(false);
+    if (ok) onDone({ ok, cascaded });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={() => !running && onClose()}>
+      <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Copy size={18} className="text-amber-600" /> คัดลอกสูตร POS ลงฐานข้อมูล
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              เมนูเหล่านี้ยังไม่มีสูตรในฐาน แต่จับคู่ชื่อกับสูตรฝั่ง POS (RcpDtls) ได้ — คัดลอกแล้วจะเป็นสูตรจริงของเมนู
+              คิดต้นทุนจากราคาวัตถุดิบ แก้ต่อได้ตามปกติ และถูกนับในรายงานยอดใช้วัตถุดิบเหมือนสูตรอื่น
+            </p>
+          </div>
+          <button onClick={onClose} disabled={running} className="text-slate-400 hover:text-slate-600 flex-shrink-0 disabled:opacity-30"><X size={20} /></button>
+        </div>
+
+        <div className="mx-5 mt-3 p-3 bg-amber-50 border border-amber-100 rounded-xl text-[11px] text-amber-800 flex items-start gap-2">
+          <Info size={13} className="flex-shrink-0 mt-0.5" />
+          <span>
+            ยอดใช้ = <b>ปริมาณใช้</b> ของ POS (ยอดทั้งรอบ) · ตัวแปลงหน่วย = <b>สัดส่วน/หน่วย</b> ของ POS
+            (ไม่มีค่าใช้ของทะเบียน แล้วค่อยขนาดในชื่อไอเทม) · สูตรที่รอบหนึ่งทำได้หลายหน่วยจะตั้ง <b>ปริมาณที่ได้</b> ให้ตาม POS
+            · วัตถุดิบที่ยังไม่มี <b>หน่วยใช้</b> จะเติมให้จากชื่อ (เช่น &quot;(0.5กก./ถุง) กก.&quot; ตัวแปลง 1000 → กรัม)
+            · ฟ้องบรรทัดที่สัดส่วน/หน่วยของ POS ไม่ตรงกับขนาดในชื่อ · ข้ามบรรทัดที่ไม่มีรหัสวัตถุดิบหรือยอดใช้ 0
+            · เลือกเฉพาะเมนูตามตัวกรองที่ใช้อยู่ในหน้า (ค้นหา/หมวด/สถานะ)
+          </span>
+        </div>
+
+        <div className="flex-1 overflow-y-auto mt-3 border-t border-slate-100">
+          {!list.length ? (
+            <div className="p-10 text-center text-slate-400 text-sm">ไม่มีเมนูที่เติมจากสูตร POS ในตัวกรองนี้</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 sticky top-0">
+                <tr className="text-left text-[11px] uppercase text-slate-400">
+                  <th className="px-4 py-2 w-10">
+                    <input type="checkbox" checked={allPicked} onChange={toggleAll} disabled={running || !pickable.length}
+                      className="rounded" title="เลือกทั้งหมด" />
+                  </th>
+                  <th className="px-4 py-2">รหัส</th>
+                  <th className="px-4 py-2">ชื่อเมนู</th>
+                  <th className="px-4 py-2">สูตร POS ที่จับคู่ได้</th>
+                  <th className="px-4 py-2">ผล</th>
+                </tr>
+              </thead>
+              <tbody>
+                {list.map(({ menu: m, rcp }) => {
+                  const res = result[m.code];
+                  const done = Boolean(res?.ok);
+                  const on = done || picked.has(m.code);
+                  const off = (m.status || 'ใช้งาน') === 'ปิดการใช้งาน';
+                  return (
+                    <tr key={m.code}
+                      onClick={() => !running && !done && toggle(m.code)}
+                      className={`border-b border-slate-50 ${done ? 'bg-emerald-50/40' : running ? '' : 'cursor-pointer hover:bg-slate-50'} ${!done && on ? 'bg-indigo-50/40' : ''}`}>
+                      <td className="px-4 py-2">
+                        <input type="checkbox" checked={on} disabled={running || done} readOnly className="rounded" />
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">{m.code}</td>
+                      <td className="px-4 py-2">
+                        <span className={off ? 'text-slate-400' : 'text-slate-800'}>{m.name}</span>
+                        {off && (
+                          <span className="ml-1.5 inline-block px-1.5 py-0.5 bg-rose-50 text-rose-500 rounded-full text-[10px] font-semibold align-middle">ปิดใช้งาน</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-slate-500">
+                        {rcp.name}
+                        <span className="ml-1.5 inline-block px-1.5 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-[10px] font-semibold">
+                          {rcp.nItems} รายการ
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-xs max-w-[280px]">
+                        {current?.code === m.code ? (
+                          <span className="inline-flex items-center gap-1 text-indigo-600"><Loader2 size={12} className="animate-spin" /> กำลังคัดลอก…</span>
+                        ) : res ? (
+                          <span className={`inline-flex items-start gap-1 ${!res.ok ? 'text-rose-600' : res.warn ? 'text-amber-700' : 'text-emerald-700'}`}>
+                            {res.ok ? <CheckCircle size={12} className="flex-shrink-0 mt-0.5" /> : <AlertCircle size={12} className="flex-shrink-0 mt-0.5" />}
+                            <span>{res.msg}</span>
+                          </span>
+                        ) : <span className="text-slate-300">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-slate-500">
+            เลือกไว้ <b className="text-slate-700">{queue.length}</b> เมนู
+            {current && (
+              <span className="ml-2 text-indigo-600">กำลังคัดลอก {current.i + 1}/{current.total} — {current.name}</span>
+            )}
+            {!current && (nOk > 0 || nFail > 0) && (
+              <span className="ml-2">
+                {nOk > 0 && <span className="text-emerald-700">สำเร็จ {nOk}</span>}
+                {nOk > 0 && nFail > 0 && ' · '}
+                {nFail > 0 && <span className="text-rose-600">ไม่สำเร็จ {nFail} (ยังเลือกไว้ กดซ้ำได้)</span>}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {running ? (
+              <button onClick={() => { stopRef.current = true; }}
+                className="px-4 py-2 text-xs font-semibold text-rose-600 bg-white border border-rose-200 rounded-xl hover:bg-rose-50">
+                หยุดหลังเมนูนี้
+              </button>
+            ) : (
+              <button onClick={onClose} className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ปิด</button>
+            )}
+            <button onClick={run} disabled={!queue.length || running}
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
+              {running ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
+              คัดลอก {queue.length || ''} เมนูลงฐาน
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

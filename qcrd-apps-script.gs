@@ -36,6 +36,8 @@ function doPost(e) {
       res = saveMenu_(ss, data);
     } else if (action === 'updateItemUnits') {
       res = updateItemUnits_(ss, data);
+    } else if (action === 'updateItemUseUnits') {
+      res = updateItemUseUnits_(ss, data);
     } else if (action === 'saveItem') {
       res = saveItem_(ss, data);
     } else if (action === 'addItem') {
@@ -546,6 +548,27 @@ function deleteItem_(ss, data) {
     }
   }
   return { status: 'error', message: 'ไม่พบรหัส ' + code + ' ในชีท item' };
+}
+
+// เติมหน่วยใช้ลงคอลัมน์ Q ของชีท item — เขียนเฉพาะช่องที่ยังว่าง (ไม่ทับของเดิม)
+// payload: { units: [{ code, useUnit }] } — ปุ่ม "เติมหน่วยใช้จากชื่อ" หน้า QC/RD > วัตถุดิบ
+// เขียนทีละช่อง ไม่ setValues ทั้งคอลัมน์ กันไปทับสูตร/ค่าที่มีคนแก้ในช่องอื่นระหว่างนั้น
+function updateItemUseUnits_(ss, data) {
+  var sh = ss.getSheetByName('item');
+  if (!sh) return { status: 'error', message: 'ไม่พบชีท item' };
+  var map = {};
+  (data.units || []).forEach(function (u) { map[String(u.code || '').trim()] = String(u.useUnit || '').trim(); });
+  var values = sh.getDataRange().getValues();
+  var updated = 0;
+  for (var i = 1; i < values.length; i++) {
+    var code = String(values[i][0] || '').trim();
+    var cur = String(values[i][16] || '').trim();
+    if (code && !cur && map[code]) {
+      sh.getRange(i + 1, 17).setValue(map[code]);
+      updated++;
+    }
+  }
+  return { status: 'success', data: { updated: updated } };
 }
 
 // เติมหน่วยลงคอลัมน์ D ของชีท item — เขียนเฉพาะช่องที่ยังว่าง (ไม่ทับของเดิม)

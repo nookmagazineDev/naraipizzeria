@@ -2,7 +2,7 @@
 //
 // ส่งต่อไป /api/qcrd-gas (Apps Script เขียนลงชีทต้นทุนเมนู) ที่เดียวกับที่ /api/qcrd อ่าน
 // action: saveMenu · saveMenuStatus · saveMenuGroup · saveItem · addItem · deleteItem ·
-// updateItemUnits · sortBom · copyBranchItems (โหมด SQL เท่านั้น)
+// updateItemUnits · updateItemUseUnits · sortBom · copyBranchItems (โหมด SQL เท่านั้น)
 //
 // บันทึกลงชีทสำเร็จแล้ว "ดันขึ้น SQL" ต่อให้อัตโนมัติ เพราะหน้านับสต๊อกของ Narai-branch
 // อ่าน dbo.stock_item / stock_item_branch จากฐาน ไม่ได้อ่านชีท
