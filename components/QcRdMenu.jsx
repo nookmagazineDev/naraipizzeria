@@ -4,6 +4,7 @@ import { apiCall, syncNote, syncOk } from '../lib/qcrdApi';
 import { rcpNameKey, rcpItemKey } from '../lib/rcpMatch';
 import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
 import { rcpLinesToBom, toSaveItems } from '../lib/rcpCopy.mjs';
+import { stockUnitOf } from '../lib/unitFromName.mjs';
 
 /*
  * QC/RD — เมนู: รายชื่อเมนู + สูตร (BOM) ของแต่ละเมนู
@@ -58,6 +59,9 @@ export default function QcRdMenu() {
   const [rcpCopyModal, setRcpCopyModal] = useState(false); // คัดลอกสูตร POS หลายเมนูรวดเดียว (ดู RcpCopyDialog)
   const [copyingCode, setCopyingCode] = useState(null);    // เมนูที่กำลังคัดลอกสูตร POS จากหน้าต่างดูสูตร
   const [viewMsg, setViewMsg] = useState(null);            // ผลการคัดลอกในหน้าต่างดูสูตร
+  // รหัสวัตถุดิบที่เติมหน่วยใช้ไปแล้วในรอบนี้ — ตัวคัดลอกหลายเมนูเห็น itemByKey ชุดตอนเริ่มลูป
+  // วัตถุดิบที่ใช้ซ้ำหลายเมนูจะถูกสั่งเติมซ้ำทุกเมนูถ้าไม่จำไว้
+  const useUnitDone = useRef(new Set());
   const [groupModal, setGroupModal] = useState(false);
   const [srcModal, setSrcModal] = useState(false);   // ตัวเลือกเมนูจากฐานอื่น (ดู MenuSourcePicker)
   const [loading, setLoading] = useState(true);
@@ -519,22 +523,58 @@ export default function QcRdMenu() {
     if (bomCount(m.code)) throw new Error('เมนูนี้มีสูตรในฐานอยู่แล้ว — ไม่คัดลอกทับ');
     const conv = rcpLinesToBom(await fetchRcpLines(rcp.rtsId), itemByKey);
     if (!conv.rows.length) throw new Error('สูตร POS ไม่มีบรรทัดที่คัดลอกได้ (ไม่มีรหัสวัตถุดิบ หรือยอดใช้เป็น 0 ทุกบรรทัด)');
+    const y = rcpYield(m, rcp, conv);
 
     const res = await apiCall('saveMenu', {
       code: m.code, name: m.name, price: m.price ?? '',
       group: m.group || '', newGroupName: '',
-      yieldQty: m.yieldQty ?? '', yieldUnit: m.yieldUnit || '',
+      yieldQty: y.qty ?? '', yieldUnit: y.unit,
       items: toSaveItems(conv.rows),
     });
     const saved = {
       code: m.code, name: m.name,   // ราคา/หมวดไม่ได้เปลี่ยน — ไม่ส่งไป = ไม่แตะของเดิมในตาราง
       cost: res.data?.totalCost ?? estCost(conv.rows),
+      yieldQty: y.qty, yieldUnit: y.unit,
       rows: bomRowsFromForm(conv.rows, priceMap),
       cascaded: res.data?.cascaded || [],
     };
     setMenus(prev => patchSavedMenu({ menus: prev, bom: {} }, saved).menus);
     setBom(prev => patchSavedMenu({ menus: [], bom: prev }, saved).bom);
-    return { ...conv, res };
+
+    // เติม "หน่วยใช้" ให้วัตถุดิบในทะเบียนที่ยังว่าง (อ่านจากชื่อ + ตัวแปลง — ดู lib/rcpCopy.mjs)
+    // ทีละตัว ช่องอื่นไม่แตะ (saveItem เขียนเฉพาะช่องที่ส่งไป) · พลาดก็ไม่ทำให้การคัดลอกสูตรล้ม
+    const filled = [];
+    let fillFail = '';
+    for (const f of conv.useUnitFills) {
+      if (useUnitDone.current.has(f.code)) continue;
+      try {
+        await apiCall('saveItem', { code: f.code, useUnit: f.useUnit });
+        useUnitDone.current.add(f.code);
+        filled.push(f);
+      } catch (err) {
+        fillFail = fillFail || err.message || 'บันทึกหน่วยใช้ไม่สำเร็จ';
+      }
+    }
+    if (filled.length) {
+      const by = new Map(filled.map(f => [f.code, f.useUnit]));
+      setItems(prev => prev.map(i => (by.has(i.code) ? { ...i, useUnit: by.get(i.code) } : i)));
+    }
+    return { ...conv, res, yieldSet: y.set ? y.qty : null, yieldUnit: y.unit, yieldDiff: y.diff, filled, fillFail };
+  };
+
+  // ปริมาณที่ได้ต่อสูตร: เมนูยังไม่ได้ตั้งไว้ + POS บอกว่ารอบหนึ่งทำได้มากกว่า 1 → ใช้ของ POS
+  // หน่วยอ่านจากคำท้ายชื่อเมนู ("FC แซลมอนตัดชิ้น(5ชิ้น/แพ็ค)ชิ้น" → ชิ้น) เพราะ Rcp_Qty นับเป็นหน่วยนั้น
+  // เมนูที่ตั้งไว้แล้วไม่แตะ แต่ถ้าไม่ตรงกับ POS ต้องฟ้อง — ยอดใช้ที่คัดลอกมาเป็นของ "ทั้งรอบ" ตาม POS
+  const rcpYield = (m, rcp, conv) => {
+    const has = Number(m.yieldQty) > 0;
+    const pos = conv.yieldQty;
+    if (!has && pos > 1) {
+      return { qty: pos, unit: m.yieldUnit || stockUnitOf(m.name) || stockUnitOf(rcp.name) || '', set: true, diff: null };
+    }
+    return {
+      qty: m.yieldQty ?? null, unit: m.yieldUnit || '', set: false,
+      diff: has && pos > 0 && Number(m.yieldQty) !== pos ? pos : null,
+    };
   };
 
   // คัดลอกจากหน้าต่างดูสูตร — สำเร็จแล้วหน้าต่างเดิมจะสลับไปโชว์สูตรจริงที่เพิ่งบันทึก (มีต้นทุนแล้ว)
@@ -558,11 +598,20 @@ export default function QcRdMenu() {
   };
 
   // คัดลอกสูตร POS เข้าฟอร์มแก้สูตรแต่ยังไม่บันทึก — ไว้ตรวจ/แก้ก่อน (ฟอร์มฟ้องตัวแปลงหน่วยที่ไม่ตรงทะเบียนให้)
-  const openEditFromRcp = (m, lines) => {
+  const openEditFromRcp = (m, rcp, lines) => {
     const conv = rcpLinesToBom(lines, itemByKey);
+    const y = rcpYield(m, rcp, conv);
     openEdit(m);
-    setEditMenu(e => ({ ...e, items: conv.rows.length ? conv.rows.map(r => ({ ...r })) : [emptyIng()] }));
-    setFormMsg({ ok: true, msg: `คัดลอกสูตร POS มาให้แล้ว — ${rcpCopySummary(conv)} · ตรวจแล้วกด "บันทึกเมนู" (ยังไม่ได้บันทึก)` });
+    setEditMenu(e => ({
+      ...e,
+      items: conv.rows.length ? conv.rows.map(r => ({ ...r })) : [emptyIng()],
+      ...(y.set ? { yieldQty: String(y.qty), yieldUnit: y.unit } : {}),
+    }));
+    setFormMsg({
+      ok: true,
+      msg: `คัดลอกสูตร POS มาให้แล้ว — ${rcpCopySummary({ ...conv, yieldSet: y.set ? y.qty : null, yieldUnit: y.unit, yieldDiff: y.diff })}`
+        + ' · ตรวจแล้วกด "บันทึกเมนู" (ยังไม่ได้บันทึก · หน่วยใช้ของวัตถุดิบจะเติมให้เฉพาะตอนกด "คัดลอกลงฐานข้อมูล")',
+    });
   };
 
   // เมนูที่คัดลอกสูตร POS ได้ ตามตัวกรองที่ใช้อยู่ตอนนี้ (ค้นหา/หมวด/สถานะ) — ปุ่มบนหัวหน้า
@@ -811,7 +860,7 @@ export default function QcRdMenu() {
               <div className="flex items-center gap-2 flex-shrink-0">
                 {viewRcp ? (
                   <>
-                    <button onClick={() => { openEditFromRcp(viewMenu, viewRcpItems || []); setViewCode(null); }}
+                    <button onClick={() => { openEditFromRcp(viewMenu, viewRcp, viewRcpItems || []); setViewCode(null); }}
                       disabled={degraded || !viewRcpItems?.length || Boolean(copyingCode)}
                       title={degraded ? LOCK_HINT : 'เปิดฟอร์มแก้สูตรที่คัดลอกสูตร POS ใส่ไว้ให้แล้ว — ตรวจ/แก้ก่อน แล้วค่อยกดบันทึกเอง'}
                       className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 disabled:opacity-50">
@@ -853,7 +902,8 @@ export default function QcRdMenu() {
                       (จับคู่ด้วยชื่อ &quot;{viewRcp.name}&quot; · rts_id {viewRcp.rtsId})
                       <div className="mt-1 text-amber-700">
                         แก้ในที่ไม่ได้ และยังไม่มีต้นทุน เพราะ RcpDtls ไม่ได้เก็บราคาไว้ — กด <b>คัดลอกลงฐานข้อมูล</b>
-                        {' '}เพื่อบันทึกเป็นสูตรจริงของเมนูนี้ (ยอดใช้ = ปริมาณใช้ · ตัวแปลงหน่วย = สัดส่วน/หน่วย)
+                        {' '}เพื่อบันทึกเป็นสูตรจริงของเมนูนี้ (ยอดใช้ = ปริมาณใช้ · ตัวแปลงหน่วย = สัดส่วน/หน่วย
+                        · ตั้งปริมาณที่ได้ตาม &quot;ต่อสูตร&quot; · เติมหน่วยใช้ของวัตถุดิบที่ยังว่างจากชื่อ)
                         แล้วระบบจะคิดต้นทุนจากราคาวัตถุดิบให้และแก้ต่อได้ตามปกติ
                       </div>
                     </div>
@@ -1220,13 +1270,23 @@ export default function QcRdMenu() {
 }
 
 /** สรุปผลการคัดลอกสูตร POS สั้น ๆ — บอกจำนวน แล้วเฉพาะเรื่องที่ควรเปิดดูต่อ */
-function rcpCopySummary({ rows, skipped, notInRegistry, convMismatch }) {
+function rcpCopySummary({
+  rows, skipped, notInRegistry, convMismatch, nameMismatch = [],
+  yieldSet = null, yieldUnit = '', yieldDiff = null, filled = null, fillFail = '',
+}) {
   const codes = notInRegistry.slice(0, 5).join(', ') + (notInRegistry.length > 5 ? ', …' : '');
+  const nm = nameMismatch[0];
   return [
     `${rows.length} วัตถุดิบ`,
+    yieldSet ? `สูตรนี้ทำได้ ${yieldSet.toLocaleString()} ${yieldUnit || 'หน่วย'}ต่อรอบ (ตั้งปริมาณที่ได้ให้แล้ว)` : '',
+    yieldDiff ? `⚠ POS บอกว่าทำได้ ${yieldDiff.toLocaleString()} ต่อรอบ ไม่ตรงกับปริมาณที่ได้ที่เมนูตั้งไว้ ควรเปิดตรวจ` : '',
+    filled?.length ? `เติมหน่วยใช้ให้วัตถุดิบ ${filled.length} รายการ (${filled.slice(0, 3).map(f => `${f.code}=${f.useUnit}`).join(', ')}${filled.length > 3 ? ', …' : ''})` : '',
+    fillFail ? `⚠ เติมหน่วยใช้ไม่สำเร็จ: ${fillFail}` : '',
     skipped ? `ข้าม ${skipped} บรรทัด (ไม่มีรหัส/ยอดใช้ 0)` : '',
     notInRegistry.length ? `ไม่มีในทะเบียนวัตถุดิบ ${notInRegistry.length} รายการ (${codes}) จึงยังไม่มีต้นทุน` : '',
     convMismatch ? `ตัวแปลงหน่วยของ POS ไม่ตรงกับทะเบียน ${convMismatch} รายการ ควรเปิดตรวจ` : '',
+    nm ? `⚠ สัดส่วน/หน่วยของ POS ไม่ตรงกับขนาดในชื่อ ${nameMismatch.length} รายการ`
+      + ` (เช่น ${nm.code}: POS ใส่ ${nm.portion.toLocaleString()} แต่ชื่อบอก ${nm.expect.per.toLocaleString()} ${nm.expect.unit})` : '',
   ].filter(Boolean).join(' · ');
 }
 
@@ -1279,7 +1339,8 @@ function RcpCopyDialog({ candidates, onCopy, onClose, onDone }) {
           [menu.code]: {
             ok: true,
             msg: rcpCopySummary(out) + syncNote(out.res),
-            warn: Boolean(out.notInRegistry.length || out.convMismatch || !syncOk(out.res)),
+            warn: Boolean(out.notInRegistry.length || out.convMismatch || out.nameMismatch.length
+              || out.yieldDiff || out.fillFail || !syncOk(out.res)),
           },
         }));
       } catch (err) {
@@ -1310,8 +1371,10 @@ function RcpCopyDialog({ candidates, onCopy, onClose, onDone }) {
         <div className="mx-5 mt-3 p-3 bg-amber-50 border border-amber-100 rounded-xl text-[11px] text-amber-800 flex items-start gap-2">
           <Info size={13} className="flex-shrink-0 mt-0.5" />
           <span>
-            ยอดใช้ = <b>ปริมาณใช้</b> ของ POS · ตัวแปลงหน่วย = <b>สัดส่วน/หน่วย</b> ของ POS (ไม่มีค่าจึงใช้ของทะเบียนวัตถุดิบ)
-            · บรรทัดที่ไม่มีรหัสวัตถุดิบหรือยอดใช้เป็น 0 จะถูกข้าม · วัตถุดิบที่ไม่มีในทะเบียนยังคัดลอกให้ แต่ยังไม่มีต้นทุน
+            ยอดใช้ = <b>ปริมาณใช้</b> ของ POS (ยอดทั้งรอบ) · ตัวแปลงหน่วย = <b>สัดส่วน/หน่วย</b> ของ POS
+            (ไม่มีค่าใช้ของทะเบียน แล้วค่อยขนาดในชื่อไอเทม) · สูตรที่รอบหนึ่งทำได้หลายหน่วยจะตั้ง <b>ปริมาณที่ได้</b> ให้ตาม POS
+            · วัตถุดิบที่ยังไม่มี <b>หน่วยใช้</b> จะเติมให้จากชื่อ (เช่น &quot;(0.5กก./ถุง) กก.&quot; ตัวแปลง 1000 → กรัม)
+            · ฟ้องบรรทัดที่สัดส่วน/หน่วยของ POS ไม่ตรงกับขนาดในชื่อ · ข้ามบรรทัดที่ไม่มีรหัสวัตถุดิบหรือยอดใช้ 0
             · เลือกเฉพาะเมนูตามตัวกรองที่ใช้อยู่ในหน้า (ค้นหา/หมวด/สถานะ)
           </span>
         </div>
