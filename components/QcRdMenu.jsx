@@ -4,7 +4,7 @@ import { apiCall, syncNote, syncOk } from '../lib/qcrdApi';
 import { rcpNameKey, rcpItemKey } from '../lib/rcpMatch';
 import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
 import { rcpLinesToBom, toSaveItems } from '../lib/rcpCopy.mjs';
-import { stockUnitOf } from '../lib/unitFromName.mjs';
+import { stockUnitOf, suggestUseUnit } from '../lib/unitFromName.mjs';
 
 /*
  * QC/RD — เมนู: รายชื่อเมนู + สูตร (BOM) ของแต่ละเมนู
@@ -45,6 +45,8 @@ const TAG_OPTIONS = [TAG_MATERIAL, TAG_PACKAGING];
 
 // หน่วยของ "ปริมาณที่ได้" ที่ใช้บ่อย (พิมพ์หน่วยอื่นเองได้)
 const YIELD_UNITS = ['ชิ้น', 'ถาด', 'จาน', 'ที่', 'ชุด', 'แก้ว', 'ถ้วย', 'ถุง', 'กรัม', 'กก.', 'มล.', 'ลิตร'];
+// หน่วยใช้ที่เจอบ่อยในสูตร (ชุดเดียวกับหน้าวัตถุดิบ) — ช่องหน่วยใช้ในฟอร์มพิมพ์หน่วยอื่นเองได้
+const USE_UNITS = ['กรัม', 'มล.', 'ชิ้น', 'ใบ', 'ฟอง', 'แผ่น', 'ซอง', 'ที่', 'ลูก', 'ตัว'];
 
 export default function QcRdMenu() {
   const [menus, setMenus] = useState([]);
@@ -152,10 +154,30 @@ export default function QcRdMenu() {
     return m;
   }, [items]);
 
-  // หน่วยซื้อที่มีอยู่จริงในชีท item (ใช้เป็นตัวเลือกในช่องหน่วยของแถววัตถุดิบ)
-  const itemUnits = useMemo(
-    () => [...new Set(items.map(i => i.unit).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'th')),
+  // ตัวเลือกในช่อง "หน่วยใช้" ของแถววัตถุดิบ: หน่วยที่เจอบ่อย + หน่วยใช้ที่ทะเบียนมีอยู่จริง (พิมพ์หน่วยอื่นได้)
+  const useUnitOptions = useMemo(
+    () => [...new Set([...USE_UNITS, ...items.map(i => String(i.useUnit || '').trim()).filter(Boolean)])],
     [items]);
+
+  /**
+   * หน่วยใช้ของแถววัตถุดิบในฟอร์ม = หน่วยของตัวเลขในช่องยอดใช้ (เช่น 450 "กรัม")
+   * ลำดับ: ที่พิมพ์แก้ในฟอร์ม → ทะเบียนวัตถุดิบ → อ่านจากชื่อ (ยังไม่อยู่ในทะเบียน บันทึกเมนูแล้วจะเก็บให้)
+   * อ่านจากชื่อรับเฉพาะเคสที่ตัวแปลง (ของทะเบียน หรือของแถวนี้ถ้าทะเบียนยังว่าง) ตรงกับขนาดในชื่อ
+   * เช่น "กระเทียมปอกขาว" ซื้อเป็น กก. ตัวแปลง 1000 → กรัม · ไม่ตรง/ชื่อไม่บอก = เว้นว่างให้กรอกเอง
+   * @returns {{ value: string, source: 'edit'|'registry'|'name'|'' }}
+   */
+  const useUnitOf = (r, edits = editMenu?.useUnitEdits) => {
+    const info = itemMap[r.itemCode];
+    if (edits && edits[r.itemCode] !== undefined) return { value: edits[r.itemCode], source: 'edit' };
+    const reg = String(info?.useUnit || '').trim();
+    if (reg) return { value: reg, source: 'registry' };
+    if (!info) return { value: '', source: '' };
+    const sug = suggestUseUnit({
+      name: info.name, unit: info.unit,
+      converter: Number(info.converter) > 0 ? info.converter : (parseFloat(r.converter) || null),
+    });
+    return sug.basis === 'match' ? { value: sug.useUnit, source: 'name' } : { value: '', source: '' };
+  };
 
   // จำนวนบรรทัดสูตรของเมนูหนึ่ง — เมนูที่เพิ่งถูกคิดใหม่ตาม (cascade) จะมี count มาก่อน
   // เพราะบรรทัดชุดใหม่ยังโหลดไม่มา แต่จำนวนกับต้นทุนรู้แล้วจากคำตอบของการบันทึก
@@ -247,7 +269,7 @@ export default function QcRdMenu() {
     setFormMsg(null);
     setEditMenu({
       code: '', name: '', price: '', group: '', newGroupName: '',
-      yieldQty: '', yieldUnit: '', unitEdits: {}, isNew: true, items: [emptyIng()], sources: [],
+      yieldQty: '', yieldUnit: '', useUnitEdits: {}, isNew: true, items: [emptyIng()], sources: [],
     });
   };
   const openEdit = (m) => {
@@ -267,7 +289,7 @@ export default function QcRdMenu() {
     setFormMsg(null);
     setEditMenu({
       code: m.code, name: m.name, price: m.price ?? '', group: m.group || '', newGroupName: '',
-      yieldQty: m.yieldQty ?? '', yieldUnit: m.yieldUnit || '', unitEdits: {},
+      yieldQty: m.yieldQty ?? '', yieldUnit: m.yieldUnit || '', useUnitEdits: {},
       isNew: false, items: rows.length ? rows : [emptyIng()], sources,
     });
   };
@@ -423,21 +445,60 @@ export default function QcRdMenu() {
         })),
       });
 
-      // หน่วยของวัตถุดิบที่แก้ในฟอร์ม → เขียนลงชีท item คอลัมน์ D (คนละชีทกับ BOM จึงยิงแยก)
-      const usedCodes = new Set(rows.map(r => r.itemCode));
-      const unitEdits = Object.entries(editMenu.unitEdits || {})
-        .filter(([code, unit]) => code && usedCodes.has(code) && (itemMap[code]?.unit || '') !== String(unit).trim());
+      // หน่วยใช้ของวัตถุดิบ → ทะเบียนวัตถุดิบ (ใช้ร่วมกันทุกเมนู คนละตารางกับ BOM จึงยิงแยก)
+      //   ทะเบียนยังว่าง (พิมพ์เอง/อ่านจากชื่อ) → updateItemUseUnits ก้อนเดียว เขียนเฉพาะช่องที่ยังว่าง
+      //     และเติมตัวแปลงของแถวนี้ไปคู่กันถ้าทะเบียนยังไม่มีตัวแปลง
+      //   ทะเบียนมีค่าแล้วแต่พิมพ์แก้ในฟอร์ม → saveItem ทีละตัว (ตั้งใจเปลี่ยน จึงทับได้)
+      // พลาดไม่ทำให้การบันทึกเมนูล้ม — รายงานรวมในข้อความท้ายสุด
+      const fills = [];
+      const overwrites = [];
+      const seenCodes = new Set();
+      rows.forEach(r => {
+        const info = itemMap[r.itemCode];
+        if (!info || seenCodes.has(r.itemCode)) return;
+        seenCodes.add(r.itemCode);
+        const { value, source } = useUnitOf(r);
+        const v = String(value || '').trim();
+        const reg = String(info.useUnit || '').trim();
+        if (!v) return;
+        if (!reg) {
+          fills.push({ code: r.itemCode, useUnit: v, converter: Number(info.converter) > 0 ? '' : (parseFloat(r.converter) || '') });
+        } else if (source === 'edit' && v !== reg) {
+          overwrites.push({ code: r.itemCode, useUnit: v });
+        }
+      });
+      const unitTotal = fills.length + overwrites.length;
       let unitSaved = 0;
-      for (const [code, unit] of unitEdits) {
-        try { await apiCall('saveItem', { code, unit: String(unit).trim() }); unitSaved++; }
-        catch { /* หน่วยบันทึกไม่ผ่านไม่ควรทำให้การบันทึกเมนูล้ม — รายงานรวมท้ายสุด */ }
+      let fillsOk = false;
+      const overOk = [];
+      if (fills.length) {
+        try {
+          unitSaved += Number((await apiCall('updateItemUseUnits', { units: fills })).data?.updated) || 0;
+          fillsOk = true;
+        } catch { /* รายงานรวมท้ายสุด */ }
+      }
+      for (const o of overwrites) {
+        try { await apiCall('saveItem', { code: o.code, useUnit: o.useUnit }); unitSaved++; overOk.push(o); }
+        catch { /* รายงานรวมท้ายสุด */ }
+      }
+      // แปะลงทะเบียนในเครื่องทันที — เปิดฟอร์มเมนูอื่นที่ใช้วัตถุดิบตัวเดียวกันต่อเลยต้องเห็นหน่วยใหม่
+      // ไม่ต้องรอโหลดทะเบียนใหม่เบื้องหลังเสร็จ (ช่องที่ทะเบียนมีค่าอยู่แล้ว ฝั่งฐานไม่ทับ ตรงนี้ก็ไม่ทับ)
+      if (fillsOk || overOk.length) {
+        const fillBy = new Map((fillsOk ? fills : []).map(f => [f.code, f]));
+        const overBy = new Map(overOk.map(o => [o.code, o.useUnit]));
+        setItems(prev => prev.map(i => {
+          if (overBy.has(i.code)) return { ...i, useUnit: overBy.get(i.code) };
+          const f = fillBy.get(i.code);
+          if (!f || String(i.useUnit || '').trim()) return i;
+          return { ...i, useUnit: f.useUnit, ...(Number(f.converter) > 0 && !(Number(i.converter) > 0) ? { converter: Number(f.converter) } : {}) };
+        }));
       }
       // เมนูอื่นที่ดึงสูตรของเมนูนี้ไปใช้ ถูกคิดต้นทุนใหม่ให้ตามสูตรล่าสุดในรอบเดียวกัน
       const cascaded = res.data?.cascaded || [];
       setToast({
         ok: syncOk(res),
         msg: `บันทึก "${editMenu.name}" สำเร็จ (${res.data?.bomRows ?? rows.length} วัตถุดิบ`
-          + `${unitEdits.length ? ` · หน่วย ${unitSaved}/${unitEdits.length} รายการ` : ''})`
+          + `${unitTotal ? ` · หน่วยใช้ ${unitSaved}/${unitTotal} รายการ` : ''})`
           + (cascaded.length ? ` · อัปเดตเมนูที่ผูกไว้ ${cascaded.length} เมนู: ${cascaded.map(c => c.name || c.code).join(', ')}` : '')
           + syncNote(res),
       });
@@ -465,7 +526,7 @@ export default function QcRdMenu() {
       // เหลือเฉพาะชุดที่แปะเองไม่ได้จริง ๆ — ปกติไม่มีเลย จึงไม่มีการโหลดอะไรตามมา
       //   bom       บรรทัดสูตรของเมนูที่ผูกกัน (รู้แค่จำนวนกับต้นทุน ไม่ได้ส่งบรรทัดมาด้วย)
       //   menugroup เพิ่งสร้างหมวดใหม่
-      //   item      เพิ่งแก้หน่วยของวัตถุดิบไปด้วย
+      //   item      เพิ่งเขียนหน่วยใช้ (และตัวแปลงที่ยังว่าง) ของวัตถุดิบไปด้วย
       const refresh = [];
       if (patched.staleBom.length) refresh.push('bom');
       if (isNewGroup) refresh.push('menugroup');
@@ -615,7 +676,7 @@ export default function QcRdMenu() {
     setFormMsg({
       ok: true,
       msg: `คัดลอกสูตร POS มาให้แล้ว — ${rcpCopySummary({ ...conv, yieldSet: y.set ? y.qty : null, yieldUnit: y.unit, yieldDiff: y.diff })}`
-        + ' · ตรวจแล้วกด "บันทึกเมนู" (ยังไม่ได้บันทึก · หน่วยใช้ของวัตถุดิบจะเติมให้เฉพาะตอนกด "คัดลอกลงฐานข้อมูล")',
+        + ' · ตรวจแล้วกด "บันทึกเมนู" (ยังไม่ได้บันทึก)',
     });
   };
 
@@ -1173,24 +1234,26 @@ export default function QcRdMenu() {
                 <div className="hidden sm:flex items-center gap-2 px-2 text-[11px] font-bold text-slate-400 uppercase tracking-wide">
                   <span className="flex-1 min-w-[240px]">วัตถุดิบ</span>
                   <span className="w-24 text-right">ยอดใช้</span>
-                  <span className="w-24">หน่วยซื้อ</span>
+                  <span className="w-24">หน่วยใช้</span>
                   <span className="w-24 text-right">ตัวแปลงหน่วย</span>
                   <span className="w-8" />
                 </div>
-                <datalist id="qcrd-item-units">
-                  {itemUnits.map(u => <option key={u} value={u} />)}
+                <datalist id="qcrd-use-units">
+                  {useUnitOptions.map(u => <option key={u} value={u} />)}
                 </datalist>
                 <div className="space-y-2">
                   {editMenu.items.map((r, idx) => (
                     <IngredientRow key={idx} row={r} items={items}
-                      unit={editMenu.unitEdits?.[r.itemCode] ?? (itemMap[r.itemCode]?.unit || '')}
-                      onUnitChange={u => setEditMenu(m => ({ ...m, unitEdits: { ...m.unitEdits, [r.itemCode]: u } }))}
+                      useUnit={useUnitOf(r)} purchaseUnit={itemMap[r.itemCode]?.unit || ''}
+                      onUseUnitChange={u => setEditMenu(m => ({ ...m, useUnitEdits: { ...m.useUnitEdits, [r.itemCode]: u } }))}
                       onChange={next => setEditMenu(m => ({ ...m, items: m.items.map((x, i) => i === idx ? next : x) }))}
                       onRemove={() => setEditMenu(m => ({ ...m, items: m.items.filter((_, i) => i !== idx) }))} />
                   ))}
                 </div>
                 <p className="text-[11px] text-slate-400 mt-1.5">
-                  ช่อง "หน่วยซื้อ" แก้แล้วจะบันทึกลงข้อมูลวัตถุดิบ (ชีท item) ใช้ร่วมกันทุกเมนูที่ใช้วัตถุดิบตัวนั้น
+                  ช่อง &quot;หน่วยใช้&quot; = หน่วยของตัวเลขยอดใช้ (เช่น กรัม) แก้แล้วจะบันทึกลงทะเบียนวัตถุดิบ ใช้ร่วมกันทุกเมนูที่ใช้วัตถุดิบตัวนั้น
+                  · <span className="text-violet-600">ช่องสีม่วง</span> = อ่านจากชื่อวัตถุดิบ (ทะเบียนยังไม่มี) กดบันทึกเมนูแล้วจะเก็บลงทะเบียนให้
+                  · หน่วยซื้อดูได้ที่ป้าย &quot;1 กก. = 1,000 กรัม&quot; ใต้แถว (แก้ได้ที่หน้าวัตถุดิบ)
                 </p>
               </div>
 
@@ -1261,7 +1324,7 @@ export default function QcRdMenu() {
               code: row.code, name: row.name,
               price: row.price === null || row.price === undefined ? '' : String(row.price),
               group: row.group || '', newGroupName: '',
-              yieldQty: '', yieldUnit: '', unitEdits: {}, isNew: true,
+              yieldQty: '', yieldUnit: '', useUnitEdits: {}, isNew: true,
               items: [emptyIng()], sources: [],
             });
           }}
@@ -1850,14 +1913,15 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
   );
 }
 
-// แถววัตถุดิบในฟอร์ม: ค้นหาไอเทมจากชีท item + กรอกยอดใช้/หน่วยซื้อ/ตัวแปลง
-// unit/onUnitChange = หน่วยซื้อของวัตถุดิบ (ชีท item คอลัมน์ D) แก้จากในฟอร์มเมนูได้เลย
+// แถววัตถุดิบในฟอร์ม: ค้นหาไอเทมจากชีท item + กรอกยอดใช้/หน่วยใช้/ตัวแปลง
 //
-// "หน่วยใช้" (หน่วยเล็กที่ช่องยอดใช้กรอกเป็นหน่วยนั้น) ดึงจากทะเบียนวัตถุดิบมาแสดงสด ๆ ทุกครั้ง
-// ไม่ได้เก็บซ้ำไว้ในสูตร — แก้ที่ทะเบียนที่เดียวแล้วทุกเมนูที่ใช้วัตถุดิบตัวนั้นเปลี่ยนตามทันที
-// (เก็บซ้ำเมื่อไหร่ = ต้องคอยซิงก์สองที่ ซึ่งไม่มีวันตรงกันได้จริง) สูตรเก่าจึงได้ไปด้วยเลย
-// ไม่ต้องไล่แก้ย้อนหลัง ส่วนวัตถุดิบที่ยังไม่ได้ตั้งหน่วยใช้ ก็แค่ไม่ขึ้นอะไร ไม่มีอะไรพัง
-function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
+// "หน่วยใช้" (หน่วยของตัวเลขในช่องยอดใช้ เช่น กรัม) เป็นข้อมูลของทะเบียนวัตถุดิบ ไม่ได้เก็บซ้ำไว้ในสูตร
+// — แก้ที่ทะเบียนที่เดียวแล้วทุกเมนูที่ใช้วัตถุดิบตัวนั้นเปลี่ยนตามทันที (เก็บซ้ำ = ต้องคอยซิงก์สองที่)
+// ช่องนี้แก้จากในฟอร์มได้ แล้วตอนบันทึกเมนูจะเขียนกลับไปที่ทะเบียน (ดู handleSave)
+//   useUnit      { value, source } จาก useUnitOf() — source 'name' = อ่านจากชื่อ ยังไม่อยู่ในทะเบียน (ช่องสีม่วง)
+//   purchaseUnit หน่วยซื้อของทะเบียน ไว้แสดงในป้าย "1 กก. = 1,000 กรัม" (แก้ได้ที่หน้าวัตถุดิบ)
+// เดิมช่องนี้เป็น "หน่วยซื้อ" ซึ่งไม่ใช่หน่วยของตัวเลขข้าง ๆ มัน (450 กับ "กก." ทั้งที่จริงคือ 450 กรัม)
+function IngredientRow({ row, items, useUnit: useUnitInfo, purchaseUnit, onUseUnitChange, onChange, onRemove }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
 
@@ -1865,7 +1929,8 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
   // ตัวแปลงหน่วยในสูตรไม่ตรงกับที่ตั้งไว้ในข้อมูลวัตถุดิบ → ฟ้องให้เห็น กดใช้ค่าจากวัตถุดิบได้
   const convMismatch = Boolean(row.itemCode && info?.converter && parseFloat(row.converter) !== info.converter);
   // หน่วยของตัวเลขในช่อง "ยอดใช้" — ของเดิมมีแต่ตัวเลขลอย ๆ ต้องเปิดไปดูทะเบียนเองว่ากรัมหรือมล.
-  const useUnit = String(info?.useUnit || '').trim();
+  const useUnit = String(useUnitInfo?.value || '').trim();
+  const fromName = useUnitInfo?.source === 'name';
 
   const suggestions = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -1930,26 +1995,17 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
           </>
         )}
       </div>
-      {/* หน่วยใช้แปะไว้ "ในช่อง" ทางซ้าย (ตัวเลขชิดขวาอยู่แล้ว จึงไม่ชนกัน) แทนที่จะเป็นช่องใหม่
-          ไม่งั้นแถวที่วัตถุดิบยังไม่ได้ตั้งหน่วยใช้จะกว้างไม่เท่ากัน แล้วคอลัมน์เลื่อนไม่ตรงหัวตาราง */}
-      <div className="relative w-24">
-        <input type="number" value={row.qty} onChange={e => onChange({ ...row, qty: e.target.value })}
-          placeholder="ยอดใช้"
-          title={useUnit
-            ? `ยอดใช้ต่อ 1 จาน หน่วยเป็น "${useUnit}" ตามที่ตั้งไว้ในทะเบียนวัตถุดิบ`
-            : 'ยอดใช้ต่อ 1 จาน (หน่วยเล็ก) — ตั้ง "หน่วยใช้" ให้วัตถุดิบตัวนี้ในหน้าวัตถุดิบ แล้วหน่วยจะมาขึ้นตรงนี้'}
-          className={`w-full py-2 pr-2 border border-slate-200 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 ${useUnit ? 'pl-9' : 'pl-2'}`} />
-        {useUnit && (
-          <span title="หน่วยใช้ของวัตถุดิบตัวนี้ (แก้ได้ที่หน้าวัตถุดิบ)"
-            className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-slate-400 pointer-events-none max-w-[28px] truncate">
-            {useUnit}
-          </span>
-        )}
-      </div>
-      <input list="qcrd-item-units" value={unit} disabled={!row.itemCode}
-        onChange={e => onUnitChange(e.target.value)} placeholder="หน่วย"
-        title="หน่วยซื้อของวัตถุดิบ (เช่น กก. / ถุง / ขวด) — บันทึกลงชีท item คอลัมน์ D ใช้ร่วมกันทุกเมนู"
-        className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm bg-white disabled:bg-slate-100 disabled:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+      <input type="number" value={row.qty} onChange={e => onChange({ ...row, qty: e.target.value })}
+        placeholder="ยอดใช้"
+        title={useUnit ? `ยอดใช้ต่อ 1 จาน หน่วยเป็น "${useUnit}"` : 'ยอดใช้ต่อ 1 จาน (หน่วยเล็ก) — ใส่หน่วยใช้ในช่องถัดไป'}
+        className="w-24 px-2 py-2 border border-slate-200 rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+      <input list="qcrd-use-units" value={useUnit} disabled={!row.itemCode}
+        onChange={e => onUseUnitChange(e.target.value)} placeholder="หน่วยใช้"
+        title={fromName
+          ? `อ่านจากชื่อวัตถุดิบ (ทะเบียนยังไม่มีหน่วยใช้) — กดบันทึกเมนูแล้วจะเก็บ "${useUnit}" ลงทะเบียนให้`
+          : 'หน่วยของตัวเลขยอดใช้ (เช่น กรัม / มล. / ชิ้น) — แก้แล้วบันทึกลงทะเบียนวัตถุดิบ ใช้ร่วมกันทุกเมนู'}
+        className={`w-24 px-2 py-2 border rounded-lg text-sm disabled:bg-slate-100 disabled:text-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${fromName
+          ? 'border-violet-200 bg-violet-50 text-violet-700' : 'border-slate-200 bg-white'}`} />
       <input type="number" value={row.converter} onChange={e => onChange({ ...row, converter: e.target.value })} placeholder="ตัวแปลง" title="หน่วยเล็กต่อ 1 หน่วยซื้อ เช่น 1000 = ซื้อเป็น กก. ใช้เป็นกรัม"
         className={`w-24 px-2 py-2 border rounded-lg text-sm font-mono text-right bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 ${convMismatch ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200'}`} />
       <button onClick={onRemove} className="p-2 text-slate-300 hover:text-rose-500"><Trash2 size={15} /></button>
@@ -1968,9 +2024,14 @@ function IngredientRow({ row, items, unit, onUnitChange, onChange, onRemove }) {
           ไม่ตัด BOM
         </label>
         {useUnit && row.converter > 0 && (
-          <span title="อ่านจากทะเบียนวัตถุดิบ (ตัวแปลงหน่วย + หน่วยใช้) — ไว้กันกรอกยอดใช้ผิดหน่วย"
+          <span title="หน่วยซื้อ (ทะเบียนวัตถุดิบ) × ตัวแปลงของแถวนี้ = หน่วยใช้ — ไว้กันกรอกยอดใช้ผิดหน่วย"
             className="inline-block px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full text-[10px] font-medium">
-            1 {unit || 'หน่วยซื้อ'} = {Number(row.converter).toLocaleString()} {useUnit}
+            1 {purchaseUnit || 'หน่วยซื้อ'} = {Number(row.converter).toLocaleString()} {useUnit}
+          </span>
+        )}
+        {fromName && (
+          <span className="inline-block px-2 py-0.5 bg-violet-50 text-violet-600 border border-violet-100 rounded-full text-[10px] font-medium">
+            หน่วยใช้อ่านจากชื่อ — บันทึกเมนูแล้วจะเก็บลงทะเบียน
           </span>
         )}
         {info?.itemType === 'แพ็กเกจจิ้ง' && (
