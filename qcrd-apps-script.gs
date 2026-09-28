@@ -551,24 +551,34 @@ function deleteItem_(ss, data) {
 }
 
 // เติมหน่วยใช้ลงคอลัมน์ Q ของชีท item — เขียนเฉพาะช่องที่ยังว่าง (ไม่ทับของเดิม)
-// payload: { units: [{ code, useUnit }] } — ปุ่ม "เติมหน่วยใช้จากชื่อ" หน้า QC/RD > วัตถุดิบ
+// payload: { units: [{ code, useUnit, converter? }] } — ปุ่ม "เติมหน่วยใช้จากชื่อ" หน้า QC/RD > วัตถุดิบ
+// converter ส่งมา = เติมตัวแปลง (คอลัมน์ I) ด้วยถ้ายังว่าง — เฉพาะแถวที่หน่วยใช้ยังว่างเท่านั้น (สองช่องนี้เป็นคู่กัน)
 // เขียนทีละช่อง ไม่ setValues ทั้งคอลัมน์ กันไปทับสูตร/ค่าที่มีคนแก้ในช่องอื่นระหว่างนั้น
 function updateItemUseUnits_(ss, data) {
   var sh = ss.getSheetByName('item');
   if (!sh) return { status: 'error', message: 'ไม่พบชีท item' };
   var map = {};
-  (data.units || []).forEach(function (u) { map[String(u.code || '').trim()] = String(u.useUnit || '').trim(); });
+  (data.units || []).forEach(function (u) {
+    var c = Number(u.converter);
+    map[String(u.code || '').trim()] = { unit: String(u.useUnit || '').trim(), conv: c > 0 ? c : null };
+  });
   var values = sh.getDataRange().getValues();
-  var updated = 0;
+  var updated = 0, converters = 0;
   for (var i = 1; i < values.length; i++) {
     var code = String(values[i][0] || '').trim();
     var cur = String(values[i][16] || '').trim();
-    if (code && !cur && map[code]) {
-      sh.getRange(i + 1, 17).setValue(map[code]);
+    var m = map[code];
+    if (code && !cur && m && m.unit) {
+      sh.getRange(i + 1, 17).setValue(m.unit);
       updated++;
+      var curConv = Number(values[i][8]);
+      if (m.conv && !(curConv > 0)) {
+        sh.getRange(i + 1, 9).setValue(m.conv);
+        converters++;
+      }
     }
   }
-  return { status: 'success', data: { updated: updated } };
+  return { status: 'success', data: { updated: updated, converters: converters } };
 }
 
 // เติมหน่วยลงคอลัมน์ D ของชีท item — เขียนเฉพาะช่องที่ยังว่าง (ไม่ทับของเดิม)

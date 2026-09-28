@@ -541,23 +541,28 @@ export default function QcRdMenu() {
     setMenus(prev => patchSavedMenu({ menus: prev, bom: {} }, saved).menus);
     setBom(prev => patchSavedMenu({ menus: [], bom: prev }, saved).bom);
 
-    // เติม "หน่วยใช้" ให้วัตถุดิบในทะเบียนที่ยังว่าง (อ่านจากชื่อ + ตัวแปลง — ดู lib/rcpCopy.mjs)
-    // ทีละตัว ช่องอื่นไม่แตะ (saveItem เขียนเฉพาะช่องที่ส่งไป) · พลาดก็ไม่ทำให้การคัดลอกสูตรล้ม
-    const filled = [];
+    // เติม "หน่วยใช้" (+ ตัวแปลงถ้าทะเบียนยังว่าง) ให้วัตถุดิบในทะเบียน — อ่านจากชื่อ ดู lib/rcpCopy.mjs
+    // ยิงก้อนเดียวด้วย updateItemUseUnits ตัวเดียวกับปุ่มหน้าวัตถุดิบ: เขียนเฉพาะช่องที่ยังว่างอยู่จริง
+    // ตอนเขียน ไม่ทับของที่มีคนกรอกไว้ · พลาดก็ไม่ทำให้การคัดลอกสูตรล้ม
+    const todo = conv.useUnitFills.filter(f => !useUnitDone.current.has(f.code));
+    let filled = [];
     let fillFail = '';
-    for (const f of conv.useUnitFills) {
-      if (useUnitDone.current.has(f.code)) continue;
+    if (todo.length) {
       try {
-        await apiCall('saveItem', { code: f.code, useUnit: f.useUnit });
-        useUnitDone.current.add(f.code);
-        filled.push(f);
+        await apiCall('updateItemUseUnits', {
+          units: todo.map(f => ({ code: f.code, useUnit: f.useUnit, converter: f.converter ?? '' })),
+        });
+        todo.forEach(f => useUnitDone.current.add(f.code));
+        filled = todo;
+        const by = new Map(todo.map(f => [f.code, f]));
+        setItems(prev => prev.map(i => {
+          const f = by.get(i.code);
+          if (!f || String(i.useUnit || '').trim()) return i;
+          return { ...i, useUnit: f.useUnit, ...(f.converter && !(Number(i.converter) > 0) ? { converter: f.converter } : {}) };
+        }));
       } catch (err) {
-        fillFail = fillFail || err.message || 'บันทึกหน่วยใช้ไม่สำเร็จ';
+        fillFail = err.message || 'บันทึกหน่วยใช้ไม่สำเร็จ';
       }
-    }
-    if (filled.length) {
-      const by = new Map(filled.map(f => [f.code, f.useUnit]));
-      setItems(prev => prev.map(i => (by.has(i.code) ? { ...i, useUnit: by.get(i.code) } : i)));
     }
     return { ...conv, res, yieldSet: y.set ? y.qty : null, yieldUnit: y.unit, yieldDiff: y.diff, filled, fillFail };
   };
@@ -1280,7 +1285,8 @@ function rcpCopySummary({
     `${rows.length} วัตถุดิบ`,
     yieldSet ? `สูตรนี้ทำได้ ${yieldSet.toLocaleString()} ${yieldUnit || 'หน่วย'}ต่อรอบ (ตั้งปริมาณที่ได้ให้แล้ว)` : '',
     yieldDiff ? `⚠ POS บอกว่าทำได้ ${yieldDiff.toLocaleString()} ต่อรอบ ไม่ตรงกับปริมาณที่ได้ที่เมนูตั้งไว้ ควรเปิดตรวจ` : '',
-    filled?.length ? `เติมหน่วยใช้ให้วัตถุดิบ ${filled.length} รายการ (${filled.slice(0, 3).map(f => `${f.code}=${f.useUnit}`).join(', ')}${filled.length > 3 ? ', …' : ''})` : '',
+    filled?.length ? `เติมหน่วยใช้ให้วัตถุดิบ ${filled.length} รายการ (${filled.slice(0, 3).map(f => `${f.code}=${f.useUnit}${f.converter ? `×${f.converter}` : ''}`).join(', ')}${filled.length > 3 ? ', …' : ''})`
+      + (filled.some(f => f.converter) ? ` · เติมตัวแปลงที่ยังว่างให้ ${filled.filter(f => f.converter).length} รายการ` : '') : '',
     fillFail ? `⚠ เติมหน่วยใช้ไม่สำเร็จ: ${fillFail}` : '',
     skipped ? `ข้าม ${skipped} บรรทัด (ไม่มีรหัส/ยอดใช้ 0)` : '',
     notInRegistry.length ? `ไม่มีในทะเบียนวัตถุดิบ ${notInRegistry.length} รายการ (${codes}) จึงยังไม่มีต้นทุน` : '',
