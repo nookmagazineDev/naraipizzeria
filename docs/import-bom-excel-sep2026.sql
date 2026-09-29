@@ -2,12 +2,15 @@
    IMPORT FC recipes from Excel "bom ... Sep2026.xlsx" into dbo.qcrd_bom / dbo.qcrd_menu
 
    What it does (same rules as saving a recipe on the QC/RD web page):
-     - 184 recipes in the Excel file: old lines in qcrd_bom are deleted and replaced
+     - Each Excel recipe is matched to an existing QC/RD menu: by code, else by name
+       (QC/RD FC menus use other codes, e.g. 1000021 vs Excel/POS 6078). See M1..M4.
+       NOT_FOUND / AMBIGUOUS recipes are skipped unless @create_new = 1 (NOT_FOUND only).
+     - Matched recipes: old lines in qcrd_bom are deleted and replaced
        by the Excel lines (seq renumbered 1..n). qty = column F (per batch),
        converter = column H (0 -> 1000). tag / no_deduct are kept from the old line
        of the same item. Price / unit_cost / line_cost from dbo.stock_item.price.
      - qcrd_menu: yield_qty = column G, cost = sum of line_cost.
-       Recipes with no row in qcrd_menu are added (name from Excel, no group).
+       With @create_new = 1, NOT_FOUND recipes are added as new menus (Excel code/name).
        Existing menu names / groups / prices are NOT changed.
      - Other menus that pull one of these recipes (src_code) are rebuilt with the
        new lines x the same factor, like the web save does (1 level; P4 lists deeper ones).
@@ -16,8 +19,9 @@
 
    HOW TO RUN
      1) SSMS: File > Open > File... this file (do not copy/paste), database InventoryNarai.
-     2) Execute as is (@apply = 0): dry run. Check LOAD CHECK = 1496 / 184 and P1..P5, R1, R2.
+     2) Execute as is (@apply = 0): dry run. Check LOAD CHECK = 1496 / 184, M1..M4, P1..P5, R1, R2.
      3) Find "DECLARE @apply BIT = 0" near the end, change to 1, Execute again -> saved.
+        (@create_new = 1 as well only if the NOT_FOUND recipes really are new menus.)
      Undo: run the RESTORE block at the very end of this file (it is commented out).
 
    Pure ASCII on purpose: Thai text is stored as UTF-16 hex so no encoding can break it.
@@ -7420,7 +7424,8 @@ GO
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 
-DECLARE @apply BIT = 0;   -- <<<<<< change to 1 to save for real
+DECLARE @apply BIT = 0;        -- <<<<<< 1 = save for real
+DECLARE @create_new BIT = 0;   -- <<<<<< 1 = also add NOT_FOUND recipes as new QC/RD menus
 
 IF (SELECT COUNT(*) FROM #xl) <> 1496
 BEGIN
@@ -7428,23 +7433,134 @@ BEGIN
     RETURN;
 END
 
-/* ---------- recipes in the Excel file -> menu in qcrd_menu ---------- */
-IF OBJECT_ID('tempdb..#menus') IS NOT NULL DROP TABLE #menus;
-SELECT CAST(x.menu_code AS NVARCHAR(50)) AS menu_key,
-       COALESCE(m.menu_code, CAST(x.menu_code AS NVARCHAR(50))) AS menu_code,
-       COALESCE(m.menu_name, x.menu_name) AS menu_name,
-       x.menu_name AS xl_name,
-       x.yield_qty,
-       m.yield_qty AS old_yield,
-       m.cost AS old_cost,
-       CASE WHEN m.menu_code IS NULL THEN 1 ELSE 0 END AS is_new_menu
-INTO #menus
+/* ---------- Excel recipe -> existing QC/RD menu ----------
+   QC/RD uses different menu codes (e.g. 1000021) from the Excel file (POS code, e.g. 6078),
+   so match 1) by code, else 2) by NAME with the same rule as lib/rcpMatch.js rcpNameKey
+   (remove spaces, brackets, . , ; : ' " ` / \ _ -, lower case). Only a unique match is used. */
+IF OBJECT_ID('tempdb..#qm') IS NOT NULL DROP TABLE #qm;
+SELECT qm.menu_code, qm.menu_name, qm.yield_qty, qm.cost, LOWER(qm.menu_key) AS mkey,
+       CAST(qm.menu_name AS NVARCHAR(255)) AS nkey, CAST(NULL AS NVARCHAR(255)) AS nloose
+INTO #qm FROM dbo.qcrd_menu qm;
+/* name key for #qm (same as rcpNameKey) */
+UPDATE #qm SET nkey = REPLACE(nkey, ' ', '');
+UPDATE #qm SET nkey = REPLACE(nkey, NCHAR(160), '');
+UPDATE #qm SET nkey = REPLACE(nkey, NCHAR(9), '');
+UPDATE #qm SET nkey = REPLACE(nkey, '(', '');
+UPDATE #qm SET nkey = REPLACE(nkey, ')', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '[', '');
+UPDATE #qm SET nkey = REPLACE(nkey, ']', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '{', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '}', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '.', '');
+UPDATE #qm SET nkey = REPLACE(nkey, ',', '');
+UPDATE #qm SET nkey = REPLACE(nkey, ';', '');
+UPDATE #qm SET nkey = REPLACE(nkey, ':', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '''', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '"', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '`', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '/', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '\', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '_', '');
+UPDATE #qm SET nkey = REPLACE(nkey, '-', '');
+UPDATE #qm SET nkey = LOWER(nkey), nloose = LOWER(nkey);
+UPDATE #qm SET nloose = REPLACE(nloose COLLATE Latin1_General_BIN2, NCHAR(3655), '');
+UPDATE #qm SET nloose = REPLACE(nloose COLLATE Latin1_General_BIN2, NCHAR(3656), '');
+UPDATE #qm SET nloose = REPLACE(nloose COLLATE Latin1_General_BIN2, NCHAR(3657), '');
+UPDATE #qm SET nloose = REPLACE(nloose COLLATE Latin1_General_BIN2, NCHAR(3658), '');
+UPDATE #qm SET nloose = REPLACE(nloose COLLATE Latin1_General_BIN2, NCHAR(3659), '');
+UPDATE #qm SET nloose = REPLACE(nloose COLLATE Latin1_General_BIN2, NCHAR(3660), '');
+UPDATE #qm SET nloose = REPLACE(nloose COLLATE Latin1_General_BIN2, NCHAR(3661), '');
+UPDATE #qm SET nloose = REPLACE(nloose COLLATE Latin1_General_BIN2, NCHAR(3662), '');
+
+IF OBJECT_ID('tempdb..#xm') IS NOT NULL DROP TABLE #xm;
+SELECT CAST(x.menu_code AS NVARCHAR(50)) AS xl_key, x.menu_name AS xl_name, x.yield_qty,
+       CAST(x.menu_name AS NVARCHAR(255)) AS xkey, CAST(NULL AS NVARCHAR(255)) AS xloose
+INTO #xm
 FROM (SELECT menu_code, MAX(menu_name) AS menu_name, MAX(yield_qty) AS yield_qty
-      FROM #xl GROUP BY menu_code) x
-OUTER APPLY (SELECT TOP 1 qm.menu_code, qm.menu_name, qm.yield_qty, qm.cost
-             FROM dbo.qcrd_menu qm
-             WHERE LOWER(qm.menu_key) = CAST(x.menu_code AS NVARCHAR(50))
-             ORDER BY qm.menu_code) m;
+      FROM #xl GROUP BY menu_code) x;
+/* name key for #xm (same as rcpNameKey) */
+UPDATE #xm SET xkey = REPLACE(xkey, ' ', '');
+UPDATE #xm SET xkey = REPLACE(xkey, NCHAR(160), '');
+UPDATE #xm SET xkey = REPLACE(xkey, NCHAR(9), '');
+UPDATE #xm SET xkey = REPLACE(xkey, '(', '');
+UPDATE #xm SET xkey = REPLACE(xkey, ')', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '[', '');
+UPDATE #xm SET xkey = REPLACE(xkey, ']', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '{', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '}', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '.', '');
+UPDATE #xm SET xkey = REPLACE(xkey, ',', '');
+UPDATE #xm SET xkey = REPLACE(xkey, ';', '');
+UPDATE #xm SET xkey = REPLACE(xkey, ':', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '''', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '"', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '`', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '/', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '\', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '_', '');
+UPDATE #xm SET xkey = REPLACE(xkey, '-', '');
+UPDATE #xm SET xkey = LOWER(xkey), xloose = LOWER(xkey);
+UPDATE #xm SET xloose = REPLACE(xloose COLLATE Latin1_General_BIN2, NCHAR(3655), '');
+UPDATE #xm SET xloose = REPLACE(xloose COLLATE Latin1_General_BIN2, NCHAR(3656), '');
+UPDATE #xm SET xloose = REPLACE(xloose COLLATE Latin1_General_BIN2, NCHAR(3657), '');
+UPDATE #xm SET xloose = REPLACE(xloose COLLATE Latin1_General_BIN2, NCHAR(3658), '');
+UPDATE #xm SET xloose = REPLACE(xloose COLLATE Latin1_General_BIN2, NCHAR(3659), '');
+UPDATE #xm SET xloose = REPLACE(xloose COLLATE Latin1_General_BIN2, NCHAR(3660), '');
+UPDATE #xm SET xloose = REPLACE(xloose COLLATE Latin1_General_BIN2, NCHAR(3661), '');
+UPDATE #xm SET xloose = REPLACE(xloose COLLATE Latin1_General_BIN2, NCHAR(3662), '');
+
+IF OBJECT_ID('tempdb..#menus') IS NOT NULL DROP TABLE #menus;
+SELECT m.xl_key, m.xl_name, m.yield_qty, m.xkey,
+       COALESCE(bc.menu_code, bn.menu_code) AS menu_code,
+       COALESCE(bc.menu_name, bn.menu_name) AS menu_name,
+       COALESCE(bc.yield_qty, bn.yield_qty) AS old_yield,
+       COALESCE(bc.cost, bn.cost) AS old_cost,
+       CASE WHEN bc.menu_code IS NOT NULL THEN 'BY_CODE'
+            WHEN nn.n = 1 THEN 'BY_NAME'
+            WHEN nn.n > 1 THEN 'AMBIGUOUS'
+            ELSE 'NOT_FOUND' END AS match_type,
+       0 AS is_new_menu,
+       CAST(NULL AS NVARCHAR(50)) AS tgt_key
+INTO #menus
+FROM #xm m
+OUTER APPLY (SELECT TOP 1 * FROM #qm q WHERE q.mkey = m.xl_key ORDER BY q.menu_code) bc
+OUTER APPLY (SELECT COUNT(*) AS n FROM #qm q
+             WHERE q.nkey COLLATE Latin1_General_BIN2 = m.xkey COLLATE Latin1_General_BIN2) nn
+OUTER APPLY (SELECT TOP 1 * FROM #qm q
+             WHERE q.nkey COLLATE Latin1_General_BIN2 = m.xkey COLLATE Latin1_General_BIN2 AND nn.n = 1
+             ORDER BY q.menu_code) bn;
+
+/* two Excel recipes pointing at the same QC/RD menu -> do not touch either */
+UPDATE #menus SET match_type = 'AMBIGUOUS', menu_code = NULL
+WHERE menu_code IN (SELECT menu_code FROM #menus WHERE menu_code IS NOT NULL
+                    GROUP BY menu_code HAVING COUNT(*) > 1);
+
+PRINT '===== M1) match Excel recipe -> QC/RD menu =====';
+SELECT match_type, COUNT(*) AS recipes FROM #menus GROUP BY match_type ORDER BY match_type;
+
+PRINT '===== M2) every Excel recipe and the QC/RD menu it maps to =====';
+SELECT xl_key AS excel_code, xl_name, match_type, menu_code AS qcrd_code, menu_name AS qcrd_name
+FROM #menus ORDER BY match_type, CAST(xl_key AS INT);
+
+PRINT '===== M3) NOT_FOUND: close names in QC/RD (ignoring Thai tone marks) - check by eye =====';
+SELECT m.xl_key AS excel_code, m.xl_name, q.menu_code AS maybe_qcrd_code, q.menu_name AS maybe_qcrd_name
+FROM #menus m
+JOIN #xm xm ON xm.xl_key = m.xl_key
+JOIN #qm q ON q.nloose COLLATE Latin1_General_BIN2 = xm.xloose COLLATE Latin1_General_BIN2
+WHERE m.match_type = 'NOT_FOUND'
+ORDER BY CAST(m.xl_key AS INT);
+
+PRINT '===== M4) QC/RD FC menus that no Excel recipe maps to =====';
+SELECT q.menu_code, q.menu_name FROM #qm q
+WHERE q.menu_name LIKE N'FC%' AND q.menu_code NOT IN (SELECT menu_code FROM #menus WHERE menu_code IS NOT NULL)
+ORDER BY q.menu_code;
+
+/* NOT_FOUND: create a new QC/RD menu only when @create_new = 1 (code = Excel code) */
+UPDATE #menus SET menu_code = xl_key, menu_name = xl_name, is_new_menu = 1
+WHERE match_type = 'NOT_FOUND' AND @create_new = 1;
+DELETE FROM #menus WHERE menu_code IS NULL;
+UPDATE #menus
+SET tgt_key = LOWER(ISNULL(NULLIF(SUBSTRING(menu_code, PATINDEX('%[^0]%', menu_code + '.'), 50), ''), '0'));
 
 /* ---------- current price per item (same as the web save) ---------- */
 IF OBJECT_ID('tempdb..#price') IS NOT NULL DROP TABLE #price;
@@ -7453,7 +7569,7 @@ INTO #price FROM dbo.stock_item GROUP BY LOWER(item_key);
 
 /* ---------- new recipe rows (tag / no_deduct kept from the old row of the same item) ---------- */
 IF OBJECT_ID('tempdb..#new') IS NOT NULL DROP TABLE #new;
-SELECT mm.menu_code, mm.menu_key, mm.menu_name,
+SELECT mm.menu_code, mm.tgt_key, mm.menu_name,
        ROW_NUMBER() OVER (PARTITION BY x.menu_code ORDER BY x.seq, x.item_code) AS seq,
        x.item_code,
        LOWER(ISNULL(NULLIF(SUBSTRING(x.item_code, PATINDEX('%[^0]%', x.item_code + '.'), 50), ''), '0'))
@@ -7463,21 +7579,21 @@ SELECT mm.menu_code, mm.menu_key, mm.menu_name,
        old.tag, ISNULL(old.no_deduct, 0) AS no_deduct
 INTO #new
 FROM #xl x
-JOIN #menus mm ON mm.menu_key = CAST(x.menu_code AS NVARCHAR(50))
+JOIN #menus mm ON mm.xl_key = CAST(x.menu_code AS NVARCHAR(50))
 OUTER APPLY (SELECT TOP 1 b.tag, b.no_deduct FROM dbo.qcrd_bom b
              WHERE LOWER(ISNULL(NULLIF(SUBSTRING(b.menu_code, PATINDEX('%[^0]%', b.menu_code + '.'), 50), ''), '0'))
-                   = mm.menu_key
+                   = mm.tgt_key
                AND LOWER(b.item_key) = LOWER(ISNULL(NULLIF(SUBSTRING(x.item_code,
                    PATINDEX('%[^0]%', x.item_code + '.'), 50), ''), '0'))
              ORDER BY b.seq) old;
 
 /* ---------- old rows of those recipes ---------- */
 IF OBJECT_ID('tempdb..#old') IS NOT NULL DROP TABLE #old;
-SELECT b.*, mm.menu_key AS mkey
+SELECT b.*, mm.tgt_key AS mkey
 INTO #old
 FROM dbo.qcrd_bom b
 JOIN #menus mm
-  ON mm.menu_key = LOWER(ISNULL(NULLIF(SUBSTRING(b.menu_code, PATINDEX('%[^0]%', b.menu_code + '.'), 50), ''), '0'));
+  ON mm.tgt_key = LOWER(ISNULL(NULLIF(SUBSTRING(b.menu_code, PATINDEX('%[^0]%', b.menu_code + '.'), 50), ''), '0'));
 
 /* ---------- other menus that pull these recipes in (src_code) -> rebuilt like the web save ---------- */
 IF OBJECT_ID('tempdb..#tgt') IS NOT NULL DROP TABLE #tgt;
@@ -7487,7 +7603,7 @@ FROM dbo.qcrd_bom b
 JOIN #menus mm ON mm.menu_code = b.src_code
 WHERE b.menu_code NOT IN (SELECT menu_code FROM #menus)
   AND LOWER(ISNULL(NULLIF(SUBSTRING(b.menu_code, PATINDEX('%[^0]%', b.menu_code + '.'), 50), ''), '0'))
-      NOT IN (SELECT menu_key FROM #menus)
+      NOT IN (SELECT tgt_key FROM #menus)
 GROUP BY b.menu_code, b.src_code;
 
 IF OBJECT_ID('tempdb..#tnew') IS NOT NULL DROP TABLE #tnew;
@@ -7520,7 +7636,7 @@ FROM #tnew tn LEFT JOIN dbo.qcrd_menu qm ON qm.menu_code = tn.menu_code;
 /* ---------- PREVIEW (before any change) ---------- */
 PRINT '===== P1) per recipe: NEW_RECIPE / SAME / CHANGED =====';
 IF OBJECT_ID('tempdb..#prev') IS NOT NULL DROP TABLE #prev;
-SELECT mm.menu_code, mm.xl_name, mm.is_new_menu,
+SELECT mm.xl_key AS excel_code, mm.menu_code, mm.xl_name, mm.match_type,
        ISNULL(o.n, 0) AS old_lines, n.n AS new_lines,
        mm.old_yield, mm.yield_qty AS new_yield,
        CASE WHEN ISNULL(o.n, 0) = 0 THEN 'NEW_RECIPE'
@@ -7530,17 +7646,33 @@ SELECT mm.menu_code, mm.xl_name, mm.is_new_menu,
 INTO #prev
 FROM #menus mm
 CROSS APPLY (SELECT COUNT(*) AS n FROM #new WHERE menu_code = mm.menu_code) n
-OUTER APPLY (SELECT COUNT(*) AS n FROM #old WHERE mkey = mm.menu_key) o
+OUTER APPLY (SELECT COUNT(*) AS n FROM #old WHERE mkey = mm.tgt_key) o
 OUTER APPLY (SELECT COUNT(*) AS n FROM (
                 SELECT item_key, qty, converter FROM #new WHERE menu_code = mm.menu_code
                 INTERSECT
-                SELECT LOWER(item_key), qty, ISNULL(converter, 1000) FROM #old WHERE mkey = mm.menu_key) z) eq;
+                SELECT LOWER(item_key), qty, ISNULL(converter, 1000) FROM #old WHERE mkey = mm.tgt_key) z) eq;
 
 SELECT status, COUNT(*) AS recipes, SUM(old_lines) AS old_lines, SUM(new_lines) AS new_lines
 FROM #prev GROUP BY status ORDER BY status;
 
 PRINT '===== P2) recipes that will change =====';
-SELECT * FROM #prev WHERE status <> 'SAME' ORDER BY CAST(menu_code AS INT);
+SELECT * FROM #prev WHERE status <> 'SAME' ORDER BY CAST(excel_code AS INT);
+
+PRINT '===== P2b) line differences for CHANGED recipes (old = QC/RD now, new = Excel) =====';
+SELECT COALESCE(n.menu_code, o.menu_code) AS menu_code, COALESCE(n.item_key, o.item_key) AS item_key,
+       COALESCE(n.item_name, o.item_name) AS item_name,
+       o.qty AS old_qty, n.qty AS new_qty, o.converter AS old_conv, n.converter AS new_conv,
+       CASE WHEN o.item_key IS NULL THEN 'ADDED' WHEN n.item_key IS NULL THEN 'REMOVED'
+            ELSE 'QTY/CONV CHANGED' END AS change
+FROM (SELECT menu_code, item_key, MAX(item_name) AS item_name, SUM(qty) AS qty, MAX(converter) AS converter
+      FROM #new GROUP BY menu_code, item_key) n
+FULL OUTER JOIN (SELECT o.menu_code, LOWER(o.item_key) AS item_key, MAX(o.item_name) AS item_name,
+                        SUM(o.qty) AS qty, MAX(ISNULL(o.converter, 1000)) AS converter
+                 FROM #old o GROUP BY o.menu_code, LOWER(o.item_key)) o
+  ON o.menu_code = n.menu_code AND o.item_key = n.item_key
+WHERE o.item_key IS NULL OR n.item_key IS NULL
+   OR ABS(o.qty - n.qty) > 0.001 OR ABS(o.converter - n.converter) > 0.001
+ORDER BY 1, 2;
 
 PRINT '===== P3) other menus that pull these recipes and will be rebuilt =====';
 SELECT t.tgt_code, qm.menu_name, t.src_code, t.factor FROM #tgt t
@@ -7606,8 +7738,8 @@ FROM #tnew t LEFT JOIN #price p ON p.item_key = LOWER(t.item_key);
 /* 3) qcrd_menu: new menus, yield, cost */
 DECLARE @sort INT = (SELECT ISNULL(MAX(sort_order), 0) FROM dbo.qcrd_menu);
 INSERT INTO dbo.qcrd_menu (menu_code, menu_key, menu_name, status, yield_qty, sort_order)
-SELECT mm.menu_code, mm.menu_key, mm.xl_name, NULL, mm.yield_qty,
-       @sort + ROW_NUMBER() OVER (ORDER BY CAST(mm.menu_code AS INT))
+SELECT mm.menu_code, mm.tgt_key, mm.xl_name, NULL, mm.yield_qty,
+       @sort + ROW_NUMBER() OVER (ORDER BY mm.menu_code)
 FROM #menus mm WHERE mm.is_new_menu = 1;
 
 UPDATE qm SET yield_qty = mm.yield_qty, updated_at = SYSDATETIME()
@@ -7619,14 +7751,14 @@ JOIN (SELECT menu_code, ROUND(SUM(ISNULL(line_cost, 0)), 4) AS cost FROM dbo.qcr
       WHERE menu_code IN (SELECT menu_code FROM #menus) OR menu_code IN (SELECT tgt_code FROM #tgt)
       GROUP BY menu_code) c ON c.menu_code = qm.menu_code;
 
-PRINT '===== R1) after write: lines in qcrd_bom for Excel recipes (must be 1496) =====';
-SELECT COUNT(*) AS bom_lines, COUNT(DISTINCT menu_code) AS recipes
+PRINT '===== R1) after write: lines in qcrd_bom for the updated recipes (must equal expected) =====';
+SELECT (SELECT COUNT(*) FROM #new) AS expected_lines, COUNT(*) AS bom_lines, COUNT(DISTINCT menu_code) AS recipes
 FROM dbo.qcrd_bom WHERE menu_code IN (SELECT menu_code FROM #menus);
 
 PRINT '===== R2) cost before / after =====';
-SELECT mm.menu_code, mm.xl_name, mm.old_cost, qm.cost AS new_cost, qm.yield_qty
+SELECT mm.xl_key AS excel_code, mm.menu_code, mm.menu_name, mm.old_cost, qm.cost AS new_cost, qm.yield_qty
 FROM #menus mm JOIN dbo.qcrd_menu qm ON qm.menu_code = mm.menu_code
-ORDER BY CAST(mm.menu_code AS INT);
+ORDER BY CAST(mm.xl_key AS INT);
 
 IF @apply = 1
 BEGIN
