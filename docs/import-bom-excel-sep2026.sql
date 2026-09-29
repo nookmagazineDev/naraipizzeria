@@ -1,24 +1,26 @@
 /* ============================================================================
-   Compare FC recipes from Excel "bom ... Sep2026.xlsx" with SQL Server (READ-ONLY)
+   IMPORT FC recipes from Excel "bom ... Sep2026.xlsx" into dbo.qcrd_bom / dbo.qcrd_menu
 
-   This file is intentionally pure ASCII: Thai names are stored as UTF-16 hex
-   (CONVERT(NVARCHAR, 0x...)) so SSMS / sqlcmd read it correctly in any encoding.
+   What it does (same rules as saving a recipe on the QC/RD web page):
+     - 184 recipes in the Excel file: old lines in qcrd_bom are deleted and replaced
+       by the Excel lines (seq renumbered 1..n). qty = column F (per batch),
+       converter = column H (0 -> 1000). tag / no_deduct are kept from the old line
+       of the same item. Price / unit_cost / line_cost from dbo.stock_item.price.
+     - qcrd_menu: yield_qty = column G, cost = sum of line_cost.
+       Recipes with no row in qcrd_menu are added (name from Excel, no group).
+       Existing menu names / groups / prices are NOT changed.
+     - Other menus that pull one of these recipes (src_code) are rebuilt with the
+       new lines x the same factor, like the web save does (1 level; P4 lists deeper ones).
+     - Rows touched are copied first to dbo.qcrd_bom_backup_excel_sep2026 and
+       dbo.qcrd_menu_backup_excel_sep2026. All changes run in one transaction.
 
-   Excel columns (same layout as BOM tab / dbo.qcrd_bom):
-     A menu code | B menu name | C seq | D item code | E item name
-     F qty per batch (small unit) | G yield per batch | H unit converter | I item code
-   184 recipes / 1,496 lines / 270 items -> loaded into #xl below.
+   HOW TO RUN
+     1) SSMS: File > Open > File... this file (do not copy/paste), database InventoryNarai.
+     2) Execute as is (@apply = 0): dry run. Check LOAD CHECK = 1496 / 184 and P1..P5, R1, R2.
+     3) Find "DECLARE @apply BIT = 0" near the end, change to 1, Execute again -> saved.
+     Undo: run the RESTORE block at the very end of this file (it is commented out).
 
-   Compares against:
-     A) dbo.qcrd_bom + dbo.qcrd_menu   (recipes used by QC/RD and the usage page)
-     B) dbo.rcp_recipe + dbo.rcp_line  (POS RcpDtls; Rts Id = Excel menu code)
-
-   Match key = menu code + item code (leading zeros removed). Duplicate item lines
-   within one recipe are summed first. Qty matches when diff <= 0.001, either as
-   per batch (F) or per unit (F / G); column qty_basis says which.
-
-   Run in SSMS (database InventoryNarai) or:
-     sqlcmd -S localhost\SQLEXPRESS -E -d InventoryNarai -i check-bom-excel-sep2026.sql -o bom-diff.txt -W -s "|" -f 65001
+   Pure ASCII on purpose: Thai text is stored as UTF-16 hex so no encoding can break it.
    ============================================================================ */
 USE InventoryNarai;
 GO
@@ -7409,126 +7411,246 @@ SET NOCOUNT ON;
 PRINT '===== LOAD CHECK: #xl must have 1496 rows / 184 recipes =====';
 SELECT COUNT(*) AS xl_rows, COUNT(DISTINCT menu_code) AS xl_recipes FROM #xl;
 GO
+/* =====================================================================
+   IMPORT: replace qcrd_bom recipes with the Excel data
+   @apply = 0 -> dry run: shows what would change, then ROLLBACK
+   @apply = 1 -> saves (COMMIT) + keeps a backup in
+                 dbo.qcrd_bom_backup_excel_sep2026 / dbo.qcrd_menu_backup_excel_sep2026
+   ===================================================================== */
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
 
-/* ---------- keys + merge duplicate lines ---------- */
-IF OBJECT_ID('tempdb..#x') IS NOT NULL DROP TABLE #x;
-SELECT CAST(menu_code AS NVARCHAR(50)) AS menu_key,
-       MAX(menu_name) AS menu_name,
-       LOWER(ISNULL(NULLIF(SUBSTRING(item_code, PATINDEX('%[^0]%', item_code + '.'), 50), ''), '0')) AS item_key,
-       MAX(item_name) AS item_name,
-       SUM(qty) AS qty, MAX(yield_qty) AS yield_qty, MAX(converter) AS converter,
-       COUNT(*) AS n_lines
-INTO #x
-FROM #xl
-GROUP BY menu_code, LOWER(ISNULL(NULLIF(SUBSTRING(item_code, PATINDEX('%[^0]%', item_code + '.'), 50), ''), '0'));
+DECLARE @apply BIT = 0;   -- <<<<<< change to 1 to save for real
 
-IF OBJECT_ID('tempdb..#b') IS NOT NULL DROP TABLE #b;
-SELECT LOWER(ISNULL(NULLIF(SUBSTRING(b.menu_code, PATINDEX('%[^0]%', b.menu_code + '.'), 50), ''), '0')) AS menu_key,
-       MAX(b.menu_name) AS menu_name,
-       LOWER(b.item_key) AS item_key,
-       MAX(b.item_name) AS item_name,
-       SUM(b.qty) AS qty, MAX(b.converter) AS converter,
-       MAX(CAST(b.no_deduct AS INT)) AS no_deduct,
-       COUNT(*) AS n_lines
-INTO #b
-FROM dbo.qcrd_bom b
-GROUP BY LOWER(ISNULL(NULLIF(SUBSTRING(b.menu_code, PATINDEX('%[^0]%', b.menu_code + '.'), 50), ''), '0')), LOWER(b.item_key);
-
-IF OBJECT_ID('tempdb..#m') IS NOT NULL DROP TABLE #m;
-SELECT LOWER(menu_key) AS menu_key, MAX(menu_name) AS menu_name, MAX(yield_qty) AS yield_qty, MAX(status) AS status
-INTO #m FROM dbo.qcrd_menu GROUP BY LOWER(menu_key);
-
-/* ---------- A) Excel vs qcrd_bom ---------- */
-IF OBJECT_ID('tempdb..#cmp') IS NOT NULL DROP TABLE #cmp;
-SELECT
-    COALESCE(x.menu_key, b.menu_key) AS menu_key,
-    COALESCE(x.menu_name, b.menu_name) AS menu_name,
-    COALESCE(x.item_key, b.item_key) AS item_key,
-    COALESCE(x.item_name, b.item_name) AS item_name,
-    x.qty AS xl_qty, x.yield_qty AS xl_yield, x.converter AS xl_conv,
-    b.qty AS sql_qty, b.converter AS sql_conv, b.no_deduct,
-    CASE
-        WHEN b.item_key IS NULL THEN 'ONLY_IN_EXCEL'
-        WHEN x.item_key IS NULL THEN 'ONLY_IN_SQL'
-        WHEN ABS(x.qty - b.qty) > 0.001 AND ABS(x.qty / NULLIF(x.yield_qty, 0) - b.qty) > 0.001 THEN 'QTY_DIFF'
-        WHEN ABS(x.converter - ISNULL(b.converter, 1000)) > 0.001 THEN 'CONVERTER_DIFF'
-        ELSE 'MATCH'
-    END AS result,
-    CASE WHEN x.item_key IS NOT NULL AND b.item_key IS NOT NULL THEN
-        CASE WHEN ABS(x.qty - b.qty) <= 0.001 THEN 'PER_BATCH'
-             WHEN ABS(x.qty / NULLIF(x.yield_qty, 0) - b.qty) <= 0.001 THEN 'PER_UNIT'
-        END END AS qty_basis
-INTO #cmp
-FROM #x x
-FULL OUTER JOIN (SELECT * FROM #b WHERE menu_key IN (SELECT menu_key FROM #x)) b
-    ON b.menu_key = x.menu_key AND b.item_key = x.item_key;
-
-PRINT '===== A1) recipes: Excel vs qcrd_bom =====';
-SELECT menu_result, COUNT(*) AS menus FROM (
-    SELECT menu_key,
-        CASE WHEN SUM(CASE WHEN sql_qty IS NOT NULL THEN 1 ELSE 0 END) = 0 THEN 'RECIPE_NOT_IN_SQL'
-             WHEN SUM(CASE WHEN result <> 'MATCH' THEN 1 ELSE 0 END) = 0 THEN 'ALL_MATCH'
-             ELSE 'HAS_DIFF' END AS menu_result
-    FROM #cmp GROUP BY menu_key) t
-GROUP BY menu_result ORDER BY menu_result;
-
-PRINT '===== A2) lines by result =====';
-SELECT result, qty_basis, COUNT(*) AS lines FROM #cmp GROUP BY result, qty_basis ORDER BY result, qty_basis;
-
-PRINT '===== A3) Excel recipes missing from qcrd_bom =====';
-SELECT x.menu_key, MAX(x.menu_name) AS xl_name, MAX(m.menu_name) AS qcrd_menu_name, MAX(m.status) AS qcrd_status,
-       COUNT(*) AS xl_items
-FROM #x x LEFT JOIN #m m ON m.menu_key = x.menu_key
-WHERE NOT EXISTS (SELECT 1 FROM #b b WHERE b.menu_key = x.menu_key)
-GROUP BY x.menu_key ORDER BY CAST(x.menu_key AS INT);
-
-PRINT '===== A4) menu name / yield differs from qcrd_menu =====';
-SELECT x.menu_key, x.menu_name AS xl_name, m.menu_name AS sql_name, x.yield_qty AS xl_yield, m.yield_qty AS sql_yield
-FROM (SELECT menu_key, MAX(menu_name) AS menu_name, MAX(yield_qty) AS yield_qty FROM #x GROUP BY menu_key) x
-JOIN #m m ON m.menu_key = x.menu_key
-WHERE REPLACE(x.menu_name, ' ', '') <> REPLACE(m.menu_name, ' ', '')
-   OR ABS(x.yield_qty - ISNULL(m.yield_qty, -1)) > 0.001
-ORDER BY CAST(x.menu_key AS INT);
-
-PRINT '===== A5) line differences (recipes present on both sides) =====';
-SELECT c.menu_key, c.menu_name, c.result, c.item_key, c.item_name,
-       c.xl_qty, c.xl_yield, CAST(c.xl_qty / NULLIF(c.xl_yield, 0) AS DECIMAL(18,4)) AS xl_qty_per_unit,
-       c.sql_qty, c.xl_conv, c.sql_conv, c.no_deduct
-FROM #cmp c
-WHERE c.result <> 'MATCH'
-  AND c.menu_key IN (SELECT menu_key FROM #b)
-ORDER BY CAST(c.menu_key AS INT), c.result, c.item_key;
-
-/* ---------- B) Excel vs rcp_recipe / rcp_line (POS) ---------- */
-IF OBJECT_ID('dbo.rcp_line', 'U') IS NOT NULL
+IF (SELECT COUNT(*) FROM #xl) <> 1496
 BEGIN
-    IF OBJECT_ID('tempdb..#rc') IS NOT NULL DROP TABLE #rc;
-    PRINT '===== B1) Excel vs rcp_line (Rts Id = menu code) =====';
-    ;WITH r AS (
-        SELECT CAST(l.rts_id AS NVARCHAR(50)) AS menu_key, MAX(rr.name) AS menu_name,
-               LOWER(l.item_key) AS item_key, MAX(l.item_name) AS item_name,
-               SUM(l.rcp_qty) AS rcp_qty, SUM(l.portion) AS portion, MAX(l.net_qty) AS net_qty
-        FROM dbo.rcp_line l JOIN dbo.rcp_recipe rr ON rr.rts_id = l.rts_id
-        WHERE CAST(l.rts_id AS NVARCHAR(50)) IN (SELECT menu_key FROM #x)
-        GROUP BY l.rts_id, LOWER(l.item_key)
-    ), c AS (
-        SELECT COALESCE(x.menu_key, r.menu_key) AS menu_key, COALESCE(x.menu_name, r.menu_name) AS menu_name,
-               COALESCE(x.item_key, r.item_key) AS item_key, COALESCE(x.item_name, r.item_name) AS item_name,
-               x.qty AS xl_qty, x.yield_qty AS xl_yield, r.rcp_qty, r.portion, r.net_qty,
-               CASE WHEN r.item_key IS NULL THEN 'ONLY_IN_EXCEL'
-                    WHEN x.item_key IS NULL THEN 'ONLY_IN_POS'
-                    WHEN ABS(x.qty - ISNULL(r.rcp_qty, -1)) <= 0.001 OR ABS(x.qty - ISNULL(r.portion, -1)) <= 0.001
-                      OR ABS(x.qty / NULLIF(x.yield_qty, 0) - ISNULL(r.rcp_qty, -1)) <= 0.001 THEN 'MATCH'
-                    ELSE 'QTY_DIFF' END AS result
-        FROM #x x FULL OUTER JOIN r ON r.menu_key = x.menu_key AND r.item_key = x.item_key
-    )
-    SELECT * INTO #rc FROM c;
-
-    SELECT 'EXCEL_RECIPES_NOT_IN_RCP_RECIPE' AS what, COUNT(DISTINCT menu_key) AS n
-    FROM #x WHERE menu_key NOT IN (SELECT CAST(rts_id AS NVARCHAR(50)) FROM dbo.rcp_recipe);
-    SELECT result, COUNT(*) AS lines FROM #rc GROUP BY result ORDER BY result;
-    SELECT * FROM #rc WHERE result <> 'MATCH'
-      AND menu_key IN (SELECT CAST(rts_id AS NVARCHAR(50)) FROM dbo.rcp_recipe)
-    ORDER BY CAST(menu_key AS INT), result, item_key;
+    RAISERROR('#xl does not have 1496 rows - load step failed, nothing changed', 16, 1);
+    RETURN;
 END
-ELSE PRINT 'skip B) - table rcp_line not found';
+
+/* ---------- recipes in the Excel file -> menu in qcrd_menu ---------- */
+IF OBJECT_ID('tempdb..#menus') IS NOT NULL DROP TABLE #menus;
+SELECT CAST(x.menu_code AS NVARCHAR(50)) AS menu_key,
+       COALESCE(m.menu_code, CAST(x.menu_code AS NVARCHAR(50))) AS menu_code,
+       COALESCE(m.menu_name, x.menu_name) AS menu_name,
+       x.menu_name AS xl_name,
+       x.yield_qty,
+       m.yield_qty AS old_yield,
+       m.cost AS old_cost,
+       CASE WHEN m.menu_code IS NULL THEN 1 ELSE 0 END AS is_new_menu
+INTO #menus
+FROM (SELECT menu_code, MAX(menu_name) AS menu_name, MAX(yield_qty) AS yield_qty
+      FROM #xl GROUP BY menu_code) x
+OUTER APPLY (SELECT TOP 1 qm.menu_code, qm.menu_name, qm.yield_qty, qm.cost
+             FROM dbo.qcrd_menu qm
+             WHERE LOWER(qm.menu_key) = CAST(x.menu_code AS NVARCHAR(50))
+             ORDER BY qm.menu_code) m;
+
+/* ---------- current price per item (same as the web save) ---------- */
+IF OBJECT_ID('tempdb..#price') IS NOT NULL DROP TABLE #price;
+SELECT LOWER(item_key) AS item_key, MAX(price) AS price
+INTO #price FROM dbo.stock_item GROUP BY LOWER(item_key);
+
+/* ---------- new recipe rows (tag / no_deduct kept from the old row of the same item) ---------- */
+IF OBJECT_ID('tempdb..#new') IS NOT NULL DROP TABLE #new;
+SELECT mm.menu_code, mm.menu_key, mm.menu_name,
+       ROW_NUMBER() OVER (PARTITION BY x.menu_code ORDER BY x.seq, x.item_code) AS seq,
+       x.item_code,
+       LOWER(ISNULL(NULLIF(SUBSTRING(x.item_code, PATINDEX('%[^0]%', x.item_code + '.'), 50), ''), '0'))
+           AS item_key,
+       x.item_name, x.qty,
+       CASE WHEN x.converter = 0 THEN 1000 ELSE x.converter END AS converter,
+       old.tag, ISNULL(old.no_deduct, 0) AS no_deduct
+INTO #new
+FROM #xl x
+JOIN #menus mm ON mm.menu_key = CAST(x.menu_code AS NVARCHAR(50))
+OUTER APPLY (SELECT TOP 1 b.tag, b.no_deduct FROM dbo.qcrd_bom b
+             WHERE LOWER(ISNULL(NULLIF(SUBSTRING(b.menu_code, PATINDEX('%[^0]%', b.menu_code + '.'), 50), ''), '0'))
+                   = mm.menu_key
+               AND LOWER(b.item_key) = LOWER(ISNULL(NULLIF(SUBSTRING(x.item_code,
+                   PATINDEX('%[^0]%', x.item_code + '.'), 50), ''), '0'))
+             ORDER BY b.seq) old;
+
+/* ---------- old rows of those recipes ---------- */
+IF OBJECT_ID('tempdb..#old') IS NOT NULL DROP TABLE #old;
+SELECT b.*, mm.menu_key AS mkey
+INTO #old
+FROM dbo.qcrd_bom b
+JOIN #menus mm
+  ON mm.menu_key = LOWER(ISNULL(NULLIF(SUBSTRING(b.menu_code, PATINDEX('%[^0]%', b.menu_code + '.'), 50), ''), '0'));
+
+/* ---------- other menus that pull these recipes in (src_code) -> rebuilt like the web save ---------- */
+IF OBJECT_ID('tempdb..#tgt') IS NOT NULL DROP TABLE #tgt;
+SELECT b.menu_code AS tgt_code, b.src_code, MIN(b.src_factor) AS factor, MIN(b.bom_id) AS first_id
+INTO #tgt
+FROM dbo.qcrd_bom b
+JOIN #menus mm ON mm.menu_code = b.src_code
+WHERE b.menu_code NOT IN (SELECT menu_code FROM #menus)
+  AND LOWER(ISNULL(NULLIF(SUBSTRING(b.menu_code, PATINDEX('%[^0]%', b.menu_code + '.'), 50), ''), '0'))
+      NOT IN (SELECT menu_key FROM #menus)
+GROUP BY b.menu_code, b.src_code;
+
+IF OBJECT_ID('tempdb..#tnew') IS NOT NULL DROP TABLE #tnew;
+SELECT u.menu_code, u.menu_name,
+       ROW_NUMBER() OVER (PARTITION BY u.menu_code ORDER BY u.ord1, u.ord2) AS seq,
+       u.item_code, u.item_key, u.item_name, u.qty, u.converter,
+       u.src_code, u.src_name, u.src_factor, u.src_base, u.tag, u.no_deduct
+INTO #tnew
+FROM (
+    /* rows that did not come from an updated recipe: keep as is */
+    SELECT b.menu_code, b.menu_name, CAST(0 AS BIGINT) AS ord1, CAST(b.seq AS BIGINT) AS ord2,
+           b.item_code, b.item_key, b.item_name, b.qty, b.converter,
+           b.src_code, b.src_name, b.src_factor, b.src_base, b.tag, b.no_deduct
+    FROM dbo.qcrd_bom b
+    WHERE b.menu_code IN (SELECT tgt_code FROM #tgt)
+      AND NOT EXISTS (SELECT 1 FROM #tgt t WHERE t.tgt_code = b.menu_code AND t.src_code = b.src_code)
+    UNION ALL
+    /* rows from the updated recipe x the same factor as before */
+    SELECT t.tgt_code, NULL, t.first_id, n.seq,
+           n.item_code, n.item_key, n.item_name,
+           ROUND(n.qty * ISNULL(NULLIF(t.factor, 0), 1), 4), n.converter,
+           t.src_code, mm.menu_name, ISNULL(NULLIF(t.factor, 0), 1), n.qty, n.tag, n.no_deduct
+    FROM #tgt t
+    JOIN #new n ON n.menu_code = t.src_code
+    JOIN #menus mm ON mm.menu_code = t.src_code
+) u;
+UPDATE tn SET menu_name = COALESCE(qm.menu_name, tn.menu_code)
+FROM #tnew tn LEFT JOIN dbo.qcrd_menu qm ON qm.menu_code = tn.menu_code;
+
+/* ---------- PREVIEW (before any change) ---------- */
+PRINT '===== P1) per recipe: NEW_RECIPE / SAME / CHANGED =====';
+IF OBJECT_ID('tempdb..#prev') IS NOT NULL DROP TABLE #prev;
+SELECT mm.menu_code, mm.xl_name, mm.is_new_menu,
+       ISNULL(o.n, 0) AS old_lines, n.n AS new_lines,
+       mm.old_yield, mm.yield_qty AS new_yield,
+       CASE WHEN ISNULL(o.n, 0) = 0 THEN 'NEW_RECIPE'
+            WHEN o.n = n.n AND ISNULL(eq.n, 0) = n.n
+                 AND ABS(ISNULL(mm.old_yield, -1) - mm.yield_qty) <= 0.001 THEN 'SAME'
+            ELSE 'CHANGED' END AS status
+INTO #prev
+FROM #menus mm
+CROSS APPLY (SELECT COUNT(*) AS n FROM #new WHERE menu_code = mm.menu_code) n
+OUTER APPLY (SELECT COUNT(*) AS n FROM #old WHERE mkey = mm.menu_key) o
+OUTER APPLY (SELECT COUNT(*) AS n FROM (
+                SELECT item_key, qty, converter FROM #new WHERE menu_code = mm.menu_code
+                INTERSECT
+                SELECT LOWER(item_key), qty, ISNULL(converter, 1000) FROM #old WHERE mkey = mm.menu_key) z) eq;
+
+SELECT status, COUNT(*) AS recipes, SUM(old_lines) AS old_lines, SUM(new_lines) AS new_lines
+FROM #prev GROUP BY status ORDER BY status;
+
+PRINT '===== P2) recipes that will change =====';
+SELECT * FROM #prev WHERE status <> 'SAME' ORDER BY CAST(menu_code AS INT);
+
+PRINT '===== P3) other menus that pull these recipes and will be rebuilt =====';
+SELECT t.tgt_code, qm.menu_name, t.src_code, t.factor FROM #tgt t
+LEFT JOIN dbo.qcrd_menu qm ON qm.menu_code = t.tgt_code ORDER BY t.tgt_code;
+
+PRINT '===== P4) WARNING: menus 2 levels away (pull from P3 menus) - re-save them on the web =====';
+SELECT DISTINCT b.menu_code, b.src_code FROM dbo.qcrd_bom b
+WHERE b.src_code IN (SELECT tgt_code FROM #tgt) AND b.menu_code NOT IN (SELECT tgt_code FROM #tgt);
+
+PRINT '===== P5) Excel items not in stock_item (no price -> cost 0) =====';
+SELECT DISTINCT n.item_code, n.item_name FROM #new n
+WHERE NOT EXISTS (SELECT 1 FROM #price p WHERE p.item_key = n.item_key);
+
+/* ---------- WRITE ---------- */
+BEGIN TRAN;
+
+IF OBJECT_ID('dbo.qcrd_bom_backup_excel_sep2026', 'U') IS NULL
+    SELECT CAST(NULL AS DATETIME2(0)) AS backup_at, CAST(bom_id AS BIGINT) AS bom_id, menu_code, menu_name, seq,
+           item_code, item_key, item_name, qty, converter, item_price, unit_cost, line_cost,
+           src_code, src_name, src_factor, src_base, tag, no_deduct, updated_at
+    INTO dbo.qcrd_bom_backup_excel_sep2026 FROM dbo.qcrd_bom WHERE 1 = 0;
+IF OBJECT_ID('dbo.qcrd_menu_backup_excel_sep2026', 'U') IS NULL
+    SELECT CAST(NULL AS DATETIME2(0)) AS backup_at, * INTO dbo.qcrd_menu_backup_excel_sep2026
+    FROM dbo.qcrd_menu WHERE 1 = 0;
+
+DECLARE @now DATETIME2(0) = SYSDATETIME();
+INSERT INTO dbo.qcrd_bom_backup_excel_sep2026
+SELECT @now, b.bom_id, b.menu_code, b.menu_name, b.seq, b.item_code, b.item_key, b.item_name, b.qty,
+       b.converter, b.item_price, b.unit_cost, b.line_cost, b.src_code, b.src_name, b.src_factor,
+       b.src_base, b.tag, b.no_deduct, b.updated_at
+FROM dbo.qcrd_bom b
+WHERE b.bom_id IN (SELECT bom_id FROM #old)
+   OR b.menu_code IN (SELECT tgt_code FROM #tgt);
+INSERT INTO dbo.qcrd_menu_backup_excel_sep2026
+SELECT @now, qm.* FROM dbo.qcrd_menu qm
+WHERE qm.menu_code IN (SELECT menu_code FROM #menus) OR qm.menu_code IN (SELECT tgt_code FROM #tgt);
+
+/* 1) Excel recipes: delete old rows, insert new */
+DELETE FROM dbo.qcrd_bom WHERE bom_id IN (SELECT bom_id FROM #old);
+INSERT INTO dbo.qcrd_bom
+    (menu_code, menu_name, seq, item_code, item_key, item_name, qty, converter, item_price,
+     unit_cost, line_cost, src_code, src_name, src_factor, src_base, tag, no_deduct)
+SELECT n.menu_code, n.menu_name, n.seq, n.item_code, n.item_key, n.item_name, n.qty, n.converter,
+       NULLIF(p.price, 0),
+       CASE WHEN p.price > 0 THEN p.price / n.converter END,
+       CASE WHEN p.price > 0 THEN n.qty * p.price / n.converter END,
+       NULL, NULL, NULL, NULL, n.tag, n.no_deduct
+FROM #new n LEFT JOIN #price p ON p.item_key = n.item_key;
+
+/* 2) menus that pull them: rebuild */
+DELETE FROM dbo.qcrd_bom WHERE menu_code IN (SELECT tgt_code FROM #tgt);
+INSERT INTO dbo.qcrd_bom
+    (menu_code, menu_name, seq, item_code, item_key, item_name, qty, converter, item_price,
+     unit_cost, line_cost, src_code, src_name, src_factor, src_base, tag, no_deduct)
+SELECT t.menu_code, t.menu_name, t.seq, t.item_code, LOWER(t.item_key), t.item_name, t.qty,
+       ISNULL(NULLIF(t.converter, 0), 1000),
+       NULLIF(p.price, 0),
+       CASE WHEN p.price > 0 THEN p.price / ISNULL(NULLIF(t.converter, 0), 1000) END,
+       CASE WHEN p.price > 0 THEN t.qty * p.price / ISNULL(NULLIF(t.converter, 0), 1000) END,
+       t.src_code, t.src_name, t.src_factor, t.src_base, t.tag, t.no_deduct
+FROM #tnew t LEFT JOIN #price p ON p.item_key = LOWER(t.item_key);
+
+/* 3) qcrd_menu: new menus, yield, cost */
+DECLARE @sort INT = (SELECT ISNULL(MAX(sort_order), 0) FROM dbo.qcrd_menu);
+INSERT INTO dbo.qcrd_menu (menu_code, menu_key, menu_name, status, yield_qty, sort_order)
+SELECT mm.menu_code, mm.menu_key, mm.xl_name, NULL, mm.yield_qty,
+       @sort + ROW_NUMBER() OVER (ORDER BY CAST(mm.menu_code AS INT))
+FROM #menus mm WHERE mm.is_new_menu = 1;
+
+UPDATE qm SET yield_qty = mm.yield_qty, updated_at = SYSDATETIME()
+FROM dbo.qcrd_menu qm JOIN #menus mm ON mm.menu_code = qm.menu_code;
+
+UPDATE qm SET cost = c.cost, updated_at = SYSDATETIME()
+FROM dbo.qcrd_menu qm
+JOIN (SELECT menu_code, ROUND(SUM(ISNULL(line_cost, 0)), 4) AS cost FROM dbo.qcrd_bom
+      WHERE menu_code IN (SELECT menu_code FROM #menus) OR menu_code IN (SELECT tgt_code FROM #tgt)
+      GROUP BY menu_code) c ON c.menu_code = qm.menu_code;
+
+PRINT '===== R1) after write: lines in qcrd_bom for Excel recipes (must be 1496) =====';
+SELECT COUNT(*) AS bom_lines, COUNT(DISTINCT menu_code) AS recipes
+FROM dbo.qcrd_bom WHERE menu_code IN (SELECT menu_code FROM #menus);
+
+PRINT '===== R2) cost before / after =====';
+SELECT mm.menu_code, mm.xl_name, mm.old_cost, qm.cost AS new_cost, qm.yield_qty
+FROM #menus mm JOIN dbo.qcrd_menu qm ON qm.menu_code = mm.menu_code
+ORDER BY CAST(mm.menu_code AS INT);
+
+IF @apply = 1
+BEGIN
+    COMMIT;
+    PRINT '*** SAVED (COMMIT). Backup: dbo.qcrd_bom_backup_excel_sep2026 / dbo.qcrd_menu_backup_excel_sep2026';
+END
+ELSE
+BEGIN
+    ROLLBACK;
+    PRINT '*** DRY RUN ONLY - nothing saved (ROLLBACK). Set @apply = 1 and run again to save.';
+END
+GO
+
+/* ---------- RESTORE (only if you need to undo; select these lines and Execute) ----------
+DECLARE @b DATETIME2(0) = (SELECT MAX(backup_at) FROM dbo.qcrd_bom_backup_excel_sep2026);
+BEGIN TRAN;
+DELETE FROM dbo.qcrd_bom WHERE menu_code IN
+  (SELECT menu_code FROM dbo.qcrd_menu_backup_excel_sep2026 WHERE backup_at = @b);
+INSERT INTO dbo.qcrd_bom (menu_code, menu_name, seq, item_code, item_key, item_name, qty, converter,
+  item_price, unit_cost, line_cost, src_code, src_name, src_factor, src_base, tag, no_deduct)
+SELECT menu_code, menu_name, seq, item_code, item_key, item_name, qty, converter,
+  item_price, unit_cost, line_cost, src_code, src_name, src_factor, src_base, tag, no_deduct
+FROM dbo.qcrd_bom_backup_excel_sep2026 WHERE backup_at = @b;
+UPDATE qm SET yield_qty = bk.yield_qty, cost = bk.cost FROM dbo.qcrd_menu qm
+JOIN dbo.qcrd_menu_backup_excel_sep2026 bk ON bk.menu_code = qm.menu_code AND bk.backup_at = @b;
+COMMIT;
+------------------------------------------------------------------------------------------ */
