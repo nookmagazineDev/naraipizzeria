@@ -582,6 +582,10 @@ export default function QcRdItems() {
       setFormMsg({ ok: false, msg: `มีรหัส ${code} อยู่แล้วในรายการ — ถ้าจะแก้ตัวเดิม ให้ปิดกล่องนี้แล้วกด "แก้ไข" ที่แถวนั้นแทน` }); return;
     }
     if (!editItem.name.trim()) { setFormMsg({ ok: false, msg: 'กรุณากรอกชื่อวัตถุดิบ' }); return; }
+    const minReq = String(editItem.requestUnit || '').trim();
+    if (minReq && !(/^\d*\.?\d+$/.test(minReq) && Number(minReq) > 0)) {
+      setFormMsg({ ok: false, msg: 'จำนวนเบิกขั้นต่ำต้องเป็นตัวเลขมากกว่า 0 (หรือเว้นว่าง)' }); return;
+    }
     setSavingItem(true);
     setToast(null);
     setFormMsg(null);
@@ -659,7 +663,7 @@ export default function QcRdItems() {
   // นำหน้าด้วย BOM ไม่งั้น Excel เปิดแล้วภาษาไทยเป็นตัวยึกยือ
   const exportCsv = () => {
     const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const head = ['รหัส', 'itemID (POS)', 'ชื่อ', 'หน่วย', 'หน่วยเบิก', 'ราคาต้นทุน', 'ตัวแปลง', 'หน่วยใช้', 'ประเภท', 'สถานะ', 'หมวดสโตร์', 'สาขาที่ใช้'];
+    const head = ['รหัส', 'itemID (POS)', 'ชื่อ', 'หน่วย', 'จำนวนเบิกขั้นต่ำ', 'ราคาต้นทุน', 'ตัวแปลง', 'หน่วยใช้', 'ประเภท', 'สถานะ', 'หมวดสโตร์', 'สาขาที่ใช้'];
     const body = filtered.map(i => [
       i.code, i.posItemId, i.name, i.unit, i.requestUnit, i.price ?? '', i.converter ?? '',
       i.useUnit || '', i.itemType || '',
@@ -877,8 +881,8 @@ export default function QcRdItems() {
                       </span>
                     ) : <span className="text-slate-300" title="ยังไม่ได้ผูกกับ itemID ของ POS">—</span>}
                     {i.requestUnit && (
-                      <span title="หน่วยเบิก" className="ml-1 inline-block px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-sans align-middle">
-                        เบิก: {i.requestUnit}
+                      <span title="จำนวนเบิกขั้นต่ำ" className="ml-1 inline-block px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-sans align-middle">
+                        เบิกขั้นต่ำ: {i.requestUnit}
                       </span>
                     )}
                   </td>
@@ -1053,9 +1057,10 @@ export default function QcRdItems() {
                   </datalist>
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-500">หน่วยเบิก <span className="font-normal">(หน่วยที่สาขาใช้เบิกของ)</span></label>
-                  <input value={editItem.requestUnit}
-                    onChange={e => setEditItem(m => ({ ...m, requestUnit: e.target.value }))} placeholder="เช่น ถุง"
+                  <label className="text-xs font-bold text-slate-500">จำนวนเบิกขั้นต่ำ <span className="font-normal">(สาขาต้องเบิกอย่างน้อยเท่านี้)</span></label>
+                  {/* รับเฉพาะตัวเลข — ใช้ช่องข้อความ + กรองเอง (ไม่ใช้ type=number) ค่าเก่าที่เคยเป็นชื่อหน่วยจะได้ยังเห็นแล้วแก้ได้ */}
+                  <input inputMode="decimal" value={editItem.requestUnit}
+                    onChange={e => setEditItem(m => ({ ...m, requestUnit: e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1') }))} placeholder="เช่น 1"
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
               </div>
