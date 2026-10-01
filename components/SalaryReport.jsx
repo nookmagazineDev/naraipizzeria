@@ -4,7 +4,7 @@ import {
   Wallet, Loader2, Search, Building2, Download, AlertCircle, RefreshCw,
   Printer, CalendarClock, CalendarDays, X,
 } from 'lucide-react';
-import { summarizeDaily, attachSchedule, hhmm, totalLateOf } from '../lib/attendance';
+import { summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 import {
   summarizeSalary, payableTotal, payableUnitLabel, payUnitOf, periodDays, plannedMinutes,
@@ -153,6 +153,8 @@ export default function SalaryReport() {
   const [scanNote, setScanNote] = useState('');          // ดึงเวลาสแกนไม่ได้ (รายงานยังออกได้)
   const [schedRows, setSchedRows] = useState(null);      // null = ยังไม่เคยดึง
   const [punches, setPunches] = useState([]);
+  const [scanEdits, setScanEdits] = useState([]);        // เวลาสแกนที่แก้ด้วยมือในหน้าดูสแกนหน้า
+  const [editNote, setEditNote] = useState('');          // อ่านเวลาที่แก้ไว้ไม่ได้
   const [loaded, setLoaded] = useState(null);            // ช่วง/สาขาของข้อมูลชุดที่ถืออยู่
   const [search, setSearch] = useState('');
   const [detailKey, setDetailKey] = useState(null);      // คนที่กดชื่อดูรายวันอยู่ (null = ปิด)
@@ -193,10 +195,16 @@ export default function SalaryReport() {
       setWarning(notes.join(' · '));
       setLoaded({ start: s, end: e, branch: b });
 
-      await loadPunches({ start: s, end: e, branch: b });
+      // เวลาที่แก้ด้วยมือต้องใช้ด้วย ไม่งั้นยอดสายจะไม่ตรงกับคอลัมน์รวมสายในหน้าดูสแกนหน้า
+      await Promise.all([
+        loadPunches({ start: s, end: e, branch: b }),
+        loadScanEdits({ start: s, end: e, branch: b }),
+      ]);
     } catch (err) {
       setSchedRows(null);
       setPunches([]);
+      setScanEdits([]);
+      setEditNote('');
       setLoaded(null);
       setError(err.message || 'ดึงข้อมูลไม่สำเร็จ');
     } finally {
@@ -219,6 +227,27 @@ export default function SalaryReport() {
     } catch (err) {
       setPunches([]);
       setScanNote(`${err.message || 'ดึงเวลาสแกนไม่สำเร็จ'} — สรุปจากตารางงานอย่างเดียว (ช่องสายและหักสายจะเป็น 0)`);
+    }
+  };
+
+  /**
+   * เวลาสแกนที่กดแก้ไว้ในหน้าดูสแกนหน้า — ครอบทับเวลาดิบแบบเดียวกับหน้านั้น
+   * ดึงไม่ได้ก็ยังออกรายงานได้ แค่คิดสายจากเวลาดิบของเครื่องสแกน
+   */
+  const loadScanEdits = async ({ start: s, end: e, branch: b }) => {
+    try {
+      const p = new URLSearchParams({ start: s, end: e });
+      if (b) p.set('branch', b);
+      const res = await fetch(`/api/attendance-edit?${p.toString()}`);
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json || json.status !== 'success') {
+        throw new Error((json && (json.hint || json.message)) || `อ่านเวลาที่แก้ไว้ไม่สำเร็จ (${res.status})`);
+      }
+      setScanEdits(json.data || []);
+      setEditNote('');
+    } catch (err) {
+      setScanEdits([]);
+      setEditNote(`${err.message || 'อ่านเวลาที่แก้ไว้ไม่สำเร็จ'} — คิดสายจากเวลาดิบของเครื่องสแกน (อาจไม่ตรงกับหน้าดูสแกนหน้า)`);
     }
   };
 
@@ -250,9 +279,13 @@ export default function SalaryReport() {
   // ตารางงาน + สแกน -> แถวรายวัน -> ยอดรายคนตามฟอร์ม
   // includeUnscanned ต้องเปิดเสมอ เพราะวันหยุด/วันลาไม่มีใครไปสแกน ถ้าไม่เอาเข้ามาด้วย
   // คอลัมน์วันลาจะว่างทั้งแถว
+  // เวลาที่แก้ด้วยมือครอบทับเป็นชั้นสุดท้ายเหมือนหน้าดูสแกนหน้า (applyScanEdits คิดนาทีที่สายใหม่ให้)
   const daily = useMemo(
-    () => attachSchedule(summarizeDaily(punches), schedRows || [], { includeUnscanned: true }),
-    [punches, schedRows]
+    () => applyScanEdits(
+      attachSchedule(summarizeDaily(punches), schedRows || [], { includeUnscanned: true }),
+      scanEdits,
+    ),
+    [punches, schedRows, scanEdits]
   );
 
   // วันนักขัตฤกษ์ที่อยู่ในช่วงของข้อมูลชุดที่ถืออยู่ — นอกช่วงไม่มีผลกับรายงาน
@@ -518,10 +551,10 @@ export default function SalaryReport() {
         </div>
       )}
 
-      {scanNote && !loading && schedRows !== null && (
+      {(scanNote || editNote) && !loading && schedRows !== null && (
         <div className="p-3 bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-xl text-sm flex items-start gap-2 no-print">
           <CalendarClock size={18} className="mt-0.5 flex-shrink-0" />
-          <span>เวลาสแกน: {scanNote}</span>
+          <span>เวลาสแกน: {[scanNote, editNote].filter(Boolean).join(' · ')}</span>
         </div>
       )}
 
