@@ -517,6 +517,24 @@ export default function Attendance() {
           ...filtered.map((r) => [r.time, r.empCode, r.name, r.stateLabel || r.state, r.area, r.terminal]),
         ];
 
+    // แถวรวมท้ายไฟล์ — ยอดเดียวกับแถวรวมบนหน้าเว็บ (OT · รวมสาย) เขียนเป็นสูตร SUM แก้ตัวเลขในไฟล์แล้วยอดตาม
+    // ใส่ค่าที่คิดไว้แล้วไปด้วย โปรแกรมที่ไม่คำนวณสูตรใหม่ตอนเปิด (เช่นพรีวิวในมือถือ) ก็ยังเห็นยอด
+    const totalRow = view === 'daily' && showPlan && daily.length > 0;
+    if (totalRow) {
+      const lastRow = daily.length + 1;   // เลขแถวแบบ Excel ของข้อมูลแถวสุดท้าย (แถว 1 = หัวตาราง)
+      const sumCell = (c, v) => {
+        const col = XLSX.utils.encode_col(c);
+        return { t: 'n', v, f: `SUM(${col}2:${col}${lastRow})` };
+      };
+      const row = aoa[0].map(() => '');
+      row[0] = 'รวม';
+      const otCol = aoa[0].indexOf('OT (ชม.)');
+      const lateCol = aoa[0].indexOf('รวมสาย (นาที)');
+      row[otCol] = sumCell(otCol, totals.ot);
+      row[lateCol] = sumCell(lateCol, totals.late ?? 0);
+      aoa.push(row);
+    }
+
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = aoa[0].map(() => ({ wch: 14 }));
     const range = XLSX.utils.decode_range(ws['!ref']);
@@ -527,6 +545,15 @@ export default function Attendance() {
           font: { bold: true, color: { rgb: 'FFFFFF' } },
           fill: { fgColor: { rgb: 'F59E0B' } },
           alignment: { horizontal: 'center' },
+        };
+      }
+      // แถวรวม: ตัวหนา พื้นเทา เส้นคั่นด้านบน ให้แยกออกจากข้อมูลรายวันได้ตั้งแต่มอง
+      const totalCell = totalRow && ws[XLSX.utils.encode_cell({ r: range.e.r, c })];
+      if (totalCell) {
+        totalCell.s = {
+          font: { bold: true },
+          fill: { fgColor: { rgb: 'F1F5F9' } },
+          border: { top: { style: 'medium', color: { rgb: '94A3B8' } } },
         };
       }
     }
