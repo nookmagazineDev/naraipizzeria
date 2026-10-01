@@ -10,7 +10,7 @@
 
 // ค่าใช้จ่ายอื่นๆ / แพลนสั่งของ ย้ายเข้า SQL แล้ว (SHEETS_SOURCE=sql) ส่วนพนักงานยังอยู่ที่ชีท
 // เครื่องมือของ AI ต้องอ่านที่เดียวกับหน้าเว็บ ไม่งั้น AI จะตอบจากข้อมูลคนละที่กับที่หน้าเว็บแสดง
-import { usingSql as usingSheetsSql, readExpenses, readPlan } from '../../lib/sheetsSource';
+import { usingSql as usingSheetsSql, readExpenses, readPlan, readEmployees } from '../../lib/sheetsSource';
 // QC/RD ก็เหมือนกัน — พอเปิด QCRD_SOURCE=sql หน้า QC/RD อ่านจาก dbo.qcrd_* แล้ว
 // ถ้า AI ยังอ่านชีทอยู่ AI จะตอบด้วยเมนู/วัตถุดิบที่หน้าเว็บลบหรือแก้ไปแล้ว
 import { usingSql as usingQcrdSql, fetchQcrdSql } from '../../lib/qcrdSource';
@@ -507,11 +507,10 @@ const TOOL_HANDLERS = {
     };
   },
 
-  // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว) — อ่านจากชีทแท็บ DATA
+  // สรุปจำนวนพนักงาน (นับจำนวน ไม่เปิดเผยข้อมูลส่วนตัว) — อ่านจาก narai_hr.dbo.hr_employee
   async get_employees_summary({ branch }) {
-    // อ่านจากชีทผ่าน Apps Script ที่เดียวกับหน้ารายชื่อพนักงาน (ไม่ผ่าน dbo.hr_employee)
-    // ไม่งั้น AI จะตอบจากข้อมูลคนละที่กับที่หน้าเว็บแสดง/แก้ไว้
-    const list = await gasPost(HR_GAS, { action: 'getEmployees', branch: 'all' });
+    // ที่เดียวกับหน้ารายชื่อพนักงาน ไม่งั้น AI จะตอบจากข้อมูลคนละที่กับที่หน้าเว็บแสดง/แก้ไว้
+    const list = await readEmployees();
     let emps = (list || []).filter(e => e.hrCode && String(e.fullName || '').trim() !== 'ชื่อ - สกุล');
     if (branch) emps = emps.filter(e => String(e.branch).toUpperCase() === String(branch).toUpperCase());
     const byBranch = {};

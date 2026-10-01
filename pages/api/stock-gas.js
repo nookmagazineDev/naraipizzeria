@@ -1,10 +1,11 @@
 // Proxy ไป Google Apps Script ของสต๊อก (getBranches / getStockItems / getStockTotal / saveStock ฯลฯ)
-// สคริปต์ตัวนี้ยังเป็นตัวเดียวกับที่ให้ข้อมูลพนักงาน (getEmployees / saveEmployee) ด้วย
 //
-// รายชื่อพนักงานกับการแก้ข้อมูลพนักงานใช้ชีท DATA ผ่าน Apps Script เหมือนเดิม ไม่ผ่าน dbo.hr_employee
-// และไม่ขึ้นกับ SHEETS_SOURCE — ชีทเป็นต้นทางจริง ส่วนตารางใน SQL เหลือไว้ให้สคริปต์ย้ายข้อมูลใช้
-// อ่านกับเขียนต้องอยู่ที่เดียวกันเสมอ (อ่านที่หนึ่งเขียนอีกที่หนึ่งคือต้นเหตุของอาการ
-// "กดบันทึกขึ้นสำเร็จ แต่ข้อมูลไม่เปลี่ยน") — ทุก action จึงยิงไป Apps Script ตัวเดียวกัน
+// ยกเว้นพนักงาน (getEmployees / saveEmployee) ที่ย้ายไปอ่าน-เขียน narai_hr.dbo.hr_employee
+// บน SQL Server แล้ว — ตารางเดียวกับที่ตารางงาน/รายงานเงินเดือนใช้ (ดู HR_EMPLOYEE_TABLE ใน
+// lib/sheetsSql.mjs) ทั้งอ่านและเขียนไปที่เดียวเสมอ ไม่ถอยไปชีท DATA
+// (อ่านที่หนึ่งเขียนอีกที่หนึ่งคือต้นเหตุของอาการ "กดบันทึกขึ้นสำเร็จ แต่ข้อมูลไม่เปลี่ยน")
+// เหตุที่ย้าย: Apps Script ตัวนี้เคยถูกวางโค้ดอื่นทับจนตอบ "HR System Backend is running."
+// แทนรายชื่อ หน้าพนักงานพังทั้งหน้า — SQL เป็นที่เก็บรายชื่อตัวจริงของระบบตารางงานอยู่แล้ว
 //
 // เวลา GAS ตอบมาไม่ใช่ JSON เมื่อก่อนโยนแค่ "ตอบกลับจาก GAS ไม่ใช่ JSON" ซึ่งบอกไม่ได้เลยว่า
 // พังตรงไหน (deployment ถูกลบ / ตั้งสิทธิ์ผิด / สคริปต์ error) ตอนนี้แปลสาเหตุให้ด้วย
@@ -12,7 +13,27 @@
 //
 // เปิด GET /api/stock-gas จากเบราว์เซอร์ = health check ดูว่า deployment ยังตอบอยู่ไหม
 import { diagnoseGas } from '../../lib/gasDiagnose';
-import { usingStockSql } from '../../lib/sheetsSource';
+import { usingStockSql, readEmployees, saveEmployee, sqlRoute } from '../../lib/sheetsSource';
+import { HR_EMPLOYEE_TABLE } from '../../lib/sheetsSql.mjs';
+
+const EMPLOYEE_ACTIONS = new Set(['getEmployees', 'saveEmployee']);
+
+/** พนักงาน — อ่าน/เขียน SQL ที่เดียว ไม่ถอยไปชีท ต่อไม่ได้ให้ฟ้องตรง ๆ */
+async function handleEmployee(action, payload, res) {
+  try {
+    const data = action === 'getEmployees' ? await readEmployees() : await saveEmployee(payload);
+    return res.status(200).json({ status: 'success', source: HR_EMPLOYEE_TABLE, data });
+  } catch (err) {
+    console.error(`stock-gas: ${action} กับ ${HR_EMPLOYEE_TABLE} ไม่ได้ (${sqlRoute()}):`, err.message);
+    return res.status(err.badRequest ? 400 : 502).json({
+      status: 'error',
+      message: action === 'saveEmployee'
+        ? `บันทึกข้อมูลพนักงานไม่สำเร็จ: ${err.message}`
+        : `อ่านรายชื่อพนักงานจาก ${HR_EMPLOYEE_TABLE} ไม่ได้: ${err.message} — ` +
+          'ตรวจว่าเครื่องออฟฟิศ/host-server ยังทำงานอยู่ไหม',
+    });
+  }
+}
 
 // การบันทึกของหน้านับสต๊อกที่ "ต้องไม่วิ่งลงชีทอีกแล้ว" เมื่ออ่านจาก SQL
 //
@@ -52,37 +73,46 @@ async function callGas(body) {
 }
 
 export default async function handler(req, res) {
-  // GET = health check เปิดจากเบราว์เซอร์ได้เลย ไว้ดูว่า deployment ยังตอบเป็น JSON อยู่ไหม
-  // ยิง getEmployees เพราะเป็น action อ่านอย่างเดียว ไม่แตะข้อมูล และเป็นตัวที่มีปัญหาอยู่พอดี
+  // GET = health check เปิดจากเบราว์เซอร์ได้เลย — ดูทั้งสองที่ที่ route นี้พึ่งอยู่
+  //   employee: รายชื่อพนักงานจาก SQL (narai_hr.dbo.hr_employee)
+  //   gas:      Apps Script ของสต๊อก (ยิง getBranches — อ่านอย่างเดียว ไม่แตะข้อมูล)
   if (req.method === 'GET') {
     const usingEnv = Boolean(process.env.STOCK_GAS_URL);
+
+    let employee;
     try {
-      const { status, finalUrl, text } = await callGas(JSON.stringify({ action: 'getEmployees', branch: 'all' }));
+      const list = await readEmployees();
+      employee = { status: 'success', table: HR_EMPLOYEE_TABLE, rows: list.length };
+    } catch (err) {
+      employee = { status: 'error', table: HR_EMPLOYEE_TABLE, route: sqlRoute(), message: err.message };
+    }
+
+    let gas;
+    try {
+      const { status, finalUrl, text } = await callGas(JSON.stringify({ action: 'getBranches' }));
       let json = null;
       try { json = JSON.parse(text); } catch { /* ไม่ใช่ JSON — รายงานเป็น diagnosis ด้านล่าง */ }
-      const rows = Array.isArray(json?.data) ? json.data.length : undefined;
-      return res.status(200).json({
+      gas = {
         status: json && json.status === 'success' ? 'success' : 'error',
         scriptUrlFrom: usingEnv ? 'env STOCK_GAS_URL' : 'fallback ในโค้ด',
         scriptUrl: SCRIPT_URL,
         httpStatus: status,
         finalUrl,
-        employeeRows: rows,
-        gasResponse: json && json.status !== 'success' ? json : undefined,
         message: json
           ? (json.status === 'success'
-            ? `deployment ตอบเป็น JSON ปกติ — อ่านรายชื่อพนักงานได้ ${rows ?? '?'} แถว`
+            ? 'deployment ตอบเป็น JSON ปกติ'
             : `deployment ตอบเป็น JSON แต่แจ้ง error: ${json.message || '(ไม่มีข้อความ)'}`)
           : diagnoseGas(status, finalUrl, text, DIAG),
-      });
+      };
     } catch (err) {
-      return res.status(200).json({
-        status: 'error',
-        scriptUrlFrom: usingEnv ? 'env STOCK_GAS_URL' : 'fallback ในโค้ด',
-        scriptUrl: SCRIPT_URL,
-        message: `เรียก GAS ไม่สำเร็จ: ${err.message}`,
-      });
+      gas = { status: 'error', scriptUrl: SCRIPT_URL, message: `เรียก GAS ไม่สำเร็จ: ${err.message}` };
     }
+
+    return res.status(200).json({
+      status: employee.status === 'success' && gas.status === 'success' ? 'success' : 'error',
+      employee,
+      gas,
+    });
   }
 
   if (req.method !== 'POST') {
@@ -95,6 +125,12 @@ export default async function handler(req, res) {
     const action = String((typeof req.body === 'string'
       ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })()
       : (req.body || {})).action || '').trim();
+    if (EMPLOYEE_ACTIONS.has(action)) {
+      const payload = typeof req.body === 'string'
+        ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })()
+        : (req.body || {});
+      return handleEmployee(action, payload, res);
+    }
     if (usingStockSql() && STOCK_WRITE_ACTIONS.has(action)) {
       return res.status(409).json({
         status: 'error',
