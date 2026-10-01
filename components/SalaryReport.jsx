@@ -4,10 +4,10 @@ import {
   Wallet, Loader2, Search, Building2, Download, AlertCircle, RefreshCw,
   Printer, CalendarClock, CalendarDays, X,
 } from 'lucide-react';
-import { summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf } from '../lib/attendance';
+import { summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf, otNote } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 import {
-  summarizeSalary, payableTotal, payableUnitLabel, payUnitOf, periodDays, plannedMinutes,
+  summarizeSalary, payableTotal, payableUnitLabel, payUnitOf, periodDays, dayWork,
   hhmmOfMinutes, hhmmOfHours, LEAVE_COLUMNS, loadHolidays, saveHolidays, round2,
 } from '../lib/payroll';
 
@@ -825,6 +825,7 @@ export default function SalaryReport() {
                     <th rowSpan={2} className="h-7 px-2 text-center sticky top-0 bg-slate-50 border-b border-l border-slate-200">สถานะ / ลา</th>
                     <th colSpan={4} className="h-7 px-2 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-slate-200 font-semibold">ส่วนต่าง (นาที)</th>
                     <th rowSpan={2} className="h-7 px-2 text-right sticky top-0 bg-slate-50 border-b border-l border-slate-200">เวลาทำงาน</th>
+                    <th rowSpan={2} className="h-7 px-2 text-right sticky top-0 bg-violet-100 text-violet-800 border-b border-l border-slate-200 font-semibold">OT</th>
                   </tr>
                   <tr>
                     {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก'].map((h, i) => (
@@ -841,12 +842,10 @@ export default function SalaryReport() {
                 <tbody className="divide-y divide-slate-100 text-slate-700">
                   {detail.dayRows.map((d) => {
                     const isHoliday = holidaysInRange.includes(d.date);
-                    const late = totalLateOf(d) || 0;
-                    const planned = plannedMinutes(d.plan);
-                    // เวลาทำงานของวันนั้นตามเกณฑ์เดียวกับตารางสรุป (ตารางที่ลงไว้ − สาย)
-                    const worked = d.plan?.isOff
-                      ? 0
-                      : Math.max(0, (planned != null ? planned : Math.round((d.netHours || 0) * 60)) - late);
+                    // เวลาทำงาน/OT ของวันนั้น ตัวเดียวกับที่รวมไว้ในตารางสรุป (dayWork)
+                    const { workedNet: worked, day9Ot, otHours: dayOt } = d.plan || d.count > 0
+                      ? dayWork(d)
+                      : { workedNet: 0, day9Ot: 0, otHours: 0 };
                     return (
                       <tr key={d.date} className={`hover:bg-amber-50/40${d.plan?.isOff ? ' bg-slate-50/60' : ''}`}>
                         <td className="px-2 py-1 whitespace-nowrap font-medium text-slate-800">
@@ -894,7 +893,8 @@ export default function SalaryReport() {
                             {(d.plan?.reasons || []).map((r) => (
                               <span key={r} className={`px-1.5 rounded text-[10px] font-semibold ${d.plan.offPaid ? 'bg-amber-500 text-white' : 'bg-rose-500 text-white'}`}>{r}</span>
                             ))}
-                            {(d.plan?.notes || []).map((n) => (
+                            {/* OT มีคอลัมน์ของตัวเองแล้ว ไม่ต้องขึ้นซ้ำเป็นชิป */}
+                            {(d.plan?.notes || []).filter((n) => n !== otNote(d.plan.otHours)).map((n) => (
                               <span key={n} className="px-1.5 rounded text-[10px] bg-slate-200 text-slate-700">{n}</span>
                             ))}
                             {d.offScanned && <span className="px-1.5 rounded text-[10px] bg-orange-500 text-white">แต่มีสแกน</span>}
@@ -911,6 +911,13 @@ export default function SalaryReport() {
                         <td className="px-2 py-1 text-right font-mono font-semibold text-slate-800 border-l border-slate-200">
                           {worked ? hhmmOfMinutes(worked) : ''}
                         </td>
+                        <td
+                          className="px-2 py-1 text-right font-mono font-semibold text-violet-700 bg-violet-50/40 border-l border-slate-200"
+                          title={day9Ot ? `รวม DAY9 ${hhmmOfMinutes(day9Ot)} (ย้ายจากเวลาทำงาน)` : undefined}
+                        >
+                          {dayOt ? hhmmOfHours(dayOt) : ''}
+                          {day9Ot > 0 && <span className="ml-0.5 text-[9px] font-normal text-violet-500">D9</span>}
+                        </td>
                       </tr>
                     );
                   })}
@@ -921,6 +928,7 @@ export default function SalaryReport() {
             <div className="px-6 py-3 bg-slate-50 border-t border-slate-100 text-[11px] text-slate-500 flex-shrink-0">
               แสดงเฉพาะวันที่มีข้อมูล (อยู่ในตารางงาน หรือมีการสแกน) ในงวดที่ดึงมา ·
               เวลาทำงานของวัน = เวลาที่ลงตารางไว้ (หักเบรค) − นาทีที่สาย ตรงกับที่รวมไว้ในตารางสรุป ·
+              OT = OT ที่ลงไว้ในตารางงาน + 1 ชม. ของ DAY9 (D9 — ย้ายมาจากเวลาทำงาน) ·
               &quot;ออกก่อน&quot; ไม่ได้ถูกนำไปหักในรายงาน แสดงไว้ให้ตรวจเฉยๆ
             </div>
           </div>
