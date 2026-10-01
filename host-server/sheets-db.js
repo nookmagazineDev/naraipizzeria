@@ -149,11 +149,21 @@ function mountSheets(app) {
         SELECT (SELECT COUNT(*) FROM dbo.stock_plan)     AS [plan],
                (SELECT COUNT(*) FROM dbo.stock_closing)  AS [closing],
                (SELECT COUNT(*) FROM dbo.expense_ref)    AS [expenseRef],
-               (SELECT COUNT(*) FROM dbo.expense_entry)  AS [expense],
-               (SELECT COUNT(*) FROM dbo.hr_employee)    AS [employee]`);
+               (SELECT COUNT(*) FROM dbo.expense_entry)  AS [expense]`);
+      // พนักงานอยู่ฐาน narai_hr (คนละฐาน) นับแยก — ไม่มีสิทธิ์ข้ามฐานก็ยังเห็นตารางอื่นครบ
+      const { HR_EMPLOYEE_TABLE } = await import('../lib/sheetsSql.mjs');
+      let employee;
+      let employeeError;
+      try {
+        employee = (await q(`SELECT COUNT(*) AS n FROM ${HR_EMPLOYEE_TABLE}`))[0]?.n;
+      } catch (err) {
+        employeeError = err.message;
+      }
       res.json({
         status: 'success',
-        rows: r[0] || {},
+        rows: { ...(r[0] || {}), employee },
+        employeeTable: HR_EMPLOYEE_TABLE,
+        employeeError,
         writeEnabled: Boolean(WRITE_KEY),
       });
     } catch (e) {

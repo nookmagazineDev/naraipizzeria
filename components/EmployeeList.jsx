@@ -20,8 +20,9 @@ const LABEL_OF = Object.fromEntries(EDIT_FIELDS.map(f => [f.key, f.label]));
 
 /*
  * NARAI OFFICE — รายชื่อพนักงาน
- * ดึงผ่าน /api/stock-gas → action=getEmployees ซึ่งอ่านจากชีท DATA ผ่าน Apps Script (เหมือนเดิม)
- * การแก้ไข (saveEmployee) เขียนกลับลงชีทเล่มเดียวกัน — อ่านกับเขียนอยู่ที่เดียวเสมอ
+ * ดึงผ่าน /api/stock-gas → action=getEmployees ซึ่งอ่านจาก narai_hr.dbo.hr_employee บน SQL Server
+ * (ตารางเดียวกับตารางงาน/รายงานเงินเดือน) การแก้ไข (saveEmployee) เขียนกลับตารางเดียวกัน
+ * — อ่านกับเขียนอยู่ที่เดียวเสมอ
  * แสดงผลให้เหมือนหน้า "รายชื่อพนักงาน" ของ narai-branch.vercel.app
  */
 
@@ -113,6 +114,8 @@ export default function EmployeeList() {
       const db = parseThaiDate(b);
       if (da && db) return da.getTime() === db.getTime();
     }
+    // สาขาเก็บตัวพิมพ์เล็กในฐาน แต่แสดงตัวพิมพ์ใหญ่ — เทียบแบบไม่สนตัวพิมพ์
+    if (key === 'branch') return String(a ?? '').trim().toUpperCase() === String(b ?? '').trim().toUpperCase();
     return String(a ?? '').trim() === String(b ?? '').trim();
   };
 
@@ -129,44 +132,39 @@ export default function EmployeeList() {
       if (Object.keys(changed).length === 0) { setFormMsg({ ok: false, msg: 'ไม่มีการเปลี่ยนแปลง' }); setSavingEmp(false); return; }
       const res = await apiCall('saveEmployee', { hrCode: editEmp.hrCode, ...changed });
 
-      // บอกตามที่เขียนลงชีทได้จริง ไม่ใช่ตามจำนวนช่องที่ผู้ใช้แก้
-      // Apps Script คืน updated = ช่องที่เขียนลงชีทได้ · skipped = ช่องที่ "หาคอลัมน์ในหัวตารางไม่เจอ"
-      // ของเดิมขึ้นว่าสำเร็จทุกครั้งโดยไม่ดูสองค่านี้ ช่องที่ชีทไม่มีคอลัมน์รองรับจึงหายเงียบ ๆ
+      // บอกตามที่เขียนลงฐานได้จริง ไม่ใช่ตามจำนวนช่องที่ผู้ใช้แก้
+      // ฝั่ง API คืน updated = ช่องที่เขียนได้ · skipped = ช่องที่ตารางไม่มีคอลัมน์รองรับ
       const d = res.data || {};
       const wrote = Array.isArray(d.updated) ? d.updated.length : (Number(d.updated) ? Object.keys(changed).length : 0);
       const skipped = Array.isArray(d.skipped) ? d.skipped : [];
       if (wrote === 0) {
         throw new Error(skipped.length
-          ? `ไม่มีช่องไหนถูกบันทึก — หาคอลัมน์ของ ${skipped.map(k => LABEL_OF[k] || k).join(', ')} ในชีทไม่เจอ`
-          : 'ไม่มีช่องไหนถูกบันทึกลงชีท (ลองใหม่อีกครั้ง)');
+          ? `ไม่มีช่องไหนถูกบันทึก — ตารางพนักงานไม่มีคอลัมน์ของ ${skipped.map(k => LABEL_OF[k] || k).join(', ')}`
+          : 'ไม่มีช่องไหนถูกบันทึกลงฐานข้อมูล (ลองใหม่อีกครั้ง)');
       }
 
       // แล้วอ่านรายชื่อใหม่มาเทียบว่า "ค่าที่เพิ่งส่งไปติดจริงไหม"
-      // ตัวเขียนตอบว่าสำเร็จได้ทั้งที่ไปลงคนละเล่มกับที่หน้านี้อ่าน (Apps Script ไม่ได้ตั้ง EMP_SHEET_ID)
-      // อาการที่ผู้ใช้เจอคือ "กดบันทึกขึ้นสำเร็จ แต่ข้อมูลไม่เปลี่ยน" — ต้องขึ้นแดงไม่ใช่ปิดฟอร์มเงียบ ๆ
+      // ทั้งอ่านและเขียนไปตารางเดียวกัน ปกติต้องตรงกันเสมอ — ไม่ตรง = ต้องขึ้นแดง ไม่ใช่ปิดฟอร์มเงียบ ๆ
       const fresh = await fetchEmployees();
       if (fresh) {
         const after = fresh.find(e => String(e.hrCode ?? '') === String(editEmp.hrCode ?? ''));
         const stale = Object.keys(changed).filter(k => !sameValue(k, after ? after[k] : undefined, changed[k]));
         if (!after || stale.length) {
           throw new Error((after
-            ? `กดบันทึกแล้วแต่ค่าที่อ่านกลับมาจากชีทยังเป็นของเดิม: ${stale.map(k => LABEL_OF[k] || k).join(', ')}`
-            : `บันทึกแล้วแต่หารหัส ${editEmp.hrCode} ในชีทไม่เจอ`)
-            + ' — ตรวจว่า Apps Script เขียนลงสเปรดชีต/แท็บเดียวกับที่หน้านี้อ่านหรือเปล่า'
-            + ' (ตัวแปร EMP_SHEET_ID / EMP_SHEET_NAME ในสคริปต์)');
+            ? `กดบันทึกแล้วแต่ค่าที่อ่านกลับมาจากฐานยังเป็นของเดิม: ${stale.map(k => LABEL_OF[k] || k).join(', ')}`
+            : `บันทึกแล้วแต่หารหัส ${editEmp.hrCode} ในฐานข้อมูลไม่เจอ`)
+            + ' — ลองใหม่อีกครั้ง ถ้ายังเป็นเหมือนเดิมให้แจ้ง IT ตรวจ narai_hr.dbo.hr_employee');
         }
       }
 
       setToast({
         ok: skipped.length === 0,
-        msg: `บันทึก ${editEmp.hrCode} ลงชีทแล้ว ${wrote} ช่อง`
-          + (skipped.length ? ` · ไม่มีคอลัมน์ในชีท: ${skipped.map(k => LABEL_OF[k] || k).join(', ')}` : ''),
+        msg: `บันทึก ${editEmp.hrCode} แล้ว ${wrote} ช่อง`
+          + (skipped.length ? ` · ตารางไม่มีคอลัมน์: ${skipped.map(k => LABEL_OF[k] || k).join(', ')}` : ''),
       });
       setEditEmp(null);   // ปิดฟอร์มเฉพาะตอนที่ยืนยันแล้วว่าข้อมูลเปลี่ยนจริง
     } catch (err) {
-      const msg = /unknown action/i.test(err.message || '')
-        ? 'ยังไม่ได้เพิ่ม action saveEmployee ใน Apps Script (ดูวิธีในไฟล์ employee-apps-script.gs)'
-        : (err.message || 'บันทึกไม่สำเร็จ');
+      const msg = err.message || 'บันทึกไม่สำเร็จ';
       setFormMsg({ ok: false, msg });   // ในฟอร์ม — ฟอร์มยังเปิดอยู่ ต้องเห็นตรงนี้
       setToast({ ok: false, msg });     // ที่หัวหน้าด้วย เผื่อผู้ใช้ปิดฟอร์มไปแล้ว
     } finally {
