@@ -338,6 +338,19 @@ export default function Attendance() {
     edited: daily.filter((d) => d.edited).length,
   }), [daily]);
 
+  // ยอดรวมท้ายตาราง (OT · รวมสาย) — นับตามแถวที่เห็นอยู่ ค้นหาคนเดียวก็เป็นยอดของคนนั้น
+  // late = null เมื่อไม่มีแถวไหนเทียบเวลาได้เลย (ขึ้น — แทน 0 ที่ดูเหมือนตรงเวลาทุกวัน)
+  const totals = useMemo(() => {
+    let ot = 0;
+    let late = null;
+    for (const d of daily) {
+      if (d.plan?.otHours > 0) ot += d.plan.otHours;
+      const l = totalLateOf(d);
+      if (l != null) late = (late || 0) + l;
+    }
+    return { ot: Math.round(ot * 100) / 100, late };
+  }, [daily]);
+
   /* ---------------------- แก้เวลาสแกนในช่อง ---------------------- */
 
   const editKey = (d) => `${d.date}|${d.empCode}`;
@@ -874,66 +887,27 @@ export default function Attendance() {
                     </tr>
                   ))}
                 </tbody>
+                {/* แถวรวมยอด — ติดขอบล่างไว้ เลื่อนดูรายวันแล้วยังเห็นยอดรวมอยู่ */}
+                {showPlan && (
+                  <tfoot className="text-slate-700 font-semibold [&_td]:sticky [&_td]:bottom-0 [&_td]:bg-slate-100 [&_td]:border-t-2 [&_td]:border-slate-300">
+                    <tr>
+                      <td colSpan={4} className="px-3 py-2">รวม</td>
+                      <td colSpan={5} className="border-l" />
+                      <td colSpan={4} className="border-l" />
+                      <td className="px-3 py-2 text-center">
+                        {totals.ot > 0 ? <span className="font-mono text-violet-700">{totals.ot}</span> : <Dash />}
+                      </td>
+                      <td colSpan={3} className="border-l" />
+                      <td className="px-3 py-2 text-center" title={totals.late > 0 ? `${hm(totals.late / 60)} ชม.:นาที` : undefined}>
+                        {lateCell(totals.late)}
+                      </td>
+                      <td className="border-l" />
+                      <td colSpan={3} className="border-l" />
+                      <td className="border-l" />
+                    </tr>
+                  </tfoot>
+                )}
               </table>
-              <div className="px-4 py-3 text-xs text-slate-400 border-t border-slate-100 space-y-1">
-                <p>
-                  {showPlan && (
-                    <>
-                      <span className="font-medium text-indigo-600">ตารางงานที่ลงไว้</span> = เวลาที่สาขากรอกในหน้าลงตารางรายสัปดาห์ (ระบบ Narai-branch) ·{' '}
-                    </>
-                  )}
-                  <span className="font-medium text-emerald-600">สแกนจริง</span> อ่านจากลำดับการสแกน 4 รอบ: เข้างาน → ออกเบรค → เข้าเบรค → ออกงาน ·
-                  ช่องที่เป็น — คือไม่มีข้อมูลฝั่งนั้น (ยังไม่ได้ลงตาราง หรือวันนั้นสแกนไม่ครบ)
-                </p>
-                <p>
-                  <span className="inline-flex items-center gap-1 font-medium text-amber-600"><Pencil size={11} /> แก้เวลาสแกน</span>
-                  {' '}= คลิกที่ช่องเวลาฝั่งสแกนจริงได้ทั้งสี่ช่อง (เว้นว่างไว้ = ลบเวลาช่องนั้น) ·
-                  กดบันทึกครั้งหนึ่ง = <span className="font-medium">บันทึกเป็นรายการใหม่</span> ในตารางแก้ไข
-                  ไม่ได้เขียนทับข้อมูลของเครื่องสแกน จึงย้อนดูได้เสมอว่าเวลาเดิมคือเท่าไหร่ ใครแก้ เมื่อไหร่
-                  (ชี้ที่ช่องพื้นเหลืองเพื่อดู) · ชั่วโมงทำงานและนาทีที่สายคิดใหม่จากเวลาที่แก้แล้ว
-                </p>
-                {showPlan && (
-                  <p>
-                    <span className="font-medium text-rose-600">เข้าสาย</span> = สแกนเข้า − เวลาเข้าที่ลงไว้ ·
-                    <span className="font-medium text-rose-600"> เบรคสาย</span> = สแกนเข้าเบรค − เวลาสิ้นสุดเบรคที่ลงไว้
-                    (ถ้าไม่ได้ลงช่วงเบรคไว้ จะเทียบกับ ออกเบรคจริง + ระยะเบรคที่อนุญาตแทน) ·
-                    <span className="font-medium text-rose-600"> ออกก่อน</span> = เวลาออกที่ลงไว้ − สแกนออก ·
-                    นับเฉพาะที่เกิน 0 นาที มาก่อนเวลาไม่ถือว่าติดลบ ·
-                    วันที่ลงไว้ว่าหยุด/ลา ไม่คิดว่าสาย เพราะวันนั้นไม่ได้นัดให้มา
-                  </p>
-                )}
-                {showPlan && (
-                  <p>
-                    <span className="font-medium text-indigo-600">เบรค</span> = ระยะเวลาพักที่ลงไว้ในตารางงาน
-                    (&quot;ไม่เบรค&quot; = วันนั้นไม่ได้ให้พัก) ใช้คิด &quot;เบรคสาย&quot; เมื่อไม่ได้ลงช่วงเวลาออกเบรค-เข้าเบรคไว้ ·
-                    <span className="font-medium text-violet-600"> OT</span> = ชั่วโมง OT ที่สาขาลงไว้ในตารางงานของวันนั้น
-                    (ไม่ใช่ตัวเลขที่คิดจากเวลาสแกน — วางไว้ท้ายฝั่งสแกนจริงเพื่ออ่านคู่กับเวลาออกจริง)
-                    ชี้ที่ตัวเลขเพื่อดูผู้อนุมัติ
-                  </p>
-                )}
-                {showPlan && (
-                  <p className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5">
-                    <span className="inline-flex items-center gap-1">
-                      <Chip cls="bg-amber-500 text-white">⊖ ลา</Chip> ลาแบบรับค่าแรง (เช่น 13 ป่วย, 14 กิจ)
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Chip cls="bg-rose-500 text-white">⊖ หยุด</Chip> หยุด/ไม่รับค่าแรง (เช่น 21 ป่วย, 23 ขาดงาน)
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Chip cls="bg-slate-700 text-white">ไม่มีสแกน</Chip> ลงตารางให้มาทำงาน แต่ไม่มีสแกนทั้งวัน
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Chip cls="bg-orange-500 text-white">แต่มีสแกน</Chip> ลงไว้ว่าหยุด/ลา แต่มีการสแกน
-                    </span>
-                  </p>
-                )}
-                <p>
-                  <span className="font-medium">เวลาทำงาน</span> อ่านเป็น ชม.:นาที (1 ชม. = 60 นาที) เช่น 9:04 คือ 9 ชั่วโมง 4 นาที ·{' '}
-                  <span className="font-medium">สุทธิ</span> = ชั่วโมงรวมหักเวลาพักแล้ว
-                  {showPlan && ' · จับคู่กับตารางงานด้วยรหัสพนักงานก่อน ถ้ารหัสไม่ตรงจะลองจับด้วยชื่อในวันเดียวกัน'}
-                  {showPlan && ' · แถวพื้นเทาคือคนที่มีในตารางงานแต่ไม่มีการสแกนเลย (ปิดปุ่ม "เทียบตารางงาน" เพื่อดูเฉพาะคนที่สแกนจริง)'}
-                </p>
-              </div>
             </div>
           ) : (
             <div className="overflow-auto max-h-[65vh]">
