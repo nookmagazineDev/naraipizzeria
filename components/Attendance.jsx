@@ -329,6 +329,17 @@ export default function Attendance() {
 
   const people = useMemo(() => new Set(daily.map((d) => d.empCode)).size, [daily]);
 
+  // ประเภทพนักงาน (DAY / DAY9 / P/T / F/T) — มาจากช่อง "สถานะ" ในตารางงานที่สาขาลงไว้ (ตัวเดียวกับรายงานเงินเดือน)
+  // เป็นของตัวคน ไม่ใช่ของวัน: วันที่ไม่มีในตารางงาน (มีแต่สแกน) ยืมจากวันอื่นของคนเดียวกันในช่วงที่ดึงมา
+  const empTypeBy = useMemo(() => {
+    const m = new Map();
+    for (const d of merged) {
+      if (d.plan?.empType && !m.has(d.empCode)) m.set(d.empCode, d.plan.empType);
+    }
+    return m;
+  }, [merged]);
+  const empTypeOf = (d) => d.plan?.empType || empTypeBy.get(d.empCode) || '';
+
   // สรุปให้เห็นภาพรวมของช่วงที่ดึงมา — ใช้บอกผู้ใช้ว่าคอลัมน์ฝั่งตารางงานมาจากไหน
   const planStats = useMemo(() => ({
     withPlan: daily.filter((d) => d.plan).length,
@@ -510,9 +521,9 @@ export default function Attendance() {
 
     const aoa = view === 'daily'
       ? [
-          ['วันที่', 'รหัส', 'ชื่อ', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...otHead, ...lateHead, ...statusHead, 'รวม (ชม.:นาที)', 'พัก (ชม.:นาที)', 'สุทธิ (ชม.:นาที)', 'จำนวนสแกน', 'แก้ไขเวลา'],
+          ['วันที่', 'รหัส', 'ชื่อ', 'ประเภท', 'สาขา', ...planHead, 'เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', ...otHead, ...lateHead, ...statusHead, 'รวม (ชม.:นาที)', 'พัก (ชม.:นาที)', 'สุทธิ (ชม.:นาที)', 'จำนวนสแกน', 'แก้ไขเวลา'],
           ...daily.map((d) => [
-            d.date, d.empCode, d.name, d.branch,
+            d.date, d.empCode, d.name, empTypeOf(d), d.branch,
             ...planCells(d),
             hhmm(d.first), d.breakOut ? hhmm(d.breakOut) : '', d.breakIn ? hhmm(d.breakIn) : '', d.last ? hhmm(d.last) : '',
             ...otCells(d),
@@ -808,14 +819,14 @@ export default function Attendance() {
             </div>
           ) : view === 'daily' ? (
             <div className="overflow-auto max-h-[65vh]">
-              {/* 22 คอลัมน์ตอนเปิดเทียบตารางงาน — บังคับความกว้างขั้นต่ำไว้ให้เลื่อนแนวนอนแทนที่จะบีบจนอ่านไม่ออก */}
+              {/* 24 คอลัมน์ตอนเปิดเทียบตารางงาน — บังคับความกว้างขั้นต่ำไว้ให้เลื่อนแนวนอนแทนที่จะบีบจนอ่านไม่ออก */}
               <table className={`w-full text-sm border-collapse${showPlan ? ' min-w-max' : ''}`}>
                 {/* เปิดเทียบตารางงาน = หัวตารางสองชั้น แยกให้เห็นชัดว่าฝั่งไหนคือเวลาที่สาขาลงไว้
                     ฝั่งไหนคือเวลาที่สแกนจริง · ปิดไว้ = ตารางสั้นแบบเดิม */}
                 {showPlan ? (
                   <thead className="text-[11px] text-slate-600">
                     <tr>
-                      {['วันที่', 'รหัส', 'ชื่อ', 'สาขา'].map((h) => (
+                      {['วันที่', 'รหัส', 'ชื่อ', 'ประเภท', 'สาขา'].map((h) => (
                         <th key={h} rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
                       ))}
                       <th colSpan={5} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
@@ -845,7 +856,7 @@ export default function Attendance() {
                 ) : (
                   <thead>
                     <tr className="text-slate-600 text-xs">
-                      {['วันที่', 'รหัส', 'ชื่อ', 'สาขา'].map((h) => (
+                      {['วันที่', 'รหัส', 'ชื่อ', 'ประเภท', 'สาขา'].map((h) => (
                         <th key={h} className="px-4 py-2.5 text-left sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
                       ))}
                       {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก'].map((h) => (
@@ -867,6 +878,11 @@ export default function Attendance() {
                       <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{d.date}</td>
                       <td className="px-3 py-2 font-mono text-xs text-slate-500">{d.empCode}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{d.name || <Dash />}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {empTypeOf(d)
+                          ? <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-600">{empTypeOf(d)}</span>
+                          : <Dash />}
+                      </td>
                       <td className="px-3 py-2 text-xs text-slate-400">{d.branch || <Dash />}</td>
 
                       {/* ฝั่งตารางงานที่สาขาลงไว้ — วันหยุด/วันลาไม่มีเวลาให้แสดง จึงรวมทั้งห้าช่องเป็นช่องเดียว
@@ -937,7 +953,7 @@ export default function Attendance() {
                     OT/สาย มีเฉพาะตอนเปิดเทียบตารางงาน ส่วนชั่วโมงทำงานรวมขึ้นทั้งสองแบบ */}
                 <tfoot className="text-slate-700 font-semibold [&_td]:sticky [&_td]:bottom-0 [&_td]:bg-slate-100 [&_td]:border-t-2 [&_td]:border-slate-300">
                   <tr>
-                    <td colSpan={4} className="px-3 py-2">รวม</td>
+                    <td colSpan={5} className="px-3 py-2">รวม</td>
                     {showPlan ? (
                       <>
                         <td colSpan={5} className="border-l" />
