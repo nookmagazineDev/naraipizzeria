@@ -112,8 +112,11 @@ const statusText = (d) => {
 
 // ช่วงวันที่สำเร็จรูป — คิดจาก "วันนี้" ตามเวลาเครื่องผู้ใช้
 // สัปดาห์นี้ = จันทร์ถึงวันนี้ · เดือนนี้ = วันที่ 1 ถึงวันนี้ · เดือนที่แล้ว = ทั้งเดือน
+// งวด 21–20 / 1–15 / 16–สิ้นเดือน คิดแบบเดียวกับหน้ารายงานเงินเดือน (ตัดท้ายไม่ให้เกินวันนี้)
+// จะได้ดึงช่วงเดียวกันมาเทียบยอดสายกันได้ตรงๆ
 function presetRange(key, now = new Date()) {
   const t = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const cap = (d) => (d > t ? t : d);
   switch (key) {
     case 'today':
       return { start: fmtDate(t), end: fmtDate(t) };
@@ -129,6 +132,34 @@ function presetRange(key, now = new Date()) {
       const last = new Date(t.getFullYear(), t.getMonth(), 0); // วันสุดท้ายของเดือนที่แล้ว
       return { start: fmtDate(first), end: fmtDate(last) };
     }
+    case 'firstHalf':
+      return {
+        start: fmtDate(new Date(t.getFullYear(), t.getMonth(), 1)),
+        end: fmtDate(cap(new Date(t.getFullYear(), t.getMonth(), 15))),
+      };
+    case 'secondHalf': {
+      // ยังไม่ถึงวันที่ 16 ของเดือนนี้ = งวดหลังที่ปิดแล้วคือของเดือนที่แล้ว
+      const m = t.getDate() < 16 ? t.getMonth() - 1 : t.getMonth();
+      return {
+        start: fmtDate(new Date(t.getFullYear(), m, 16)),
+        end: fmtDate(cap(new Date(t.getFullYear(), m + 1, 0))),
+      };
+    }
+    // รอบเงินเดือนของร้าน: วันที่ 21 ของเดือนหนึ่ง ถึงวันที่ 20 ของเดือนถัดไป
+    case 'cycleThis': {
+      const m = t.getDate() >= 21 ? t.getMonth() : t.getMonth() - 1;
+      return {
+        start: fmtDate(new Date(t.getFullYear(), m, 21)),
+        end: fmtDate(cap(new Date(t.getFullYear(), m + 1, 20))),
+      };
+    }
+    case 'cycleLast': {
+      const m = (t.getDate() >= 21 ? t.getMonth() : t.getMonth() - 1) - 1;
+      return {
+        start: fmtDate(new Date(t.getFullYear(), m, 21)),
+        end: fmtDate(cap(new Date(t.getFullYear(), m + 1, 20))),
+      };
+    }
     default:
       return { start: fmtDate(t), end: fmtDate(t) };
   }
@@ -137,8 +168,12 @@ function presetRange(key, now = new Date()) {
 const PRESETS = [
   { key: 'today', label: 'วันนี้' },
   { key: 'thisWeek', label: 'สัปดาห์นี้' },
+  { key: 'cycleLast', label: 'งวดที่แล้ว 21–20' },
+  { key: 'cycleThis', label: 'งวดนี้ 21–20' },
   { key: 'thisMonth', label: 'เดือนนี้' },
   { key: 'lastMonth', label: 'เดือนที่แล้ว' },
+  { key: 'firstHalf', label: 'งวด 1–15' },
+  { key: 'secondHalf', label: 'งวด 16–สิ้นเดือน' },
 ];
 
 export default function Attendance() {
