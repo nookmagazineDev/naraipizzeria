@@ -338,17 +338,30 @@ export default function Attendance() {
     edited: daily.filter((d) => d.edited).length,
   }), [daily]);
 
-  // ยอดรวมท้ายตาราง (OT · รวมสาย) — นับตามแถวที่เห็นอยู่ ค้นหาคนเดียวก็เป็นยอดของคนนั้น
-  // late = null เมื่อไม่มีแถวไหนเทียบเวลาได้เลย (ขึ้น — แทน 0 ที่ดูเหมือนตรงเวลาทุกวัน)
+  // ยอดรวมท้ายตาราง (OT · รวมสาย · ชั่วโมงทำงาน) — นับตามแถวที่เห็นอยู่ ค้นหาคนเดียวก็เป็นยอดของคนนั้น
+  // late/ชั่วโมง = null เมื่อไม่มีแถวไหนมีค่าเลย (ขึ้น — แทน 0 ที่ดูเหมือนมีข้อมูล)
+  // ชั่วโมงทำงานรวมจากนาทีเต็มของแต่ละแถว (ปัดแบบเดียวกับที่แสดงทีละแถว และแบบเดียวกับในไฟล์ Excel)
+  // ไล่บวกตัวเลขในตารางเองแล้วต้องได้เท่ายอดรวม ไม่คลาดกัน 1 นาทีเพราะปัดเศษคนละที่
   const totals = useMemo(() => {
     let ot = 0;
     let late = null;
+    const mins = { hours: null, breakHours: null, netHours: null };
     for (const d of daily) {
       if (d.plan?.otHours > 0) ot += d.plan.otHours;
       const l = totalLateOf(d);
       if (l != null) late = (late || 0) + l;
+      for (const k of Object.keys(mins)) {
+        if (d[k] != null) mins[k] = (mins[k] || 0) + Math.round(d[k] * 60);
+      }
     }
-    return { ot: Math.round(ot * 100) / 100, late };
+    const toHours = (m) => (m == null ? null : m / 60);
+    return {
+      ot: Math.round(ot * 100) / 100,
+      late,
+      hours: toHours(mins.hours),
+      breakHours: toHours(mins.breakHours),
+      netHours: toHours(mins.netHours),
+    };
   }, [daily]);
 
   /* ---------------------- แก้เวลาสแกนในช่อง ---------------------- */
@@ -517,21 +530,27 @@ export default function Attendance() {
           ...filtered.map((r) => [r.time, r.empCode, r.name, r.stateLabel || r.state, r.area, r.terminal]),
         ];
 
-    // แถวรวมท้ายไฟล์ — ยอดเดียวกับแถวรวมบนหน้าเว็บ (OT · รวมสาย) เขียนเป็นสูตร SUM แก้ตัวเลขในไฟล์แล้วยอดตาม
-    // ใส่ค่าที่คิดไว้แล้วไปด้วย โปรแกรมที่ไม่คำนวณสูตรใหม่ตอนเปิด (เช่นพรีวิวในมือถือ) ก็ยังเห็นยอด
-    const totalRow = view === 'daily' && showPlan && daily.length > 0;
+    // แถวรวมท้ายไฟล์ — ยอดเดียวกับแถวรวมบนหน้าเว็บ (OT · รวมสาย · ชั่วโมงทำงาน) เขียนเป็นสูตร SUM
+    // แก้ตัวเลขในไฟล์แล้วยอดตาม · ใส่ค่าที่คิดไว้แล้วไปด้วย โปรแกรมที่ไม่คำนวณสูตรใหม่ตอนเปิด
+    // (เช่นพรีวิวในมือถือ) ก็ยังเห็นยอด · OT/สาย มีเฉพาะตอนเปิดเทียบตารางงาน ชั่วโมงทำงานมีเสมอ
+    const totalRow = view === 'daily' && daily.length > 0;
     if (totalRow) {
       const lastRow = daily.length + 1;   // เลขแถวแบบ Excel ของข้อมูลแถวสุดท้าย (แถว 1 = หัวตาราง)
-      const sumCell = (c, v) => {
-        const col = XLSX.utils.encode_col(c);
-        return { t: 'n', v, f: `SUM(${col}2:${col}${lastRow})` };
-      };
       const row = aoa[0].map(() => '');
       row[0] = 'รวม';
-      const otCol = aoa[0].indexOf('OT (ชม.)');
-      const lateCol = aoa[0].indexOf('รวมสาย (นาที)');
-      row[otCol] = sumCell(otCol, totals.ot);
-      row[lateCol] = sumCell(lateCol, totals.late ?? 0);
+      const putSum = (head, v, extra = {}) => {
+        const c = aoa[0].indexOf(head);
+        if (c < 0) return;
+        const col = XLSX.utils.encode_col(c);
+        row[c] = { t: 'n', v, f: `SUM(${col}2:${col}${lastRow})`, ...extra };
+      };
+      putSum('OT (ชม.)', totals.ot);
+      putSum('รวมสาย (นาที)', totals.late ?? 0);
+      // ชั่วโมงเป็นเศษส่วนของวันแบบเดียวกับ hourCell — รูปแบบ [h]:mm รวมเกิน 24 ชม. ได้ไม่วนกลับเป็น 0
+      const hourSum = (head, h) => putSum(head, (h ?? 0) / 24, { z: '[h]:mm' });
+      hourSum('รวม (ชม.:นาที)', totals.hours);
+      hourSum('พัก (ชม.:นาที)', totals.breakHours);
+      hourSum('สุทธิ (ชม.:นาที)', totals.netHours);
       aoa.push(row);
     }
 
@@ -914,26 +933,33 @@ export default function Attendance() {
                     </tr>
                   ))}
                 </tbody>
-                {/* แถวรวมยอด — ติดขอบล่างไว้ เลื่อนดูรายวันแล้วยังเห็นยอดรวมอยู่ */}
-                {showPlan && (
-                  <tfoot className="text-slate-700 font-semibold [&_td]:sticky [&_td]:bottom-0 [&_td]:bg-slate-100 [&_td]:border-t-2 [&_td]:border-slate-300">
-                    <tr>
-                      <td colSpan={4} className="px-3 py-2">รวม</td>
-                      <td colSpan={5} className="border-l" />
-                      <td colSpan={4} className="border-l" />
-                      <td className="px-3 py-2 text-center">
-                        {totals.ot > 0 ? <span className="font-mono text-violet-700">{totals.ot}</span> : <Dash />}
-                      </td>
-                      <td colSpan={3} className="border-l" />
-                      <td className="px-3 py-2 text-center" title={totals.late > 0 ? `${hm(totals.late / 60)} ชม.:นาที` : undefined}>
-                        {lateCell(totals.late)}
-                      </td>
-                      <td className="border-l" />
-                      <td colSpan={3} className="border-l" />
-                      <td className="border-l" />
-                    </tr>
-                  </tfoot>
-                )}
+                {/* แถวรวมยอด — ติดขอบล่างไว้ เลื่อนดูรายวันแล้วยังเห็นยอดรวมอยู่
+                    OT/สาย มีเฉพาะตอนเปิดเทียบตารางงาน ส่วนชั่วโมงทำงานรวมขึ้นทั้งสองแบบ */}
+                <tfoot className="text-slate-700 font-semibold [&_td]:sticky [&_td]:bottom-0 [&_td]:bg-slate-100 [&_td]:border-t-2 [&_td]:border-slate-300">
+                  <tr>
+                    <td colSpan={4} className="px-3 py-2">รวม</td>
+                    {showPlan ? (
+                      <>
+                        <td colSpan={5} className="border-l" />
+                        <td colSpan={4} className="border-l" />
+                        <td className="px-3 py-2 text-center">
+                          {totals.ot > 0 ? <span className="font-mono text-violet-700">{totals.ot}</span> : <Dash />}
+                        </td>
+                        <td colSpan={3} className="border-l" />
+                        <td className="px-3 py-2 text-center" title={totals.late > 0 ? `${hm(totals.late / 60)} ชม.:นาที` : undefined}>
+                          {lateCell(totals.late)}
+                        </td>
+                        <td className="border-l" />
+                      </>
+                    ) : (
+                      <td colSpan={4} />
+                    )}
+                    <td className={`px-3 py-2 text-right font-mono text-slate-500${showPlan ? ' border-l' : ''}`}>{hm(totals.hours)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-400">{hm(totals.breakHours)}</td>
+                    <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">{hm(totals.netHours)}</td>
+                    <td className={showPlan ? 'border-l' : undefined} />
+                  </tr>
+                </tfoot>
               </table>
             </div>
           ) : (
