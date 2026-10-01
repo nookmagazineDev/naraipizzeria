@@ -582,6 +582,10 @@ export default function QcRdItems() {
       setFormMsg({ ok: false, msg: `มีรหัส ${code} อยู่แล้วในรายการ — ถ้าจะแก้ตัวเดิม ให้ปิดกล่องนี้แล้วกด "แก้ไข" ที่แถวนั้นแทน` }); return;
     }
     if (!editItem.name.trim()) { setFormMsg({ ok: false, msg: 'กรุณากรอกชื่อวัตถุดิบ' }); return; }
+    const minReq = String(editItem.requestUnit || '').trim();
+    if (minReq && !(/^\d*\.?\d+$/.test(minReq) && Number(minReq) > 0)) {
+      setFormMsg({ ok: false, msg: 'จำนวนเบิกขั้นต่ำต้องเป็นตัวเลขมากกว่า 0 (หรือเว้นว่าง)' }); return;
+    }
     setSavingItem(true);
     setToast(null);
     setFormMsg(null);
@@ -1054,8 +1058,9 @@ export default function QcRdItems() {
                 </div>
                 <div>
                   <label className="text-xs font-bold text-slate-500">จำนวนเบิกขั้นต่ำ <span className="font-normal">(สาขาต้องเบิกอย่างน้อยเท่านี้)</span></label>
-                  <input value={editItem.requestUnit}
-                    onChange={e => setEditItem(m => ({ ...m, requestUnit: e.target.value }))} placeholder="เช่น 1"
+                  {/* รับเฉพาะตัวเลข — ใช้ช่องข้อความ + กรองเอง (ไม่ใช้ type=number) ค่าเก่าที่เคยเป็นชื่อหน่วยจะได้ยังเห็นแล้วแก้ได้ */}
+                  <input inputMode="decimal" value={editItem.requestUnit}
+                    onChange={e => setEditItem(m => ({ ...m, requestUnit: e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1') }))} placeholder="เช่น 1"
                     className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
               </div>
