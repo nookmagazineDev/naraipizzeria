@@ -203,6 +203,7 @@ export default function Attendance() {
   const [editing, setEditing] = useState(null);      // { key, slot, value, row } ช่องที่กำลังกรอกอยู่
   const [savingEdit, setSavingEdit] = useState(false);
   const [editMsg, setEditMsg] = useState(null);      // ผลของการกดบันทึกล่าสุด { ok, msg }
+  const [punchView, setPunchView] = useState(null);  // แถวรายวันที่กดดูทุกครั้งที่สแกนอยู่ (null = ปิด)
 
   // รับวันที่/สาขามาเป็นพารามิเตอร์ได้ เพื่อให้ปุ่มช่วงสำเร็จรูปกดแล้วดึงได้เลย
   // (ไม่ต้องรอ state รอบถัดไป)
@@ -388,6 +389,24 @@ export default function Attendance() {
   // late/ชั่วโมง = null เมื่อไม่มีแถวไหนมีค่าเลย (ขึ้น — แทน 0 ที่ดูเหมือนมีข้อมูล)
   // ชั่วโมงทำงานรวมจากนาทีเต็มของแต่ละแถว (ปัดแบบเดียวกับที่แสดงทีละแถว และแบบเดียวกับในไฟล์ Excel)
   // ไล่บวกตัวเลขในตารางเองแล้วต้องได้เท่ายอดรวม ไม่คลาดกัน 1 นาทีเพราะปัดเศษคนละที่
+  // ทุกครั้งที่สแกนของวัน/คนที่กดดูอยู่ — ดึงจากเวลาดิบของเครื่องสแกน เรียงตามเวลา
+  // พร้อมบอกว่าแต่ละครั้งถูกนับเป็นช่องไหน (ลำดับเดียวกับ summarizeDaily)
+  const punchList = useMemo(() => {
+    if (!punchView) return [];
+    const list = (rows || [])
+      .filter((r) => r.date === punchView.date && String(r.empCode) === String(punchView.empCode))
+      .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+    const n = list.length;
+    return list.map((r, i) => {
+      let role = 'ไม่นับ (สแกนซ้ำ)';
+      if (i === 0) role = 'เข้า';
+      else if (i === n - 1) role = 'ออก';
+      else if (i === 1 && n >= 3) role = 'ออกเบรค';
+      else if (i === 2 && n >= 4) role = 'เข้าเบรค';
+      return { ...r, role };
+    });
+  }, [rows, punchView]);
+
   const totals = useMemo(() => {
     let ot = 0;
     let late = null;
@@ -980,7 +999,17 @@ export default function Attendance() {
                       <td className={`px-3 py-2 text-right font-mono text-slate-500${showPlan ? ' border-l border-slate-200' : ''}`}>{hm(d.hours)}</td>
                       <td className="px-3 py-2 text-right font-mono text-slate-400">{hm(d.breakHours)}</td>
                       <td className="px-3 py-2 text-right font-mono font-bold text-slate-800">{hm(d.netHours)}</td>
-                      <td className={`px-3 py-2 text-right font-mono text-slate-400${showPlan ? ' border-l border-slate-200' : ''}`}>{d.count}</td>
+                      <td className={`px-3 py-2 text-right font-mono text-slate-400${showPlan ? ' border-l border-slate-200' : ''}`}>
+                        {d.count > 0 ? (
+                          <button
+                            onClick={() => setPunchView(d)}
+                            title="กดดูทุกครั้งที่สแกนของวันนี้"
+                            className="px-2 py-0.5 rounded-md text-amber-700 underline decoration-dotted underline-offset-2 hover:bg-amber-100"
+                          >
+                            {d.count}
+                          </button>
+                        ) : d.count}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1042,6 +1071,60 @@ export default function Attendance() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ทุกครั้งที่สแกนของวัน/คนที่กดจากช่อง "สแกน" */}
+      {punchView && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" onClick={() => setPunchView(null)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="font-semibold text-slate-800">ทุกครั้งที่สแกน · {punchView.date}</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {punchView.empCode} · {punchView.name || '—'} · {punchList.length} ครั้ง
+                </p>
+              </div>
+              <button onClick={() => setPunchView(null)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600" title="ปิด">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="overflow-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="text-slate-600 text-xs">
+                    {['#', 'เวลา', 'นับเป็น', 'ประเภท', 'สาขา', 'เครื่อง'].map((h) => (
+                      <th key={h} className="px-3 py-2 text-left sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {punchList.map((r, i) => (
+                    <tr key={`${r.time}-${i}`}>
+                      <td className="px-3 py-2 text-xs text-slate-400">{i + 1}</td>
+                      <td className="px-3 py-2 font-mono font-semibold whitespace-nowrap">{hhmm(r.time)}<span className="text-slate-400 font-normal">{String(r.time || '').slice(16, 19)}</span></td>
+                      <td className={`px-3 py-2 text-xs whitespace-nowrap ${r.role.startsWith('ไม่นับ') ? 'text-slate-400' : 'text-slate-700'}`}>{r.role}</td>
+                      <td className="px-3 py-2 text-xs">
+                        {r.stateLabel
+                          ? <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{r.stateLabel}</span>
+                          : <span className="text-slate-300">{r.state || '—'}</span>}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-400">{r.area || '—'}</td>
+                      <td className="px-3 py-2 text-xs text-slate-400">{r.terminal || '—'}</td>
+                    </tr>
+                  ))}
+                  {punchList.length === 0 && (
+                    <tr><td colSpan={6} className="px-3 py-6 text-center text-xs text-slate-400">ไม่พบเวลาสแกนดิบของวันนี้</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {punchView.edited && (
+              <p className="px-5 py-3 border-t border-slate-100 text-xs text-amber-700">
+                วันนี้มีเวลาที่แก้ด้วยมือ — รายการนี้เป็นเวลาดิบจากเครื่องสแกน ส่วนในตารางแสดงเวลาที่แก้แล้ว
+              </p>
+            )}
+          </div>
         </div>
       )}
 
