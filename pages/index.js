@@ -2825,8 +2825,14 @@ export default function App() {
                         setSalesPage(1);
                         setDetailPage(1);
                         setDailyPage(1);
+                        // เปลี่ยนสาขาแล้วดึงข้อมูลใหม่ทันที — ข้อมูลที่ถืออยู่ดึงมาตามสาขาเดิม
+                        // (เลือกสาขาเดียว = ดึงเฉพาะสาขานั้น) ถ้าแค่กรองชุดเดิม ตัวเลขจะเป็นของสาขาเก่า
+                        // ทั้งที่หัวข้อขึ้นสาขาใหม่ เช่น เลือก "ทั้งหมด" แต่เห็นแค่ยอดของสาขาที่ดึงไว้รอบก่อน
+                        // (loadData อ่านสาขาจาก state รอบถัดไป ผ่าน pendingSearch แบบเดียวกับปุ่มเลือกช่วงด่วน)
+                        if (loaded) setPendingSearch(true);
                       }} 
-                      className="border border-slate-200 bg-white rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      disabled={loading}
+                      className="border border-slate-200 bg-white rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:opacity-60"
                     >
                       <option value="">— ทั้งหมดทุกสาขา —</option>
                       {OUTLET_LIST.map(o => (
