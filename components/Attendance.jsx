@@ -84,15 +84,14 @@ const breakPlanCell = (plan) => {
 /**
  * OT ของวันนั้น (ชั่วโมง) = OT ที่สาขาลงไว้ในตารางงาน + 1 ชม. ของ DAY9
  *
- * DAY9 คิดด้วย dayWork() ตัวเดียวกับรายงานเงินเดือน (ทำงานหักสายแล้วครบ 8 ชม. = ย้าย 1 ชม. เป็น OT)
- * ตัวเลขในหน้านี้จึงรวมกันได้เท่ายอด OT ในรายงานเงินเดือน · วันที่ไม่มีสแกนเลยไม่ให้ OT ของ DAY9
- * (ไม่มีหลักฐานว่ามาทำงานครบ) — วันหยุด/ลาไม่มีเวลาทำงานอยู่แล้ว
+ * คิดด้วย dayWork() ตัวเดียวกับที่รายงานเงินเดือนใช้รวมยอด OT (ทำงานหักสายแล้วครบ 8 ชม. = DAY9
+ * ได้ OT 1 ชม. · วันที่ไม่มีสแกนเลยไม่ได้) ยอดในหน้านี้จึงเท่ายอด OT ในรายงานเงินเดือนเสมอ
  * วางไว้ท้ายฝั่ง "สแกนจริง" เพราะอ่านคู่กับเวลาออกจริง
  */
 const otOf = (d) => {
-  const planOt = d?.plan?.otHours > 0 ? Number(d.plan.otHours) : 0;
-  const day9 = d?.plan && !d.plan.isOff && !d.noScan ? dayWork(d).day9Ot / 60 : 0;
-  return { planOt, day9, total: Math.round((planOt + day9) * 100) / 100 };
+  const w = dayWork(d);
+  const day9 = w.day9Ot / 60;
+  return { planOt: w.otHours - day9, day9, total: Math.round(w.otHours * 100) / 100 };
 };
 
 const otCell = (d) => {
