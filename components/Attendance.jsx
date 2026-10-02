@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { hhmm, hoursToHm, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel, totalLateOf } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
+import { dayWork } from '../lib/payroll';
 
 /*
  * NARAI OFFICE — ดูสแกนหน้า (เข้า-ออกงาน)
@@ -81,17 +82,29 @@ const breakPlanCell = (plan) => {
 };
 
 /**
- * OT ของวันนั้น (ชั่วโมง) — มาจากช่อง OT ในตารางงานที่สาขาลงไว้ ไม่ใช่ตัวเลขที่คิดจากเวลาสแกน
- * วางไว้ท้ายฝั่ง "สแกนจริง" เพราะอ่านคู่กับเวลาออกจริง (ทำเกินเวลาที่ลงไว้เท่าไหร่)
+ * OT ของวันนั้น (ชั่วโมง) = OT ที่สาขาลงไว้ในตารางงาน + 1 ชม. ของ DAY9
+ *
+ * DAY9 คิดด้วย dayWork() ตัวเดียวกับรายงานเงินเดือน (ทำงานหักสายแล้วครบ 8 ชม. = ย้าย 1 ชม. เป็น OT)
+ * ตัวเลขในหน้านี้จึงรวมกันได้เท่ายอด OT ในรายงานเงินเดือน · วันที่ไม่มีสแกนเลยไม่ให้ OT ของ DAY9
+ * (ไม่มีหลักฐานว่ามาทำงานครบ) — วันหยุด/ลาไม่มีเวลาทำงานอยู่แล้ว
+ * วางไว้ท้ายฝั่ง "สแกนจริง" เพราะอ่านคู่กับเวลาออกจริง
  */
-const otCell = (plan) => {
-  if (!(plan?.otHours > 0)) return <Dash />;
+const otOf = (d) => {
+  const planOt = d?.plan?.otHours > 0 ? Number(d.plan.otHours) : 0;
+  const day9 = d?.plan && !d.plan.isOff && !d.noScan ? dayWork(d).day9Ot / 60 : 0;
+  return { planOt, day9, total: Math.round((planOt + day9) * 100) / 100 };
+};
+
+const otCell = (d) => {
+  const { planOt, day9, total } = otOf(d);
+  if (!(total > 0)) return <Dash />;
+  const parts = [];
+  if (planOt) parts.push(`ลงไว้ในตารางงาน ${planOt} ชม.${d.plan?.otApprover ? ` (ผู้อนุมัติ ${d.plan.otApprover})` : ''}`);
+  if (day9) parts.push(`DAY9 ทำงานครบ ${day9} ชม.`);
   return (
-    <span
-      className="font-mono font-semibold text-violet-700"
-      title={plan.otApprover ? `ผู้อนุมัติ OT: ${plan.otApprover}` : 'OT ที่ลงไว้ในตารางงาน'}
-    >
-      {plan.otHours}
+    <span className="font-mono font-semibold text-violet-700" title={parts.join(' + ')}>
+      {total}
+      {day9 > 0 && <span className="ml-0.5 text-[9px] font-normal text-violet-500">D9</span>}
     </span>
   );
 };
@@ -412,7 +425,7 @@ export default function Attendance() {
     let late = null;
     const mins = { hours: null, breakHours: null, netHours: null };
     for (const d of daily) {
-      if (d.plan?.otHours > 0) ot += d.plan.otHours;
+      ot += otOf(d).total;
       const l = totalLateOf(d);
       if (l != null) late = (late || 0) + l;
       for (const k of Object.keys(mins)) {
@@ -547,17 +560,17 @@ export default function Attendance() {
     const tag = `${branch || 'ALL'}_${startDate}${startDate === endDate ? '' : `_${endDate}`}`;
     // เปิดเทียบตารางงานไว้ = ใส่ฝั่ง "ที่ลงไว้" กับนาทีที่สายลงไฟล์ด้วย
     const planHead = showPlan
-      ? ['ลงไว้ เข้า', 'ลงไว้ ออกเบรค', 'ลงไว้ เข้าเบรค', 'ลงไว้ ออก', 'ลงไว้ เบรค (ชม.:นาที)']
+      ? ['ลงไว้ เข้า', 'ลงไว้ ออก', 'ลงไว้ เบรค (ชม.:นาที)']
       : [];
-    // OT มาจากตารางงานเหมือนกัน แต่วางท้ายฝั่งสแกนจริงให้ตรงกับที่เห็นบนหน้าเว็บ
+    // OT = ที่ลงไว้ในตารางงาน + DAY9 (ดู otOf) วางท้ายฝั่งสแกนจริงให้ตรงกับที่เห็นบนหน้าเว็บ
     const otHead = showPlan ? ['OT (ชม.)'] : [];
     // สถานะ/ลา อยู่ก่อนช่องเวลาทำงาน ให้ลำดับคอลัมน์ในไฟล์ตรงกับที่เห็นบนหน้าเว็บ
     const statusHead = showPlan ? ['สถานะ', 'หมายเหตุตารางงาน'] : [];
     const lateHead = showPlan ? ['เข้าสาย (นาที)', 'เบรคสาย (นาที)', 'ออกก่อน (นาที)', 'รวมสาย (นาที)'] : [];
     const planCells = (d) => (showPlan
-      ? [d.plan?.in || '', d.plan?.breakOut || '', d.plan?.breakIn || '', d.plan?.out || '', breakPlanText(d.plan)]
+      ? [d.plan?.in || '', d.plan?.out || '', breakPlanText(d.plan)]
       : []);
-    const otCells = (d) => (showPlan ? [d.plan?.otHours > 0 ? d.plan.otHours : ''] : []);
+    const otCells = (d) => (showPlan ? [otOf(d).total || ''] : []);
     const statusCells = (d) => (showPlan
       ? [statusText(d), [...(d.plan?.reasons || []), ...chipNotes(d.plan)].join(', ')]
       : []);
@@ -883,7 +896,7 @@ export default function Attendance() {
                       {['วันที่', 'รหัส', 'ชื่อ', 'ประเภท', 'สาขา'].map((h) => (
                         <th key={h} rowSpan={2} className="h-8 px-3 text-left sticky top-0 bg-slate-50 border-b border-slate-200">{h}</th>
                       ))}
-                      <th colSpan={5} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
+                      <th colSpan={3} className="h-8 px-3 text-center sticky top-0 bg-indigo-100 text-indigo-800 border-b border-l border-slate-200 font-semibold">ตารางงานที่ลงไว้</th>
                       <th colSpan={5} className="h-8 px-3 text-center sticky top-0 bg-emerald-100 text-emerald-800 border-b border-l border-slate-200 font-semibold">สแกนจริง</th>
                       <th colSpan={4} className="h-8 px-3 text-center sticky top-0 bg-rose-100 text-rose-800 border-b border-l border-slate-200 font-semibold">สาย (นาที)</th>
                       {/* สถานะ/ลา ไม่ได้เป็นของฝั่งไหนโดยเฉพาะ (มีทั้งเหตุผลการลาและธง "ไม่มีสแกน")
@@ -893,7 +906,8 @@ export default function Attendance() {
                       <th rowSpan={2} className="h-8 px-3 text-right sticky top-0 bg-slate-50 border-b border-l border-slate-200">สแกน</th>
                     </tr>
                     <tr>
-                      {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'เบรค'].map((h, i) => (
+                      {/* ตารางงานลงแค่เวลาเข้า-ออก + ระยะเบรค (ช่วงเวลาออก/เข้าเบรคแทบไม่มีใครลง) */}
+                      {['เข้า', 'ออก', 'เบรค'].map((h, i) => (
                         <th key={`p${h}`} className={`px-3 py-1.5 text-center sticky top-8 bg-indigo-50 border-b border-slate-200 font-normal${i === 0 ? ' border-l' : ''}`}>{h}</th>
                       ))}
                       {['เข้า', 'ออกเบรค', 'เข้าเบรค', 'ออก', 'OT'].map((h, i) => (
@@ -939,17 +953,15 @@ export default function Attendance() {
                       </td>
                       <td className="px-3 py-2 text-xs text-slate-400">{d.branch || <Dash />}</td>
 
-                      {/* ฝั่งตารางงานที่สาขาลงไว้ — วันหยุด/วันลาไม่มีเวลาให้แสดง จึงรวมทั้งห้าช่องเป็นช่องเดียว
+                      {/* ฝั่งตารางงานที่สาขาลงไว้ — วันหยุด/วันลาไม่มีเวลาให้แสดง จึงรวมทั้งสามช่องเป็นช่องเดียว
                           แล้วบอกไปเลยว่าวันนั้นลงไว้ว่าอะไร (เหมือนช่องหยุดในหน้าลงตารางของ Narai-branch) */}
                       {showPlan && (d.plan?.isOff ? (
-                        <td colSpan={5} className={`px-3 py-2 text-center border-l border-slate-200 ${d.plan.offPaid ? 'bg-amber-50' : 'bg-rose-50/60'}`}>
+                        <td colSpan={3} className={`px-3 py-2 text-center border-l border-slate-200 ${d.plan.offPaid ? 'bg-amber-50' : 'bg-rose-50/60'}`}>
                           <span className={`font-semibold ${d.plan.offPaid ? 'text-amber-700' : 'text-rose-700'}`}>⊖ {d.plan.offLabel}</span>
                         </td>
                       ) : (
                         <>
                           <td className="px-3 py-2 text-center bg-indigo-50/40 border-l border-slate-200">{timeCell(d.plan?.in, 'text-indigo-700')}</td>
-                          <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.breakOut, 'text-indigo-500')}</td>
-                          <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.breakIn, 'text-indigo-500')}</td>
                           <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.out, 'text-indigo-700')}</td>
                           {/* ระยะเบรคที่อนุญาตของวันนั้น — ตัวเดียวกับที่ใช้คิด "เบรคสาย" ตอนไม่ได้ลงช่วงเวลาไว้ */}
                           <td className="px-3 py-2 text-center bg-indigo-50/40 text-xs">{breakPlanCell(d.plan)}</td>
@@ -961,7 +973,7 @@ export default function Attendance() {
                       <td className="px-3 py-2 text-center">{scanCell(d, 'breakOut', 'breakOut', 'text-amber-600')}</td>
                       <td className="px-3 py-2 text-center">{scanCell(d, 'breakIn', 'breakIn', 'text-amber-600')}</td>
                       <td className="px-3 py-2 text-center">{scanCell(d, 'out', 'last', 'font-semibold text-rose-700')}</td>
-                      {showPlan && <td className="px-3 py-2 text-center bg-violet-50/40">{otCell(d.plan)}</td>}
+                      {showPlan && <td className="px-3 py-2 text-center bg-violet-50/40">{otCell(d)}</td>}
 
                       {/* สรุปส่วนต่าง */}
                       {showPlan && (
@@ -1020,7 +1032,7 @@ export default function Attendance() {
                     <td colSpan={5} className="px-3 py-2">รวม</td>
                     {showPlan ? (
                       <>
-                        <td colSpan={5} className="border-l" />
+                        <td colSpan={3} className="border-l" />
                         <td colSpan={4} className="border-l" />
                         <td className="px-3 py-2 text-center">
                           {totals.ot > 0 ? <span className="font-mono text-violet-700">{totals.ot}</span> : <Dash />}
