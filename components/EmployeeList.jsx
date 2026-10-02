@@ -289,6 +289,7 @@ export default function EmployeeList() {
                       </div>
                       <div className="text-xs text-slate-500">รหัส: <span className="font-medium text-slate-700">{emp.hrCode}</span></div>
                       <div className="text-xs text-slate-500 truncate">ตำแหน่ง: {emp.position}</div>
+                      <div className="text-xs text-slate-500">เข้าทำงาน: <span className="font-medium text-purple-700">{formatDate(emp.startDate)}</span></div>
                     </div>
                   ))}
                 </div>
