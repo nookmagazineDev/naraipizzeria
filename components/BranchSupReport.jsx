@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
-  Search, Loader2, AlertCircle, Download, Store, Package, X, CalendarDays,
+  Search, Loader2, AlertCircle, Download, Store, Package, X, CalendarDays, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { useBranches } from '../lib/useBranches';
@@ -205,7 +205,7 @@ export default function BranchSupReport() {
       .map((r) => ({
         'วันที่': r.date, 'สาขา': r.branch.toUpperCase(), 'หมวด': CAT_LABEL[r.cat], 'รหัส': r.code,
         'รายการ': r.name, 'หน่วย': r.unit, 'จำนวน': r.qty, 'ราคา/หน่วย': r.price, 'มูลค่า': r.amount,
-        'ผู้บันทึก': r.recorder,
+        'ผู้บันทึก': r.recorder, 'เวลาบันทึก': r.savedAt, 'เวลาแก้ไข': r.editedAt,
       }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(raw), 'รายการทั้งหมด');
     const [f, t] = loadedRange || range;
@@ -437,7 +437,21 @@ function EmptyRow({ cols }) {
   );
 }
 
+/** วันที่กรอก/แก้ไขของแถว — ใช้ในรายละเอียดทุกจุดที่แสดงรายการทีละแถว */
+function EntryMeta({ r }) {
+  if (!r.recorder && !r.savedAt) return null;
+  return (
+    <div className="text-xs text-slate-400">
+      {r.recorder && <>โดย {r.recorder}</>}
+      {r.savedAt && <> · บันทึก {r.savedAt}</>}
+      {r.editedAt && <span className="text-amber-600"> · แก้ไข {r.editedAt}</span>}
+    </div>
+  );
+}
+
 function DetailDrawer({ detail, rows, view, setView, rangeText, onClose }) {
+  // แท็บ "แยกตามสาขา" ของสินค้า: กดสาขาเพื่อกางดูทีละวันที่กรอก
+  const [openBr, setOpenBr] = useState(null);
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -532,7 +546,7 @@ function DetailDrawer({ detail, rows, view, setView, rangeText, onClose }) {
                 <>
                   <thead>
                     <tr>
-                      <th className={`${TH} text-left`}>สาขา</th>
+                      <th className={`${TH} text-left`}>สาขา <span className="font-normal text-slate-400">(กดเพื่อดูวันที่กรอก)</span></th>
                       <th className={`${TH} text-right`}>จำนวนรวม</th>
                       <th className={`${TH} text-right`}>ราคาเฉลี่ย/หน่วย</th>
                       <th className={`${TH} text-right`}>วันที่ซื้อ</th>
@@ -541,16 +555,42 @@ function DetailDrawer({ detail, rows, view, setView, rangeText, onClose }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {list.map(([b, v]) => (
-                      <tr key={b}>
-                        <td className={`${TD} font-bold uppercase`}>{b}</td>
-                        <td className={`${TD} text-right`}>{qtyFmt(v.qty)} {first.unit}</td>
-                        <td className={`${TD} text-right`}>{baht(v.qty ? v.amount / v.qty : 0)}</td>
-                        <td className={`${TD} text-right`}>{v.days.size} วัน</td>
-                        <td className={`${TD} text-right font-bold`}>{baht(v.amount)}</td>
-                        <td className={`${TD} text-right`}>{total ? ((v.amount / total) * 100).toFixed(1) : '0.0'}%</td>
-                      </tr>
-                    ))}
+                    {list.map(([b, v]) => {
+                      const open = openBr === b;
+                      const entries = open
+                        ? rows.filter((r) => r.branch === b).sort((x, y) => y.date.localeCompare(x.date))
+                        : [];
+                      return [
+                        <tr key={b} onClick={() => setOpenBr(open ? null : b)}
+                          className={`cursor-pointer ${open ? 'bg-amber-50' : 'hover:bg-amber-50'}`}>
+                          <td className={`${TD} font-bold uppercase`}>
+                            <span className="inline-flex items-center gap-1">
+                              {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />} {b}
+                            </span>
+                          </td>
+                          <td className={`${TD} text-right`}>{qtyFmt(v.qty)} {first.unit}</td>
+                          <td className={`${TD} text-right`}>{baht(v.qty ? v.amount / v.qty : 0)}</td>
+                          <td className={`${TD} text-right`}>{v.days.size} วัน</td>
+                          <td className={`${TD} text-right font-bold`}>{baht(v.amount)}</td>
+                          <td className={`${TD} text-right`}>{total ? ((v.amount / total) * 100).toFixed(1) : '0.0'}%</td>
+                        </tr>,
+                        ...entries.map((r, i) => (
+                          <tr key={`${b}-${i}`} className="bg-amber-50/40 text-slate-600">
+                            <td className="px-3 py-2 pl-9 border-b border-slate-100">
+                              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                                <CalendarDays size={13} /> {thDate(r.date)}
+                              </span>
+                              <EntryMeta r={r} />
+                            </td>
+                            <td className="px-3 py-2 text-right border-b border-slate-100 whitespace-nowrap">{qtyFmt(r.qty)} {r.unit}</td>
+                            <td className="px-3 py-2 text-right border-b border-slate-100 whitespace-nowrap">{baht(r.price)}</td>
+                            <td className="border-b border-slate-100" />
+                            <td className="px-3 py-2 text-right border-b border-slate-100 whitespace-nowrap">{baht(r.amount)}</td>
+                            <td className="border-b border-slate-100" />
+                          </tr>
+                        )),
+                      ];
+                    })}
                   </tbody>
                   <tfoot className="font-bold bg-slate-50">
                     <tr>
@@ -593,7 +633,7 @@ function DetailDrawer({ detail, rows, view, setView, rangeText, onClose }) {
                                 <CatBadge cat={r.cat} short /> {r.name} <span className="text-slate-400">{r.code}</span>
                               </span>
                             ) : <span className="font-bold uppercase">{r.branch}</span>}
-                            {r.recorder && <span className="text-xs text-slate-400 ml-2">· {r.recorder}</span>}
+                            <EntryMeta r={r} />
                           </td>
                           <td className={`${TD} text-right`}>{qtyFmt(r.qty)} {r.unit}</td>
                           <td className={`${TD} text-right`}>{baht(r.price)}</td>

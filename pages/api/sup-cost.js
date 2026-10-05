@@ -3,9 +3,10 @@
 // อ่านชีท "ต้นทุนจากsup" (สเปรดชีต 1YXOaA…) — ชีทที่หน้า "กรอกรายจ่าย" ของ Narai-branch
 // เขียนลงผ่าน Apps Script action saveSupCost (สาขากรอกของที่ซื้อจากซัพพลายเออร์/ผักหน้าร้าน)
 // คอลัมน์: [0]วันที่ [1]สาขา [2]รหัส [3]ชื่อรายการ [4]หน่วย [5]จำนวน [6]ราคา/หน่วย [7]มูลค่ารวม [8]ผู้บันทึก
+//          [9]เวลาบันทึก [10]เวลาแก้ไข (Apps Script เขียนเป็นข้อความ dd/MM/yyyy HH:mm:ss)
 //
 // GET ?start=YYYY-MM-DD&end=YYYY-MM-DD[&branch=xxx]
-//   -> { status, data: [{ date, branch, code, name, unit, qty, price, amount, recorder, cat }] }
+//   -> { status, data: [{ date, branch, code, name, unit, qty, price, amount, recorder, savedAt, editedAt, cat }] }
 // cat = 'veg' (ผัก, ผลไม้) หรือ 'sup' (ซัพพลายเออร์) แยกตามช่วงรหัสเดียวกับหน้ากรอกของสาขา
 //
 // ชีทนี้ยังไม่ได้ย้ายเข้า SQL (Narai-branch ก็ยังอ่านจากชีทเหมือนกัน — ดู api/stockcount.js ฝั่งนั้น)
@@ -43,6 +44,19 @@ const num = (c) => {
   return Number.isFinite(n) ? n : 0;
 };
 const str = (c) => (c?.v == null ? '' : String(c.v).trim());
+
+// เวลาบันทึก/แก้ไข -> "dd/MM/yyyy HH:mm" (ตัดวินาที)
+// ปกติเป็นข้อความอยู่แล้ว แต่ถ้าชีทแปลงเป็นวันที่-เวลาให้ gviz จะส่ง "Date(y,m,d,h,mi,s)" (เดือนเริ่ม 0)
+function cellDateTime(c) {
+  if (!c || c.v == null || c.v === '') return '';
+  const s = String(c.v).trim();
+  const m = s.match(/^Date\((\d+),(\d+),(\d+)(?:,(\d+),(\d+))?/);
+  if (m) {
+    const p2 = (n) => String(n || 0).padStart(2, '0');
+    return `${p2(m[3])}/${p2(+m[2] + 1)}/${m[1]} ${p2(m[4])}:${p2(m[5])}`;
+  }
+  return s.replace(/^(\d{1,2}\/\d{1,2}\/\d{4} \d{1,2}:\d{2}):\d{2}$/, '$1');
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -103,6 +117,8 @@ export default async function handler(req, res) {
         price,
         amount,
         recorder: str(c[8]),
+        savedAt: cellDateTime(c[9]),
+        editedAt: cellDateTime(c[10]),
         cat: n >= VEG_CODE_MIN && n <= VEG_CODE_MAX ? 'veg' : 'sup',
       });
     }
