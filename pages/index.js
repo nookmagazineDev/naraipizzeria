@@ -1254,10 +1254,23 @@ export default function App() {
     return menuGroupMap[c] ?? menuGroupMap[c.replace(/^0+/, '')] ?? '';
   };
 
-  const detailsWithCost = useMemo(() => detailAllRaw.map(r => {
-    const unitCost = costMap[r.itemCode] ?? 0;
-    return { ...r, unitCost, lineCost: unitCost * (parseFloat(r.quantity) || 0), menuGroup: groupOf(r.itemCode) };
-  }), [detailAllRaw, costMap, menuGroupMap]);
+  // แถวที่ POS ไม่ได้ใส่เวลาสั่ง (เช่น ส่วนลด, ไอเทมโต๊ะ 500) ทำให้ช่องวันที่/เวลาสั่งว่าง —
+  // เติมให้ครบ: ใช้เวลาสั่งของรายการอื่นในบิลเดียวกันก่อน ไม่มีค่อยใช้เวลาโพสต์/เวลาเปิดบิล
+  // (เติมเฉพาะชุดที่แสดงในหน้านี้ ข้อมูลต้นทางที่ใช้คำนวณส่วนอื่นไม่ถูกแตะ)
+  const detailsWithCost = useMemo(() => {
+    const billKey = r => `${r.outletID ?? ''}|${String(r.chkCheckID ?? '').trim()}`;
+    const billTime = {};
+    detailAllRaw.forEach(r => {
+      if (r.prtOrdTime && String(r.chkCheckID ?? '').trim() && !billTime[billKey(r)]) billTime[billKey(r)] = r.prtOrdTime;
+    });
+    return detailAllRaw.map(r => {
+      const unitCost = costMap[r.itemCode] ?? 0;
+      const prtOrdTime = r.prtOrdTime
+        || (String(r.chkCheckID ?? '').trim() && billTime[billKey(r)])
+        || r.postTime || r.startTime || '';
+      return { ...r, prtOrdTime, unitCost, lineCost: unitCost * (parseFloat(r.quantity) || 0), menuGroup: groupOf(r.itemCode) };
+    });
+  }, [detailAllRaw, costMap, menuGroupMap]);
 
   const filteredDetails = useMemo(() => {
     const d = applyFilters(detailsWithCost, DETAIL_COLUMNS, detailSearch, detailColF, selectedOutlet);
