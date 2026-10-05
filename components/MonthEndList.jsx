@@ -42,6 +42,12 @@ const padItemCode = (code) => {
   return /^\d+$/.test(s) && s.length < ITEM_CODE_DIGITS ? s.padStart(ITEM_CODE_DIGITS, '0') : s;
 };
 
+/** วันสุดท้ายของรอบเดือน 'YYYY-MM' → Date (เที่ยงวัน UTC กันวันเลื่อนตามโซนเวลา) — รูปแบบอื่นคืน null */
+const cycleEndDate = (month) => {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(month || '').trim());
+  return m ? new Date(Date.UTC(Number(m[1]), Number(m[2]), 0, 12)) : null;
+};
+
 const SORTS = {
   branch: { label: 'เรียงตามสาขา', cmp: (a, b) => a.branch.localeCompare(b.branch) || String(a.itemCode).localeCompare(String(b.itemCode)) },
   itemCode: { label: 'เรียงตามรหัสสินค้า', cmp: (a, b) => String(a.itemCode).localeCompare(String(b.itemCode)) },
@@ -245,7 +251,7 @@ export default function MonthEndList() {
 
       // แท็บแรก = รวมทุกสาขาไว้ในตารางเดียว (ไว้ pivot ต่อ) แล้วตามด้วยแท็บของแต่ละสาขา
       const allRows = ok.flatMap((r) => r.rows);
-      XLSX.utils.book_append_sheet(wb, buildSheet(allRows, true), 'รวมทุกสาขา');
+      XLSX.utils.book_append_sheet(wb, buildSheet(allRows), 'รวมทุกสาขา');
 
       const used = new Set(['รวมทุกสาขา']);
       ok.forEach((r) => {
@@ -254,7 +260,7 @@ export default function MonthEndList() {
         let n = 2;
         while (used.has(name)) name = `${name.slice(0, 28)}_${n++}`;
         used.add(name);
-        XLSX.utils.book_append_sheet(wb, buildSheet(r.rows, false), name);
+        XLSX.utils.book_append_sheet(wb, buildSheet(r.rows), name);
       });
 
       const today = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -295,50 +301,49 @@ export default function MonthEndList() {
     return out;
   }
 
-  /** หนึ่งแท็บ — withBranch = ใส่คอลัมน์สาขาด้วย (แท็บรวม) ส่วนแท็บรายสาขาไม่ต้องมี ซ้ำทั้งคอลัมน์ */
-  function buildSheet(rows, withBranch) {
-    const head = ['รอบเดือน', 'วันที่ปิดยอด'];
-    if (withBranch) head.push('สาขา');
-    head.push('รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'ยอดคงเหลือ');
-    if (has('unitValue')) head.push('มูลค่า/หน่วย');
-    if (has('totalValue')) head.push('มูลค่ารวม');
-    if (has('recordedBy')) head.push('ผู้บันทึก');
-    if (has('recordedAt')) head.push('เวลาบันทึก');
-
+  /**
+   * หนึ่งแท็บ — ใช้รูปแบบรายงานคลังเดียวกับหน้ายอดรวม: วันที่ | เข้าคลัง | รหัสสินค้า | ชื่อสินค้า | Actual QTY
+   * วันที่ = วันสุดท้ายของรอบเดือน (ไม่ใช่วันที่ไปนับจริง) และเรียงตามรหัสสินค้า
+   */
+  function buildSheet(rows) {
+    const head = ['วันที่', 'เข้าคลัง', 'รหัสสินค้า', 'ชื่อสินค้า', 'Actual QTY'];
     const aoa = [head];
-    [...rows]
-      .sort((a, b) => String(a.branch).localeCompare(String(b.branch))
-        || String(a.itemCode).localeCompare(String(b.itemCode)))
+    rows
+      .map((r) => ({ ...r, code: padItemCode(r.itemCode || r.itemKey) }))
+      .sort((a, b) => a.code.localeCompare(b.code) || String(a.branch).localeCompare(String(b.branch)))
       .forEach((r) => {
-        const line = [r.month || '', r.date];
-        if (withBranch) line.push(r.branch);
-        line.push(padItemCode(r.itemCode || r.itemKey), r.itemName, r.unit, Number(r.balance) || 0);
-        if (has('unitValue')) line.push(r.unitValue ?? '');
-        if (has('totalValue')) line.push(r.totalValue ?? '');
-        if (has('recordedBy')) line.push(r.recordedBy);
-        if (has('recordedAt')) line.push(r.recordedAt);
-        aoa.push(line);
+        aoa.push([
+          cycleEndDate(r.month) || r.date || '',
+          String(r.branch || '').toUpperCase(),
+          r.code,
+          r.itemName,
+          Number(r.balance) || 0,
+        ]);
       });
 
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    const widths = { 'รอบเดือน': 10, 'วันที่ปิดยอด': 12, 'สาขา': 8, 'รหัสสินค้า': 12, 'ชื่อสินค้า': 45, 'หน่วย': 8 };
-    ws['!cols'] = head.map((h) => ({ wch: widths[h] || 14 }));
+    const ws = XLSX.utils.aoa_to_sheet(aoa, { cellDates: true });
+    ws['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 12 }, { wch: 48 }, { wch: 12 }];
+    ws['!rows'] = [{ hpt: 22 }];
+    ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: aoa.length - 1, c: 4 } }) };
 
     const headerStyle = {
       font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
-      fill: { patternType: 'solid', fgColor: { rgb: '2E74B5' } },
+      fill: { patternType: 'solid', fgColor: { rgb: '4472C4' } },
     };
-    head.forEach((_, col) => {
-      const cell = ws[XLSX.utils.encode_cell({ r: 0, c: col })];
-      if (cell) cell.s = headerStyle;
-    });
-
-    // บังคับคอลัมน์รหัสสินค้าเป็น "ข้อความ" — ไม่งั้น Excel มองเป็นตัวเลขแล้วกิน 0 นำหน้าทิ้ง
-    // ตอนเปิดไฟล์ ซึ่งทำให้ที่เติมมาสูญเปล่า (ต้องตั้งทั้ง t และ z ถึงจะอยู่ครบทุกเครื่อง)
-    const codeCol = head.indexOf('รหัสสินค้า');
-    for (let r = 1; r < aoa.length; r++) {
-      const cell = ws[XLSX.utils.encode_cell({ r, c: codeCol })];
-      if (cell) { cell.t = 's'; cell.z = '@'; }
+    const thin = { style: 'thin', color: { rgb: 'D9D9D9' } };
+    const border = { top: thin, bottom: thin, left: thin, right: thin };
+    for (let r = 0; r < aoa.length; r++) {
+      for (let c = 0; c < head.length; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (!cell) continue;
+        const horizontal = c === 4 ? 'right' : (c === 1 || c === 2) ? 'center' : 'left';
+        if (r === 0) { cell.s = { ...headerStyle, alignment: { vertical: 'center', horizontal } }; continue; }
+        cell.s = { font: { name: 'Tahoma', sz: 11 }, border, alignment: { horizontal } };
+        // รหัสสินค้าต้องเป็น "ข้อความ" — ไม่งั้น Excel มองเป็นตัวเลขแล้วกิน 0 นำหน้าทิ้ง (ต้องตั้งทั้ง t และ z)
+        if (c === 2) { cell.t = 's'; cell.z = '@'; }
+        if (c === 0 && cell.t === 'd') cell.z = 'dd/mm/yyyy';
+        if (c === 4) cell.z = '#,##0.00';
+      }
     }
     return ws;
   }
