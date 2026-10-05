@@ -452,6 +452,8 @@ function EntryMeta({ r }) {
 function DetailDrawer({ detail, rows, view, setView, rangeText, onClose }) {
   // แท็บ "แยกตามสาขา" ของสินค้า: กดสาขาเพื่อกางดูทีละวันที่กรอก
   const [openBr, setOpenBr] = useState(null);
+  // แท็บ "รวมตามสินค้า" ของสาขา: กดสินค้าเพื่อกางดูทีละวันที่กรอก
+  const [openCode, setOpenCode] = useState(null);
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -510,7 +512,7 @@ function DetailDrawer({ detail, rows, view, setView, rangeText, onClose }) {
                 <thead>
                   <tr>
                     <th className={`${TH} text-left`}>รหัส</th>
-                    <th className={`${TH} text-left`}>รายการ</th>
+                    <th className={`${TH} text-left`}>รายการ <span className="font-normal text-slate-400">(กดเพื่อดูวันที่กรอก)</span></th>
                     <th className={`${TH} text-left`}>หมวด</th>
                     <th className={`${TH} text-right`}>จำนวนรวม</th>
                     <th className={`${TH} text-right`}>ราคาเฉลี่ย/หน่วย</th>
@@ -518,16 +520,40 @@ function DetailDrawer({ detail, rows, view, setView, rangeText, onClose }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {groupItems(rows).map((it) => (
-                    <tr key={it.code}>
-                      <td className={`${TD} text-slate-500`}>{it.code}</td>
-                      <td className={TD}>{it.name}</td>
-                      <td className={TD}><CatBadge cat={it.cat} short /></td>
-                      <td className={`${TD} text-right`}>{qtyFmt(it.qty)} {it.unit}</td>
-                      <td className={`${TD} text-right`}>{baht(it.qty ? it.amount / it.qty : 0)}</td>
-                      <td className={`${TD} text-right font-bold`}>{baht(it.amount)}</td>
-                    </tr>
-                  ))}
+                  {groupItems(rows).map((it) => {
+                    const open = openCode === it.code;
+                    const entries = open
+                      ? rows.filter((r) => r.code === it.code).sort((x, y) => y.date.localeCompare(x.date))
+                      : [];
+                    return [
+                      <tr key={it.code} onClick={() => setOpenCode(open ? null : it.code)}
+                        className={`cursor-pointer ${open ? 'bg-amber-50' : 'hover:bg-amber-50'}`}>
+                        <td className={`${TD} text-slate-500`}>
+                          <span className="inline-flex items-center gap-1">
+                            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />} {it.code}
+                          </span>
+                        </td>
+                        <td className={TD}>{it.name}</td>
+                        <td className={TD}><CatBadge cat={it.cat} short /></td>
+                        <td className={`${TD} text-right`}>{qtyFmt(it.qty)} {it.unit}</td>
+                        <td className={`${TD} text-right`}>{baht(it.qty ? it.amount / it.qty : 0)}</td>
+                        <td className={`${TD} text-right font-bold`}>{baht(it.amount)}</td>
+                      </tr>,
+                      ...entries.map((r, i) => (
+                        <tr key={`${it.code}-${i}`} className="bg-amber-50/40 text-slate-600">
+                          <td className="px-3 py-2 pl-9 border-b border-slate-100" colSpan={3}>
+                            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                              <CalendarDays size={13} /> {thDate(r.date)}
+                            </span>
+                            <EntryMeta r={r} />
+                          </td>
+                          <td className="px-3 py-2 text-right border-b border-slate-100 whitespace-nowrap">{qtyFmt(r.qty)} {r.unit}</td>
+                          <td className="px-3 py-2 text-right border-b border-slate-100 whitespace-nowrap">{baht(r.price)}</td>
+                          <td className="px-3 py-2 text-right border-b border-slate-100 whitespace-nowrap">{baht(r.amount)}</td>
+                        </tr>
+                      )),
+                    ];
+                  })}
                 </tbody>
                 <tfoot className="font-bold bg-slate-50">
                   <tr><td className="px-3 py-2.5" colSpan={5}>รวม</td><td className="px-3 py-2.5 text-right">{baht(total)}</td></tr>
