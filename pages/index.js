@@ -375,6 +375,9 @@ const outletLabel = id => {
   return name ? `${id} · ${name}` : (id != null ? String(id) : '-');
 };
 
+// ชื่อสาขาอย่างเดียว ไม่มีเลขนำหน้า — หน้ารายละเอียดรายการขอให้ตัดเลขสาขาออก
+const outletName = id => OUTLETS[parseInt(id)] || (id != null ? String(id) : '-');
+
 const PAGE_SIZE = 50;
 
 function ExcelFilterDropdown({
@@ -570,6 +573,8 @@ const SALES_COLUMNS = [
 const DETAIL_COLUMNS = [
   { key: '_date', label: 'วันที่', type: 'date' },
   { key: 'chkCheckID', label: 'เลขที่บิล', type: 'text' },
+  // เลขสาขาแยกเป็นคอลัมน์ของตัวเอง ส่วนคอลัมน์สาขาเหลือแต่ชื่อ — ค่าจริงอ่านจาก outletID
+  { key: '_outletNo', label: 'เลขสาขา', type: 'text' },
   { key: 'outletID', label: 'สาขา', type: 'outlet' },
   { key: 'itemCode', label: 'รหัสสินค้า', type: 'text' },
   { key: 'nameThai', label: 'ชื่อรายการ', type: 'text' },
@@ -658,7 +663,8 @@ function getColFilterValue(row, key) {
     const v = row[key];
     return v ? String(v).slice(0, 19) : '';
   }
-  if (key === 'outletID') return outletLabel(row[key]);
+  if (key === 'outletID') return outletName(row[key]);
+  if (key === '_outletNo') return row.outletID != null ? String(row.outletID) : '';
   if (key === 'void') return row[key] ? 'ยกเลิก' : 'ปกติ';
   if (key === 'voidCount') return (row.voidCount > 0) ? `มี Void (${row.voidCount})${row.voidTypes ? ' · ' + row.voidTypes : ''}` : 'ปกติ';
 
@@ -1167,6 +1173,7 @@ export default function App() {
 
   function sortArray(arr, col, asc) {
     if (!col) return arr;
+    if (col === '_outletNo') col = 'outletID';
     return [...arr].sort((a, b) => {
       let va = a[col], vb = b[col];
       const na = parseFloat(va), nb = parseFloat(vb);
@@ -2196,7 +2203,7 @@ export default function App() {
     XLSX.writeFile(wb, `dashboard_${cardKey}_${startDate}_to_${endDate}.xlsx`);
   }
 
-  function exportXLSX(data, cols, filename) {
+  function exportXLSX(data, cols, filename, { outletNameOnly = false } = {}) {
     if (!data.length) return;
     
     const rows = data.map(r => {
@@ -2205,7 +2212,9 @@ export default function App() {
         let val = r[c.key];
         // Handle special values representation
         if (c.key === 'outletID') {
-          val = outletLabel(val);
+          val = outletNameOnly ? outletName(val) : outletLabel(val);
+        } else if (c.key === '_outletNo') {
+          val = r.outletID;
         } else if (c.key === 'Date') {
           val = dateFromRow(r);
         } else if (c.key === '_date') {
@@ -2886,7 +2895,7 @@ export default function App() {
                       } else if (activeTab === 'itemSearch') {
                         exportItemXLSX();
                       } else {
-                        exportXLSX(filteredDetails, DETAIL_COLUMNS.map(c => ({ key: c.key, label: c.label })), 'detail_report');
+                        exportXLSX(filteredDetails, DETAIL_COLUMNS.map(c => ({ key: c.key, label: c.label })), 'detail_report', { outletNameOnly: true });
                       }
                     }}
                     className="flex-1 lg:flex-none border border-emerald-200 hover:bg-emerald-50 disabled:bg-slate-50 disabled:border-slate-100 disabled:text-slate-400 text-emerald-700 font-semibold text-sm px-5 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2"
@@ -3694,7 +3703,8 @@ export default function App() {
                                 <tr key={i} className={`hover:bg-slate-50/50 transition-colors ${isVoided ? 'row-void bg-rose-50/20' : isExcluded ? 'bg-amber-50/40' : ''}`}>
                                   <td className="px-4 py-2.5 whitespace-nowrap">{row.prtOrdTime ? row.prtOrdTime.slice(0, 10) : '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono">{row.chkCheckID}</td>
-                                  <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletLabel(row.outletID)}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-mono text-center text-slate-500">{row.outletID ?? '-'}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletName(row.outletID)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-500">{row.itemCode || '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold text-slate-800">
                                     {row.nameThai || '-'}
