@@ -8,7 +8,7 @@
 <style>
   :root{--bg:#f1f5f9;--card:#fff;--ink:#0f172a;--mut:#64748b;--line:#e2e8f0;--pri:#0f766e;--pri2:#ccfbf1;--amber:#b45309;--amberbg:#fef3c7;--green:#15803d;--greenbg:#dcfce7}
   *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font-family:Sarabun,system-ui,sans-serif;font-size:14px}
-  .wrap{max-width:1150px;margin:0 auto;padding:20px 16px 40px}
+  .wrap{max-width:1250px;margin:0 auto;padding:20px 16px 40px}
   .note{background:#fff7ed;border:1px dashed #fb923c;color:#9a3412;padding:8px 12px;border-radius:10px;margin-bottom:14px;font-size:13px}
   h1{font-size:22px;margin:0 0 2px} .sub{color:var(--mut);margin-bottom:16px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
@@ -25,7 +25,7 @@
   .kpi.main{background:linear-gradient(135deg,#0f766e,#14b8a6);color:#fff;border:0} .kpi.main .l{color:#ccfbf1}
   table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
   th{background:#f8fafc;color:var(--mut);font-size:12px;text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
-  td{padding:10px;border-bottom:1px solid #f1f5f9} .r{text-align:right}
+  td{padding:10px;border-bottom:1px solid #f1f5f9;white-space:nowrap} .r{text-align:right}
   tbody tr.click{cursor:pointer} tbody tr.click:hover{background:#f0fdfa}
   tfoot td{font-weight:700;background:#f8fafc;border-top:2px solid var(--line)}
   .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600}
@@ -44,7 +44,7 @@
   .x{background:none;border:0;font-size:24px;cursor:pointer;color:var(--mut)}
   .day{background:#f8fafc;font-weight:700}
   .muted{color:var(--mut)}
-  @media(max-width:720px){.kpis{grid-template-columns:repeat(2,1fr)} .hide-m{display:none} .tblwrap{overflow-x:auto}}
+  .tblwrap{overflow-x:auto} @media(max-width:720px){.kpis{grid-template-columns:repeat(2,1fr)} .hide-m{display:none} .tblwrap{overflow-x:auto}}
 </style>
 </head>
 <body>
@@ -82,15 +82,18 @@
   </div>
 
   <div class="card">
-    <div class="head"><h2>สรุปรายสาขา</h2><span class="muted" id="rangeTxt"></span></div>
+    <div class="head"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><h2 id="mTitle">สรุปรายสาขา</h2>
+      <div class="quick"><button class="chip on" data-m="branch">🏪 รายสาขา</button><button class="chip" data-m="item">📦 รายไอเทม</button></div>
+      <input id="isearch" placeholder="ค้นหาชื่อ/รหัสสินค้า" style="display:none;width:200px"></div>
+      <span class="muted" id="rangeTxt"></span></div>
     <div class="tblwrap">
     <table>
-      <thead><tr><th>สาขา</th><th class="r">ซัพพลายเออร์</th><th class="r">ผัก, ผลไม้</th><th class="r">ยอดรวม</th><th class="r hide-m">วันที่กรอก</th><th class="r hide-m">รายการ</th><th></th></tr></thead>
+      <thead id="th"></thead>
       <tbody id="tb"></tbody>
       <tfoot id="tf"></tfoot>
     </table>
     </div>
-    <div class="muted" style="margin-top:8px;font-size:12px">👆 กดที่แถวสาขาเพื่อดูรายละเอียด</div>
+    <div class="muted" style="margin-top:8px;font-size:12px" id="hint">👆 กดที่แถวสาขาเพื่อดูรายละเอียด</div>
   </div>
 </div>
 
@@ -105,7 +108,7 @@
       <div class="card kpi"><div class="l"><span class="badge b-sup">ซัพพลายเออร์</span></div><div class="v" id="d2"></div></div>
       <div class="card kpi"><div class="l"><span class="badge b-veg">ผัก, ผลไม้</span></div><div class="v" id="d3"></div></div>
     </div>
-    <div class="tabs">
+    <div class="tabs" id="dTabs">
       <button class="chip on" data-v="item">รวมตามสินค้า</button>
       <button class="chip" data-v="day">แยกตามวัน</button>
     </div>
@@ -157,6 +160,9 @@ function render(){cur=filtered();
   $('k1').textContent=fm(sum(cur));$('k2').textContent=fm(sum(sup));$('k3').textContent=fm(sum(veg));
   $('k4').textContent=`${new Set(cur.map(r=>r.branch)).size} / ${cur.length}`;
   $('rangeTxt').textContent=`${thd($('from').value)} – ${thd($('to').value)}`;
+  if(mode==='item'){renderItems();return}
+  $('mTitle').textContent='สรุปรายสาขา';$('hint').textContent='👆 กดที่แถวสาขาเพื่อดูรายละเอียด';
+  $('th').innerHTML='<tr><th>สาขา</th><th class="r">ซัพพลายเออร์</th><th class="r">ผัก, ผลไม้</th><th class="r">ยอดรวม</th><th class="r hide-m">วันที่กรอก</th><th class="r hide-m">รายการ</th><th></th></tr>';
   const by={};cur.forEach(r=>{(by[r.branch]??={sup:0,veg:0,days:new Set(),n:0});by[r.branch][r.cat]+=r.amount;by[r.branch].days.add(r.date);by[r.branch].n++});
   const list=Object.entries(by).sort((a,b)=>(b[1].sup+b[1].veg)-(a[1].sup+a[1].veg));
   $('tb').innerHTML=list.map(([b,v])=>{const t=v.sup+v.veg;return `<tr class="click" data-b="${b}">
@@ -167,12 +173,57 @@ function render(){cur=filtered();
   $('tf').innerHTML=list.length?`<tr><td>รวม</td><td class="r">${fm(sum(sup))}</td><td class="r">${fm(sum(veg))}</td><td class="r">${fm(sum(cur))}</td><td class="hide-m"></td><td class="r hide-m">${cur.length}</td><td></td></tr>`:'';
   document.querySelectorAll('tr[data-b]').forEach(tr=>tr.onclick=()=>openD(tr.dataset.b));}
 
+let mode='branch';
+document.querySelectorAll('[data-m]').forEach(c=>c.onclick=()=>{mode=c.dataset.m;
+  document.querySelectorAll('[data-m]').forEach(x=>x.classList.toggle('on',x===c));
+  $('isearch').style.display=mode==='item'?'':'none';render()});
+$('isearch').oninput=render;
+function renderItems(){
+  $('mTitle').textContent='สรุปรายไอเทม';$('hint').textContent='👆 กดที่แถวสินค้าเพื่อดูว่าแต่ละสาขาซื้อเท่าไร';
+  const brs=[...new Set(cur.map(r=>r.branch))].sort();
+  const q=$('isearch').value.trim().toLowerCase();
+  const m={};cur.forEach(r=>{const e=(m[r.code]??={code:r.code,name:r.name,unit:r.unit,cat:r.cat,qty:0,amount:0,by:{}});
+    e.qty+=r.qty;e.amount+=r.amount;e.by[r.branch]=(e.by[r.branch]||0)+r.amount});
+  const a=Object.values(m).filter(r=>!q||r.name.toLowerCase().includes(q)||r.code.includes(q)).sort((x,y)=>y.amount-x.amount);
+  $('th').innerHTML=`<tr><th>รหัส</th><th>รายการ</th><th>หมวด</th><th class="r">จำนวนรวม</th><th class="r hide-m">ราคาเฉลี่ย</th>${brs.map(b=>`<th class="r hide-m">${b.toUpperCase()}</th>`).join('')}<th class="r">ยอดรวม</th><th></th></tr>`;
+  $('tb').innerHTML=a.map(r=>`<tr class="click" data-i="${r.code}"><td class="muted">${r.code}</td><td>${r.name}</td>
+    <td><span class="badge ${r.cat==='sup'?'b-sup':'b-veg'}">${r.cat==='sup'?'ซัพ':'ผัก'}</span></td>
+    <td class="r">${fq(r.qty)} ${r.unit}</td><td class="r hide-m">${fm(r.amount/r.qty)}</td>
+    ${brs.map(b=>`<td class="r hide-m">${r.by[b]?fm(r.by[b]):'<span class="muted">-</span>'}</td>`).join('')}
+    <td class="r"><b>${fm(r.amount)}</b></td><td class="r"><span class="link">ดูรายละเอียด ›</span></td></tr>`).join('')
+    ||`<tr><td colspan="${7+brs.length}" class="muted" style="text-align:center;padding:30px">ไม่มีข้อมูล</td></tr>`;
+  const tot=sum(a);
+  $('tf').innerHTML=a.length?`<tr><td colspan="5">รวม ${a.length} รายการ</td>${brs.map(b=>`<td class="r hide-m">${fm(a.reduce((s,r)=>s+(r.by[b]||0),0))}</td>`).join('')}<td class="r">${fm(tot)}</td><td></td></tr>`:'';
+  document.querySelectorAll('tr[data-i]').forEach(tr=>tr.onclick=()=>openItem(tr.dataset.i));}
+function openItem(code){dRows=cur.filter(r=>r.code===code);const f=dRows[0];
+  $('dTitle').textContent=`${f.name} (${code})`;
+  $('dSub').textContent=`${thd($('from').value)} – ${thd($('to').value)} · ${new Set(dRows.map(r=>r.branch)).size} สาขา · หน่วย: ${f.unit}`;
+  $('d1').textContent=fm(sum(dRows));$('d2').previousElementSibling.innerHTML='จำนวนรวม';$('d2').textContent=fq(sum(dRows,'qty'))+' '+f.unit;
+  $('d3').previousElementSibling.innerHTML='ราคาเฉลี่ย/หน่วย';$('d3').textContent=fm(sum(dRows)/sum(dRows,'qty'));
+  dView='ibranch';drawD();$('ov').classList.add('show');}
 let dRows=[],dView='item';
 function openD(b){dRows=cur.filter(r=>r.branch===b);
   $('dTitle').textContent='สาขา '+b.toUpperCase();$('dSub').textContent=`${thd($('from').value)} – ${thd($('to').value)} · ${dRows.length} รายการ`;
   $('d1').textContent=fm(sum(dRows));$('d2').textContent=fm(sum(dRows.filter(r=>r.cat==='sup')));$('d3').textContent=fm(sum(dRows.filter(r=>r.cat==='veg')));
+  $('d2').previousElementSibling.innerHTML='<span class="badge b-sup">ซัพพลายเออร์</span>';$('d3').previousElementSibling.innerHTML='<span class="badge b-veg">ผัก, ผลไม้</span>';
   dView='item';drawD();$('ov').classList.add('show');}
-function drawD(){document.querySelectorAll('[data-v]').forEach(c=>c.classList.toggle('on',c.dataset.v===dView));
+function drawD(){
+  const isItem=dView==='ibranch'||dView==='iday';
+  $('dTabs').innerHTML=isItem?'<button class="chip" data-v="ibranch">แยกตามสาขา</button><button class="chip" data-v="iday">แยกตามวัน</button>'
+    :'<button class="chip" data-v="item">รวมตามสินค้า</button><button class="chip" data-v="day">แยกตามวัน</button>';
+  document.querySelectorAll('[data-v]').forEach(c=>c.onclick=()=>{dView=c.dataset.v;drawD()});
+  if(dView==='ibranch'){const m={};dRows.forEach(r=>{(m[r.branch]??={qty:0,amount:0,days:new Set()});m[r.branch].qty+=r.qty;m[r.branch].amount+=r.amount;m[r.branch].days.add(r.date)});
+    const a=Object.entries(m).sort((x,y)=>y[1].amount-x[1].amount),u=dRows[0].unit,tot=sum(dRows);
+    $('dt').innerHTML=`<thead><tr><th>สาขา</th><th class="r">จำนวนรวม</th><th class="r">ราคาเฉลี่ย/หน่วย</th><th class="r">วันที่ซื้อ</th><th class="r">มูลค่า</th><th class="r">สัดส่วน</th></tr></thead><tbody>`+
+    a.map(([b,v])=>`<tr><td class="brcode">${b}</td><td class="r">${fq(v.qty)} ${u}</td><td class="r">${fm(v.amount/v.qty)}</td><td class="r">${v.days.size} วัน</td><td class="r"><b>${fm(v.amount)}</b></td><td class="r">${(v.amount/tot*100).toFixed(1)}%</td></tr>`).join('')+
+    `</tbody><tfoot><tr><td>รวม</td><td class="r">${fq(sum(dRows,'qty'))} ${u}</td><td></td><td></td><td class="r">${fm(tot)}</td><td class="r">100%</td></tr></tfoot>`;
+    document.querySelectorAll('[data-v]').forEach(c=>c.classList.toggle('on',c.dataset.v===dView));return;}
+  if(dView==='iday'){const days=[...new Set(dRows.map(r=>r.date))].sort().reverse();
+    $('dt').innerHTML=`<thead><tr><th>สาขา</th><th class="r">จำนวน</th><th class="r">ราคา/หน่วย</th><th class="r">มูลค่า</th></tr></thead><tbody>`+
+    days.map(d=>{const rs=dRows.filter(r=>r.date===d);return `<tr class="day"><td colspan="3">📅 ${thd(d)}</td><td class="r">${fm(sum(rs))}</td></tr>`+
+      rs.map(r=>`<tr><td class="brcode">${r.branch}</td><td class="r">${fq(r.qty)} ${r.unit}</td><td class="r">${fm(r.price)}</td><td class="r">${fm(r.amount)}</td></tr>`).join('')}).join('')+`</tbody>`;
+    document.querySelectorAll('[data-v]').forEach(c=>c.classList.toggle('on',c.dataset.v===dView));return;}
+  document.querySelectorAll('[data-v]').forEach(c=>c.classList.toggle('on',c.dataset.v===dView));
   if(dView==='item'){const m={};dRows.forEach(r=>{(m[r.code]??={...r,qty:0,amount:0});m[r.code].qty+=r.qty;m[r.code].amount+=r.amount});
     const a=Object.values(m).sort((x,y)=>y.amount-x.amount);
     $('dt').innerHTML=`<thead><tr><th>รหัส</th><th>รายการ</th><th>หมวด</th><th class="r">จำนวนรวม</th><th class="r">ราคาเฉลี่ย/หน่วย</th><th class="r">มูลค่า</th></tr></thead><tbody>`+
@@ -182,7 +233,6 @@ function drawD(){document.querySelectorAll('[data-v]').forEach(c=>c.classList.to
     $('dt').innerHTML=`<thead><tr><th>รายการ</th><th class="r">จำนวน</th><th class="r">ราคา/หน่วย</th><th class="r">มูลค่า</th></tr></thead><tbody>`+
     days.map(d=>{const rs=dRows.filter(r=>r.date===d);return `<tr class="day"><td colspan="3">📅 ${thd(d)}</td><td class="r">${fm(sum(rs))}</td></tr>`+
       rs.map(r=>`<tr><td><span class="badge ${r.cat==='sup'?'b-sup':'b-veg'}">${r.cat==='sup'?'ซัพ':'ผัก'}</span> ${r.name} <span class="muted">${r.code}</span></td><td class="r">${fq(r.qty)} ${r.unit}</td><td class="r">${fm(r.price)}</td><td class="r">${fm(r.amount)}</td></tr>`).join('')}).join('')+`</tbody>`;}}
-document.querySelectorAll('[data-v]').forEach(c=>c.onclick=()=>{dView=c.dataset.v;drawD()});
 $('close').onclick=()=>$('ov').classList.remove('show');$('ov').onclick=e=>{if(e.target.id==='ov')$('ov').classList.remove('show')};
 setQuick('month');
 </script>
