@@ -573,6 +573,8 @@ const SALES_COLUMNS = [
 const DETAIL_COLUMNS = [
   { key: '_date', label: 'วันที่', type: 'date' },
   { key: 'chkCheckID', label: 'เลขที่บิล', type: 'text' },
+  // เลขสาขาแยกเป็นคอลัมน์ของตัวเอง ส่วนคอลัมน์สาขาเหลือแต่ชื่อ — ค่าจริงอ่านจาก outletID
+  { key: '_outletNo', label: 'เลขสาขา', type: 'text' },
   { key: 'outletID', label: 'สาขา', type: 'outlet' },
   { key: 'itemCode', label: 'รหัสสินค้า', type: 'text' },
   { key: 'nameThai', label: 'ชื่อรายการ', type: 'text' },
@@ -662,6 +664,7 @@ function getColFilterValue(row, key) {
     return v ? String(v).slice(0, 19) : '';
   }
   if (key === 'outletID') return outletName(row[key]);
+  if (key === '_outletNo') return row.outletID != null ? String(row.outletID) : '';
   if (key === 'void') return row[key] ? 'ยกเลิก' : 'ปกติ';
   if (key === 'voidCount') return (row.voidCount > 0) ? `มี Void (${row.voidCount})${row.voidTypes ? ' · ' + row.voidTypes : ''}` : 'ปกติ';
 
@@ -1170,6 +1173,7 @@ export default function App() {
 
   function sortArray(arr, col, asc) {
     if (!col) return arr;
+    if (col === '_outletNo') col = 'outletID';
     return [...arr].sort((a, b) => {
       let va = a[col], vb = b[col];
       const na = parseFloat(va), nb = parseFloat(vb);
@@ -2209,6 +2213,8 @@ export default function App() {
         // Handle special values representation
         if (c.key === 'outletID') {
           val = outletNameOnly ? outletName(val) : outletLabel(val);
+        } else if (c.key === '_outletNo') {
+          val = r.outletID;
         } else if (c.key === 'Date') {
           val = dateFromRow(r);
         } else if (c.key === '_date') {
@@ -3697,6 +3703,7 @@ export default function App() {
                                 <tr key={i} className={`hover:bg-slate-50/50 transition-colors ${isVoided ? 'row-void bg-rose-50/20' : isExcluded ? 'bg-amber-50/40' : ''}`}>
                                   <td className="px-4 py-2.5 whitespace-nowrap">{row.prtOrdTime ? row.prtOrdTime.slice(0, 10) : '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono">{row.chkCheckID}</td>
+                                  <td className="px-4 py-2.5 whitespace-nowrap font-mono text-center text-slate-500">{row.outletID ?? '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold">{outletName(row.outletID)}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-mono text-slate-500">{row.itemCode || '-'}</td>
                                   <td className="px-4 py-2.5 whitespace-nowrap font-semibold text-slate-800">
