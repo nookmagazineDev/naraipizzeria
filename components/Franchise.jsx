@@ -195,6 +195,11 @@ const vatOf = (b) => {
 };
 const beforeVatOf = (b) => billAmount(b) - vatOf(b);
 
+/** เลขที่ใบกำกับภาษีอย่างย่อ — ฐานไม่มีเลข ABB แยก ใช้เลขที่บิล (ตรงกับที่พิมพ์บน ABB จากหน้านี้) */
+const abbNoOf = (b) => str(b?.abbNo) || str(b?.checkId);
+/** เลขที่ใบกำกับภาษีเต็มรูป — มีเฉพาะบิลที่ลูกค้าขอและ POS บันทึกเลขไว้ */
+const taxInvNoOf = (b) => str(b?.taxInvoiceNo);
+
 const TH_DIGIT = ['ศูนย์', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า'];
 const TH_PLACE = ['', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน'];
 
@@ -266,7 +271,7 @@ function AbbSlip({ shop, bill, lines }) {
     <div className="fc-slip border border-slate-300 rounded-lg p-3 bg-white text-[11px] leading-snug">
       <ShopHead shop={shop} title="ใบกำกับภาษีอย่างย่อ (ABB)" />
       <div className="flex justify-between text-[10px] text-slate-600">
-        <span>เลขที่ {str(bill.checkId) || '-'}</span>
+        <span>เลขที่ {abbNoOf(bill) || '-'}</span>
         <span>{docDate(bill.date)}</span>
       </div>
       <div className="flex justify-between text-[10px] text-slate-600">
@@ -341,7 +346,7 @@ function FullTaxDoc({ shop, buyer, bill, lines }) {
         <div className="text-right flex-shrink-0">
           <div className="text-sm font-bold text-slate-900">ใบกำกับภาษี / ใบเสร็จรับเงิน</div>
           <div className="text-[10px] text-slate-500">TAX INVOICE / RECEIPT</div>
-          <div className="text-[10px] text-slate-700 mt-1">เลขที่ {str(bill.checkId) || '-'}</div>
+          <div className="text-[10px] text-slate-700 mt-1">เลขที่ {taxInvNoOf(bill) || str(bill.checkId) || '-'}</div>
           <div className="text-[10px] text-slate-700">วันที่ {docDate(bill.date, false)}</div>
         </div>
       </div>
@@ -799,7 +804,7 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const matches = useCallback((fields) => !kw || fields.some((f) => str(f).toLowerCase().includes(kw)), [kw]);
 
   const filteredBills = useMemo(
-    () => (!kw ? bills : bills.filter((b) => matches([b.checkId, b.tableId, b.cashier, b.paidType, b.orderType, b.status, b.memberTel, b.note, dayOf(b.date)]))),
+    () => (!kw ? bills : bills.filter((b) => matches([b.checkId, b.abbNo, b.taxInvoiceNo, b.tableId, b.cashier, b.paidType, b.orderType, b.status, b.memberTel, b.note, dayOf(b.date)]))),
     [bills, kw, matches]
   );
   const filteredItems = useMemo(
@@ -1228,6 +1233,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
     const val = (b) => (col === 'billTotal' ? billAmount(b)
       : col === 'cover' ? num(b.cover)
       : col === 'vat' ? num(b.vat)
+      : col === 'abbNo' ? abbNoOf(b)
+      : col === 'taxInvoiceNo' ? taxInvNoOf(b)
       : col === 'preVat' ? preVatOf(b)
       : str(b[col]));
     return [...filteredBills].sort((a, b) => {
@@ -1240,6 +1247,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
   const REPORT_COLUMNS = [
     { key: 'date', label: 'วันที่/เวลา', type: 'text' },
     { key: 'checkId', label: 'เลขที่บิล', type: 'text' },
+    { key: 'taxInvoiceNo', label: 'เลขที่ Tax Invoice', type: 'text' },
+    { key: 'abbNo', label: 'ABB#', type: 'text' },
     { key: 'tableId', label: 'โต๊ะ', type: 'text' },
     { key: 'orderType', label: 'ประเภท', type: 'text' },
     { key: 'cover', label: 'ลูกค้า', type: 'number' },
@@ -1253,7 +1262,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
   ];
 
   const reportExport = () => exportRows(reportRows.map((b) => ({
-    วันที่: dayOf(b.date), เวลา: timeOf(b.date), เลขที่บิล: str(b.checkId), โต๊ะ: str(b.tableId),
+    วันที่: dayOf(b.date), เวลา: timeOf(b.date), เลขที่บิล: str(b.checkId),
+    'เลขที่ Tax Invoice': taxInvNoOf(b), 'ABB#': abbNoOf(b), โต๊ะ: str(b.tableId),
     ประเภท: str(b.orderType), ลูกค้า: num(b.cover), ชำระโดย: str(b.paidType), ผู้ทำรายการ: str(b.cashier),
     ส่วนลด: num(b.discount), 'รายได้ก่อน VAT': preVatOf(b), VAT: num(b.vat), ยอดรวมบิล: billAmount(b), สถานะ: str(b.status),
     จำนวนรายการในบิล: (itemsByBill.get(`${dayOf(b.date)}|${str(b.checkId)}`) || []).length,
@@ -1334,6 +1344,8 @@ export default function Franchise({ view = 'fcDashboard' }) {
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap">{dayOf(b.date)} <span className="text-slate-400">{timeOf(b.date)}</span></td>
                     <td className="px-3 py-2 whitespace-nowrap font-mono font-semibold text-slate-800">{str(b.checkId) || '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap font-mono text-slate-600">{taxInvNoOf(b) || '-'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap font-mono text-slate-600">{abbNoOf(b) || '-'}</td>
                     <td className="px-3 py-2 whitespace-nowrap">{str(b.tableId) || '-'}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-slate-500">{str(b.orderType) || '-'}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-right font-mono">{b.cover === null ? '-' : int(b.cover)}</td>
@@ -1355,7 +1367,7 @@ export default function Franchise({ view = 'fcDashboard' }) {
               </tbody>
               <tfoot className="sticky bottom-0">
                 <tr className="bg-emerald-50 border-t-2 border-emerald-500 font-bold text-slate-800">
-                  <td className="px-3 py-2.5" colSpan={5}>รวม {int(reportRows.length)} บิล{kw ? ' (ตามคำค้น)' : ''}</td>
+                  <td className="px-3 py-2.5" colSpan={7}>รวม {int(reportRows.length)} บิล{kw ? ' (ตามคำค้น)' : ''}</td>
                   <td className="px-3 py-2.5 text-right font-mono">{int(reportRows.reduce((t, b) => t + num(b.cover), 0))}</td>
                   <td className="px-3 py-2.5" colSpan={2} />
                   <td className="px-3 py-2.5 text-right font-mono">฿{money(reportRows.reduce((t, b) => t + num(b.discount), 0))}</td>
