@@ -15,9 +15,9 @@ import * as XLSX from 'xlsx-js-style';
  *                          รายสาขา -> กดสาขา -> รายชื่อพนักงานที่มียูนิฟอร์ม
  *   3) ขอเบิกยูนิฟอร์ม   — dbo.UniformRequest (สาขากด "ส่งคำขอเบิก" ในกล่องยูนิฟอร์มของ Narai-branch)
  *                          ตารางรายคำขอ กรองตามสถานะ แล้วกดปุ่มตามขั้น:
- *                            กำลังรออนุมัติ -> อนุมัติเบิก (ออกใบเบิกลง dbo.stock_request ให้โกดัง) / รอสินค้าเข้า
+ *                            กำลังรออนุมัติ -> อนุมัติเบิก / รอสินค้าเข้า
  *                            รอสินค้าเข้า   -> อนุมัติเบิก
- *                            อนุมัติเบิก    -> กำลังรอจัดส่ง
+ *                            อนุมัติเบิก    -> กำลังรอจัดส่ง (ส่งใบเบิกไปคลัง ลง dbo.stock_request ตอนนี้)
  *                            กำลังรอจัดส่ง  -> สาขากด "ได้รับของแล้ว" เอง (จบงาน)
  *                          ดู lib/uniformSql.mjs
  *
@@ -81,7 +81,7 @@ const BTN = {
 const NEXT = {
   pending: [['approved', 'อนุมัติเบิก'], ['waiting_stock', 'รอสินค้าเข้า']],
   waiting_stock: [['approved', 'ของเข้าแล้ว · อนุมัติเบิก']],
-  approved: [['shipping', 'กำลังรอจัดส่ง']],
+  approved: [['shipping', 'กำลังรอจัดส่ง · ส่งใบเบิกไปคลัง']],
 };
 
 function StatusBadge({ status }) {
@@ -212,7 +212,7 @@ export default function UniformReport() {
 
   useEffect(() => { load(); }, [load]);
 
-  /** ตั้งสถานะคำขอ — บันทึกสำเร็จแล้วค่อยโหลดใหม่ (อนุมัติเบิกได้เลขที่ใบเบิกจากฐาน จึงต้องอ่านกลับ) */
+  /** ตั้งสถานะคำขอ — บันทึกสำเร็จแล้วค่อยโหลดใหม่ (กำลังรอจัดส่งได้เลขที่ใบเบิกจากฐาน จึงต้องอ่านกลับ) */
   const saveStatus = useCallback(async (ids, status) => {
     if (!ids.length) return;
     setSavingIds((prev) => new Set([...prev, ...ids]));
@@ -225,8 +225,8 @@ export default function UniformReport() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok || json.status !== 'success') throw new Error(json.message || `HTTP ${res.status}`);
       const d = json.data || {};
-      toast.success(status === 'approved' && d.docs?.length
-        ? `อนุมัติเบิก ${d.count} รายการ · ใบเบิก ${d.docs.join(', ')}`
+      toast.success(status === 'shipping' && d.docs?.length
+        ? `ส่งใบเบิกไปคลังแล้ว ${d.count} รายการ · ใบเบิก ${d.docs.join(', ')}`
         : `${STATUS[status].label} (${d.count ?? ids.length} รายการ)`);
       await loadRequests();
     } catch (err) {
@@ -503,7 +503,7 @@ export default function UniformReport() {
 
       <div className="text-[11px] text-gray-400">
         อยู่ในสาขา: dbo.UniformBranch{issued.data?.source ? ` (${issued.data.source})` : ''}
-        {' · '}ขอเบิก: dbo.UniformRequest (อนุมัติเบิกแล้วออกใบเบิกลง dbo.stock_request){requests.data?.source ? ` (${requests.data.source})` : ''}
+        {' · '}ขอเบิก: dbo.UniformRequest (กดกำลังรอจัดส่งแล้วส่งใบเบิกไปคลัง ลง dbo.stock_request){requests.data?.source ? ` (${requests.data.source})` : ''}
       </div>
     </div>
   );
