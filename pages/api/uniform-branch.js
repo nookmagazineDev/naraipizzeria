@@ -9,7 +9,7 @@
 //                   status: 'pending'|'waiting_stock'|'approved'|'shipping'|'received', statusBy, statusAt, docNo }] }
 //   POST /api/uniform-branch { action: 'setStatus', requestIds: [..], status }
 //        -> status = waiting_stock | approved | shipping | pending (บันทึกชื่อผู้กดจากคุกกี้ล็อกอิน)
-//           approved = ออกใบเบิกลง dbo.stock_request (ใบละ 1 พนักงาน) คืนเลขที่ใบเบิกใน data.docs
+//           shipping = ส่งใบเบิกไปคลัง ลง dbo.stock_request (ใบละ 1 พนักงาน) คืนเลขที่ใบเบิกใน data.docs
 //
 // คืน: { status:'success', data: { rows[], total, truncated, limit, layout, source } }
 //   layout.columns = คอลัมน์จริงในตาราง [{ name, type, kind: 'text'|'number'|'date' }]
