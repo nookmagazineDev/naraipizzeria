@@ -5,7 +5,7 @@ import {
   Building2, Download, AlertCircle, RefreshCw, CalendarClock,
   Pencil, Check, X, CheckCircle
 } from 'lucide-react';
-import { hhmm, hoursToHm, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel, totalLateOf } from '../lib/attendance';
+import { hhmm, hoursToHm, assignOvernight, addDays, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel, totalLateOf } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 import { dayWork } from '../lib/payroll';
 
@@ -229,7 +229,9 @@ export default function Attendance() {
     setError('');
     setErrorCode('');
     try {
-      const params = new URLSearchParams({ start: s, end: e });
+      // ดึงเผื่อหัว-ท้ายช่วงอีกวัน: สแกนออกหลังเที่ยงคืนของวันสุดท้ายอยู่ในวันถัดไป
+      // และสแกนเช้ามืดของวันแรกต้องรู้ว่าเมื่อวานมีกะหรือไม่ (ดู assignOvernight) แล้วค่อยตัดกลับให้เหลือช่วงที่เลือก
+      const params = new URLSearchParams({ start: addDays(s, -1), end: addDays(e, 1) });
       if (b) params.set('branch', b);
       const res = await fetch(`/api/attendance?${params.toString()}`);
       const json = await res.json().catch(() => null);
@@ -238,16 +240,16 @@ export default function Attendance() {
         e.code = json && json.code;
         throw e;
       }
-      const punches = json.data || [];
+      const punches = assignOvernight(json.data || []).filter((r) => r.date >= s && r.date <= e);
       setRows(punches);
       setWarning(json.truncated ? (json.message || 'ข้อมูลถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
 
       // ขาดเป็นวันๆ = คนละเรื่องกับ "ไม่มีข้อมูลเลย" — บอกไปเลยว่าขาดวันไหน จะได้ไม่ต้องไล่หาเอง
-      const miss = Array.isArray(json.missing) ? json.missing : [];
+      const miss = (Array.isArray(json.missing) ? json.missing : []).filter((d) => d >= s && d <= e);
       setMissNote(punches.length && miss.length ? missingText(miss, 'ข้อมูลสแกน') : '');
 
       const range = s === e ? s : `${s} ถึง ${e}`;
-      setLoadedInfo(`${range} · ${b || 'ทุกสาขา'} · ${json.count || 0} ครั้ง`);
+      setLoadedInfo(`${range} · ${b || 'ทุกสาขา'} · ${punches.length} ครั้ง`);
 
       // ตารางงานกับเวลาที่แก้ด้วยมือเป็นข้อมูลเสริม ดึงต่อจากเวลาสแกนเสมอ (คนละฐานข้อมูลกัน)
       // ดึงพร้อมกันได้ ไม่ได้พึ่งผลของกันและกัน และตัวไหนล้มก็ไม่ทำให้อีกตัวหาย
@@ -541,15 +543,19 @@ export default function Attendance() {
       ? `แก้เป็น ${e.time || 'ไม่มีเวลา'} จากเดิม ${e.before || 'ไม่มีเวลา'}` +
         `${e.savedAt ? ` · ${e.savedAt}` : ''}${e.editedBy ? ` · โดย ${e.editedBy}` : ''} (คลิกเพื่อแก้ใหม่)`
       : 'คลิกเพื่อแก้เวลา — บันทึกเป็นรายการใหม่ ไม่ทับข้อมูลเครื่องสแกน';
+    // ออกงานข้ามเที่ยงคืน — เวลาที่เห็นคือ 01:00 ตามกติกา บอกเวลาจริงของเครื่องไว้ใน tooltip
+    const overnight = field === 'last' && !e && d.lastRaw;
 
     return (
       <button
-        type="button" onClick={() => startEdit(d, slot, field)} disabled={!d.empCode} title={title}
+        type="button" onClick={() => startEdit(d, slot, field)} disabled={!d.empCode}
+        title={overnight ? `ออกงานข้ามเที่ยงคืน — สแกนจริง ${d.lastRaw.slice(0, 16)} นับเป็น ${t} · ${title}` : title}
         className={`group inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg hover:bg-amber-100/70 disabled:cursor-not-allowed disabled:hover:bg-transparent ${
           e ? 'bg-amber-50 ring-1 ring-amber-300' : ''
         }`}
       >
         {t ? <span className={`font-mono ${cls}`}>{t}</span> : <Dash />}
+        {overnight && <span className="text-[10px] font-semibold text-indigo-500">+1</span>}
         <Pencil size={11} className={e ? 'text-amber-600' : 'text-slate-300 group-hover:text-amber-500'} />
       </button>
     );

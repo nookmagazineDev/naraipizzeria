@@ -4,7 +4,7 @@ import {
   Wallet, Loader2, Search, Building2, Download, AlertCircle, RefreshCw,
   Printer, CalendarClock, CalendarDays, X,
 } from 'lucide-react';
-import { summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf, otNote } from '../lib/attendance';
+import { assignOvernight, addDays, summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf, otNote } from '../lib/attendance';
 import { useBranches } from '../lib/useBranches';
 import {
   summarizeSalary, payableTotal, payableUnitLabel, payUnitOf, periodDays, dayWork,
@@ -215,14 +215,15 @@ export default function SalaryReport() {
   /** เวลาสแกนจริงเป็นข้อมูลเสริม — ใช้คิดนาทีที่สาย ดึงไม่ได้ก็ยังสรุปวันทำงานได้ */
   const loadPunches = async ({ start: s, end: e, branch: b }) => {
     try {
-      const p = new URLSearchParams({ start: s, end: e });
+      // ดึงเผื่อหัว-ท้ายช่วงอีกวันเพื่อจับกะที่ออกข้ามเที่ยงคืน (ดู assignOvernight) แล้วตัดกลับให้เหลือช่วงที่เลือก
+      const p = new URLSearchParams({ start: addDays(s, -1), end: addDays(e, 1) });
       if (b) p.set('branch', b);
       const res = await fetch(`/api/attendance?${p.toString()}`);
       const json = await res.json().catch(() => null);
       if (!res.ok || !json || json.status !== 'success') {
         throw new Error((json && json.message) || `ดึงเวลาสแกนไม่สำเร็จ (${res.status})`);
       }
-      setPunches(json.data || []);
+      setPunches(assignOvernight(json.data || []).filter((r) => r.date >= s && r.date <= e));
       setScanNote(json.truncated ? (json.message || 'เวลาสแกนถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
     } catch (err) {
       setPunches([]);
