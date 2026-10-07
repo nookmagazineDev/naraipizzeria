@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ShoppingBag, Store, Building2, ClipboardList, Search, Loader2, AlertCircle, Download, RefreshCw,
-  ChevronLeft, ChevronRight, CheckCircle, X,
+  ChevronLeft, ChevronRight, CheckCircle,
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style';
@@ -13,10 +13,13 @@ import * as XLSX from 'xlsx-js-style';
  *   1) คงเหลือในสโตร์   — ยังไม่มีแหล่งข้อมูล (รอระบุตารางสต๊อกยูนิฟอร์มของสโตร์)
  *   2) อยู่ในสาขา        — dbo.UniformBranch (ยูนิฟอร์มที่แจกให้พนักงานแล้ว)
  *                          รายสาขา -> กดสาขา -> รายชื่อพนักงานที่มียูนิฟอร์ม
- *   3) ขอเบิกยูนิฟอร์ม   — dbo.stock_request (ตารางที่หน้า "นับสต๊อกและขอเบิก" ของสาขาเขียนลง)
- *                          รายไอเทม -> กดไอเทม -> ใครเบิก สาขาไหน เท่าไหร่
- *                          แต่ละใบกด "อนุมัติ" แล้วเลือก รอสั่งสินค้า / กำลังจัดส่ง ได้
- *                          (เก็บที่ dbo.uniform_request_status — ดู lib/uniformSql.mjs)
+ *   3) ขอเบิกยูนิฟอร์ม   — dbo.UniformRequest (สาขากด "ส่งคำขอเบิก" ในกล่องยูนิฟอร์มของ Narai-branch)
+ *                          ตารางรายคำขอ กรองตามสถานะ แล้วกดปุ่มตามขั้น:
+ *                            กำลังรออนุมัติ -> อนุมัติเบิก (ออกใบเบิกลง dbo.stock_request ให้โกดัง) / รอสินค้าเข้า
+ *                            รอสินค้าเข้า   -> อนุมัติเบิก
+ *                            อนุมัติเบิก    -> กำลังรอจัดส่ง
+ *                            กำลังรอจัดส่ง  -> สาขากด "ได้รับของแล้ว" เอง (จบงาน)
+ *                          ดู lib/uniformSql.mjs
  *
  * ทั้งสองชุดอ่านผ่าน /api/uniform-branch (ต่อ SQL ตรง หรือ host API ที่เครื่องออฟฟิศ)
  * ชุดไหนอ่านไม่ได้ การ์ดนั้นขึ้นข้อความของตัวเอง อีกการ์ดยังใช้ได้ตามปกติ
@@ -57,59 +60,54 @@ function downloadSheet(name, header, rows) {
   XLSX.writeFile(wb, `${name}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
-/* ------------------------------ สถานะใบขอเบิก ------------------------------ */
+/* ------------------------------ สถานะคำขอเบิก ------------------------------ */
 
 // คีย์ตรงกับ UNIFORM_REQUEST_STATUS ใน lib/uniformSql.mjs
 const STATUS = {
-  pending: { label: 'รออนุมัติ', badge: 'bg-gray-100 text-gray-600 border-gray-200' },
-  waiting_order: { label: 'อนุมัติแล้ว · รอสั่งสินค้า', badge: 'bg-amber-50 text-amber-700 border-amber-200' },
-  shipping: { label: 'อนุมัติแล้ว · กำลังจัดส่ง', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  pending: { label: 'กำลังรออนุมัติ', badge: 'bg-gray-100 text-gray-600 border-gray-200' },
+  waiting_stock: { label: 'รอสินค้าเข้า', badge: 'bg-amber-50 text-amber-700 border-amber-200' },
+  approved: { label: 'อนุมัติเบิก', badge: 'bg-blue-50 text-blue-700 border-blue-200' },
+  shipping: { label: 'กำลังรอจัดส่ง', badge: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  received: { label: 'ได้รับของแล้ว', badge: 'bg-violet-50 text-violet-700 border-violet-200' },
 };
 
-/**
- * ปุ่มสถานะของใบขอเบิก — ยังไม่อนุมัติขึ้นปุ่ม "อนุมัติ" กดแล้วให้เลือก รอสั่งสินค้า / กำลังจัดส่ง
- * อนุมัติแล้วขึ้นป้ายสถานะ กดป้ายเพื่อเปลี่ยน หรือยกเลิกอนุมัติกลับเป็นรออนุมัติ
- */
-function StatusControl({ status, saving, onSave, label = 'อนุมัติ' }) {
-  const [open, setOpen] = useState(false);
-  const choose = (next) => { setOpen(false); if (next !== status) onSave(next); };
+const BTN = {
+  approved: 'bg-blue-600 text-white border-blue-600 hover:bg-blue-700',
+  waiting_stock: 'bg-white text-amber-700 border-amber-300 hover:bg-amber-50',
+  shipping: 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700',
+};
 
+/** ปุ่มขั้นถัดไปของแต่ละสถานะ — received เป็นของสาขากดเอง ออฟฟิศไม่มีปุ่ม */
+const NEXT = {
+  pending: [['approved', 'อนุมัติเบิก'], ['waiting_stock', 'รอสินค้าเข้า']],
+  waiting_stock: [['approved', 'ของเข้าแล้ว · อนุมัติเบิก']],
+  approved: [['shipping', 'กำลังรอจัดส่ง']],
+};
+
+function StatusBadge({ status }) {
+  const st = STATUS[status] || STATUS.pending;
+  return (
+    <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-semibold rounded-full border whitespace-nowrap ${st.badge}`}>
+      {status === 'received' && <CheckCircle size={12} />} {st.label}
+    </span>
+  );
+}
+
+/** ป้ายสถานะ + ปุ่มขั้นถัดไป */
+function StatusActions({ status, saving, onSave }) {
   if (saving) {
     return <span className="inline-flex items-center gap-1 text-xs text-gray-500"><Loader2 size={14} className="animate-spin" /> กำลังบันทึก…</span>;
   }
-  if (open) {
-    return (
-      <div className="inline-flex flex-wrap items-center gap-1.5">
-        <button onClick={() => choose('waiting_order')}
-          className={`px-2.5 py-1 text-xs rounded-lg border ${status === 'waiting_order' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-amber-700 border-amber-300 hover:bg-amber-50'}`}>
-          รอสั่งสินค้า
-        </button>
-        <button onClick={() => choose('shipping')}
-          className={`px-2.5 py-1 text-xs rounded-lg border ${status === 'shipping' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-emerald-700 border-emerald-300 hover:bg-emerald-50'}`}>
-          กำลังจัดส่ง
-        </button>
-        {status !== 'pending' && (
-          <button onClick={() => choose('pending')} className="px-2.5 py-1 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50">
-            ยกเลิกอนุมัติ
-          </button>
-        )}
-        <button onClick={() => setOpen(false)} className="p-1 text-gray-400 hover:text-gray-600" title="ปิด"><X size={14} /></button>
-      </div>
-    );
-  }
-  if (status === 'pending') {
-    return (
-      <button onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-sky-600 text-white hover:bg-sky-700">
-        <CheckCircle size={14} /> {label}
-      </button>
-    );
-  }
   return (
-    <button onClick={() => setOpen(true)} title="กดเพื่อเปลี่ยนสถานะ"
-      className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-lg border ${STATUS[status]?.badge || STATUS.pending.badge}`}>
-      <CheckCircle size={13} /> {STATUS[status]?.label || status}
-    </button>
+    <div className="inline-flex flex-wrap items-center gap-1.5">
+      <StatusBadge status={status} />
+      {(NEXT[status] || []).map(([next, text]) => (
+        <button key={next} onClick={() => onSave(next)}
+          className={`px-2.5 py-1 text-xs font-medium rounded-lg border whitespace-nowrap ${BTN[next]}`}>
+          {text}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -193,25 +191,28 @@ export default function UniformReport() {
 
   const [view, setView] = useState('branch');        // 'branch' | 'request'
   const [branchPick, setBranchPick] = useState('');  // สาขาที่กดเข้าไปดูรายชื่อพนักงาน
-  const [itemPick, setItemPick] = useState('');      // ไอเทมที่กดเข้าไปดูว่าใครเบิก
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');        // ตัวกรองสถานะของการ์ดขอเบิก
-  const [savingIds, setSavingIds] = useState(() => new Set());   // ใบที่กำลังบันทึกสถานะ
+  const [statusFilter, setStatusFilter] = useState('pending');    // ตัวกรองสถานะของการ์ดขอเบิก — เปิดมาเห็นงานที่ต้องทำก่อน
+  const [savingIds, setSavingIds] = useState(() => new Set());   // คำขอที่กำลังบันทึกสถานะ
+
+  const loadRequests = useCallback(() => {
+    setRequests((s) => ({ ...s, loading: true, error: '' }));
+    return getJson('/api/uniform-branch?view=requests')
+      .then((data) => setRequests({ loading: false, error: '', data }))
+      .catch((err) => { setRequests({ loading: false, error: err.message, data: null }); toast.error('อ่านคำขอเบิกยูนิฟอร์มไม่สำเร็จ'); });
+  }, []);
 
   const load = useCallback(() => {
     setIssued((s) => ({ ...s, loading: true, error: '' }));
-    setRequests((s) => ({ ...s, loading: true, error: '' }));
     getJson('/api/uniform-branch')
       .then((data) => setIssued({ loading: false, error: '', data }))
       .catch((err) => { setIssued({ loading: false, error: err.message, data: null }); toast.error('อ่านยูนิฟอร์มที่แจกไม่สำเร็จ'); });
-    getJson('/api/uniform-branch?view=requests')
-      .then((data) => setRequests({ loading: false, error: '', data }))
-      .catch((err) => { setRequests({ loading: false, error: err.message, data: null }); toast.error('อ่านใบขอเบิกยูนิฟอร์มไม่สำเร็จ'); });
-  }, []);
+    loadRequests();
+  }, [loadRequests]);
 
   useEffect(() => { load(); }, [load]);
 
-  /** ตั้งสถานะใบขอเบิก — บันทึกสำเร็จแล้วค่อยเปลี่ยนในหน้า (ไม่เปลี่ยนก่อนแล้วมาย้อนทีหลัง) */
+  /** ตั้งสถานะคำขอ — บันทึกสำเร็จแล้วค่อยโหลดใหม่ (อนุมัติเบิกได้เลขที่ใบเบิกจากฐาน จึงต้องอ่านกลับ) */
   const saveStatus = useCallback(async (ids, status) => {
     if (!ids.length) return;
     setSavingIds((prev) => new Set([...prev, ...ids]));
@@ -223,22 +224,17 @@ export default function UniformReport() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || json.status !== 'success') throw new Error(json.message || `HTTP ${res.status}`);
-      const done = new Set(ids);
-      const stamp = new Date().toLocaleString('sv-SE').slice(0, 16);
-      setRequests((st) => (st.data ? {
-        ...st,
-        data: {
-          ...st.data,
-          rows: st.data.rows.map((r) => (done.has(r.requestId) ? { ...r, status, statusAt: stamp } : r)),
-        },
-      } : st));
-      toast.success(`${STATUS[status].label} (${ids.length} ใบ)`);
+      const d = json.data || {};
+      toast.success(status === 'approved' && d.docs?.length
+        ? `อนุมัติเบิก ${d.count} รายการ · ใบเบิก ${d.docs.join(', ')}`
+        : `${STATUS[status].label} (${d.count ?? ids.length} รายการ)`);
+      await loadRequests();
     } catch (err) {
       toast.error(`บันทึกสถานะไม่สำเร็จ: ${err.message}`);
     } finally {
       setSavingIds((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; });
     }
-  }, []);
+  }, [loadRequests]);
 
   /* ---- การ์ด 2: ยูนิฟอร์มที่อยู่ในสาขา (แจกให้พนักงานแล้ว) ---- */
   const issuedRows = useMemo(() => {
@@ -293,49 +289,28 @@ export default function UniformReport() {
     return [...map.values()].sort((a, b) => thaiSort(a.emp, b.emp));
   }, [issuedRows, branchPick]);
 
-  /* ---- การ์ด 3: ใบขอเบิกยูนิฟอร์ม ---- */
+  /* ---- การ์ด 3: คำขอเบิกยูนิฟอร์ม ---- */
   const allRequestRows = useMemo(() => requests.data?.rows || [], [requests.data]);
 
-  /** จำนวนใบแต่ละสถานะ (ก่อนกรอง) — ขึ้นบนปุ่มตัวกรอง */
+  /** จำนวนคำขอแต่ละสถานะ (ก่อนกรอง) — ขึ้นบนปุ่มตัวกรอง */
   const statusCounts = useMemo(() => {
-    const c = { all: allRequestRows.length, pending: 0, waiting_order: 0, shipping: 0 };
-    allRequestRows.forEach((r) => { c[r.status || 'pending'] = (c[r.status || 'pending'] || 0) + 1; });
+    const c = { all: allRequestRows.length };
+    Object.keys(STATUS).forEach((k) => { c[k] = 0; });
+    allRequestRows.forEach((r) => { c[r.status] = (c[r.status] || 0) + 1; });
     return c;
   }, [allRequestRows]);
 
-  // รายไอเทมและรายใบข้างล่างคิดจากใบที่ผ่านตัวกรองสถานะ ; ตัวเลขบนการ์ดคิดจากทุกใบ
   const requestRows = useMemo(
-    () => (statusFilter === 'all' ? allRequestRows : allRequestRows.filter((r) => (r.status || 'pending') === statusFilter)),
+    () => (statusFilter === 'all' ? allRequestRows : allRequestRows.filter((r) => r.status === statusFilter)),
     [allRequestRows, statusFilter],
   );
 
-  const byItem = useMemo(() => {
-    const map = new Map();
-    requestRows.forEach((r) => {
-      const k = r.itemCode || r.itemKey;
-      const it = map.get(k) || { itemCode: k, itemName: r.itemName, unit: r.unit, qty: 0, count: 0, pending: 0, branches: new Set(), people: new Set() };
-      it.qty += r.qty;
-      it.count += 1;
-      if ((r.status || 'pending') === 'pending') it.pending += 1;
-      it.branches.add(r.branch);
-      if (r.requester) it.people.add(r.requester);
-      map.set(k, it);
-    });
-    return [...map.values()].sort((a, b) => thaiSort(a.itemCode, b.itemCode));
-  }, [requestRows]);
-
-  const itemRequests = useMemo(
-    () => (itemPick ? requestRows.filter((r) => (r.itemCode || r.itemKey) === itemPick) : []),
-    [requestRows, itemPick],
-  );
-
   const issuedTotal = issuedRows.reduce((s, r) => s + r.qty, 0);
-  const requestTotal = allRequestRows.reduce((s, r) => s + r.qty, 0);
+  const openRequestTotal = allRequestRows.filter((r) => r.status !== 'received').reduce((s, r) => s + r.qty, 0);
   const needle = search.trim().toLowerCase();
 
-  const openView = (v) => { setView(v); setBranchPick(''); setItemPick(''); setSearch(''); };
+  const openView = (v) => { setView(v); setBranchPick(''); setSearch(''); };
   const pickBranch = (b) => { setBranchPick(b); setSearch(''); };
-  const pickItem = (i) => { setItemPick(i); setSearch(''); };
 
   /* ---- รายละเอียดใต้การ์ด ---- */
   let detail = null;
@@ -414,84 +389,68 @@ export default function UniformReport() {
   if (view === 'request') {
     if (requests.loading && !requests.data) detail = spinner;
     else if (requests.error) detail = <ErrorBox message={requests.error} />;
-    else if (!itemPick) {
-      const list = byItem.filter((i) => matches(needle, i.itemCode, i.itemName));
-      detail = (
-        <Panel title="ยอดขอเบิกยูนิฟอร์มรายไอเทม" search={search} onSearch={setSearch}
-          onExport={() => downloadSheet('uniform_requests_by_item', ['รหัสไอเทม', 'ชื่อไอเทม', 'หน่วย', 'เบิกรวม', 'จำนวนครั้ง', 'สาขา'],
-            list.map((i) => [i.itemCode, i.itemName, i.unit, i.qty, i.count, [...i.branches].sort().join(', ')]))}>
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50/60"><tr><Th>รหัสไอเทม</Th><Th>ชื่อไอเทม</Th><Th right>เบิกรวม</Th><Th right>ครั้ง</Th><Th right>รออนุมัติ</Th><Th right>สาขา</Th><Th /></tr></thead>
-            <tbody className="divide-y divide-gray-100">
-              {list.map((i) => (
-                <tr key={i.itemCode} onClick={() => pickItem(i.itemCode)} className="hover:bg-sky-50/50 cursor-pointer">
-                  <td className="px-4 py-3 font-mono text-gray-800">{i.itemCode}</td>
-                  <td className="px-4 py-3 text-gray-700">{i.itemName || '-'}</td>
-                  <td className="px-4 py-3 text-right font-bold text-sky-700">{fmt0(i.qty)} <span className="text-xs font-normal text-gray-400">{i.unit}</span></td>
-                  <td className="px-4 py-3 text-right text-gray-600">{fmt0(i.count)}</td>
-                  <td className="px-4 py-3 text-right">
-                    {i.pending ? <span className="px-2 py-0.5 rounded-full bg-sky-100 text-sky-700 text-xs font-semibold">{fmt0(i.pending)}</span>
-                      : <span className="text-xs text-emerald-600">ครบแล้ว</span>}
-                  </td>
-                  <td className="px-4 py-3 text-right text-gray-600">{fmt0(i.branches.size)}</td>
-                  <td className="px-4 py-3 text-right text-gray-400"><ChevronRight size={16} className="inline" /></td>
-                </tr>
-              ))}
-              {!list.length && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{statusFilter === 'all' ? 'ยังไม่มีใบขอเบิกยูนิฟอร์ม' : `ไม่มีใบที่สถานะ "${STATUS[statusFilter]?.label}"`}</td></tr>}
-            </tbody>
-            {list.length > 0 && (
-              <tfoot className="bg-gray-50 font-semibold"><tr>
-                <td className="px-4 py-3" colSpan={2}>รวม</td>
-                <td className="px-4 py-3 text-right text-sky-700">{fmt0(list.reduce((s, i) => s + i.qty, 0))}</td>
-                <td className="px-4 py-3 text-right">{fmt0(list.reduce((s, i) => s + i.count, 0))}</td>
-                <td className="px-4 py-3 text-right text-sky-700">{fmt0(list.reduce((s, i) => s + i.pending, 0))}</td>
-                <td colSpan={2} />
-              </tr></tfoot>
-            )}
-          </table>
-        </Panel>
-      );
-    } else {
-      const head = byItem.find((i) => i.itemCode === itemPick);
-      const list = itemRequests.filter((r) => matches(needle, r.branch, r.requester, STATUS[r.status]?.label));
+    else {
+      const list = requestRows.filter((r) => matches(needle, r.branch, r.requester, r.hrCode, r.itemCode, r.itemName, r.docNo, STATUS[r.status]?.label));
       const pendingIds = list.filter((r) => r.status === 'pending').map((r) => r.requestId);
       detail = (
-        <Panel title={`${itemPick} ${head?.itemName || ''} — ใครเบิกบ้าง`} back onBack={() => pickItem('')}
-          search={search} onSearch={setSearch}
-          onExport={() => downloadSheet(`uniform_request_${itemPick}`, ['วันที่', 'สาขา', 'ผู้เบิก', 'จำนวน', 'สถานะ', 'ผู้อนุมัติ', 'เวลาอนุมัติ'],
-            list.map((r) => [r.savedAt, r.branch, r.requester, r.qty, STATUS[r.status]?.label || r.status, r.statusBy, r.statusAt]))}>
+        <Panel title="คำขอเบิกยูนิฟอร์มจากสาขา" search={search} onSearch={setSearch}
+          onExport={() => downloadSheet('uniform_requests',
+            ['วันที่ขอ', 'สาขา', 'รหัสพนักงาน', 'พนักงาน', 'รหัสไอเทม', 'ไอเทม', 'จำนวน', 'ต้องการรับ', 'สถานะ', 'เลขที่ใบเบิก', 'ผู้กดล่าสุด', 'เวลา'],
+            list.map((r) => [r.savedAt, r.branch, r.hrCode, r.requester, r.itemCode, r.itemName, r.qty, r.wantDate,
+              STATUS[r.status]?.label || r.status, r.docNo, r.status === 'received' ? r.receivedBy : r.statusBy,
+              r.status === 'received' ? r.receivedAt : r.statusAt]))}>
           {pendingIds.length > 0 && (
             <div className="px-4 py-2.5 bg-sky-50 border-b border-sky-100 flex flex-wrap items-center gap-3 text-sm text-sky-800">
-              <span>รออนุมัติ {fmt0(pendingIds.length)} ใบ</span>
-              <StatusControl status="pending" label={`อนุมัติทั้งหมด ${fmt0(pendingIds.length)} ใบ`}
-                saving={pendingIds.some((id) => savingIds.has(id))} onSave={(st) => saveStatus(pendingIds, st)} />
+              <span>กำลังรออนุมัติ {fmt0(pendingIds.length)} รายการ</span>
+              {pendingIds.some((id) => savingIds.has(id))
+                ? <span className="inline-flex items-center gap-1 text-xs text-gray-500"><Loader2 size={14} className="animate-spin" /> กำลังบันทึก…</span>
+                : (
+                  <button onClick={() => saveStatus(pendingIds, 'approved')}
+                    className="inline-flex items-center gap-1 px-3 py-1 text-xs font-medium rounded-lg bg-sky-600 text-white hover:bg-sky-700">
+                    <CheckCircle size={14} /> อนุมัติเบิกทั้งหมด {fmt0(pendingIds.length)} รายการ
+                  </button>
+                )}
             </div>
           )}
           <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50/60"><tr><Th>วันที่เบิก</Th><Th>สาขา</Th><Th>ผู้เบิก</Th><Th right>จำนวน</Th><Th>สถานะ</Th></tr></thead>
+            <thead className="bg-gray-50/60"><tr><Th>วันที่ขอ</Th><Th>สาขา</Th><Th>พนักงาน</Th><Th>ไอเทม</Th><Th right>จำนวน</Th><Th>ใบเบิก</Th><Th>สถานะ / จัดการ</Th></tr></thead>
             <tbody className="divide-y divide-gray-100">
-              {list.map((r) => (
-                <tr key={r.requestId} className="hover:bg-sky-50/40">
-                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.savedAt || '-'}</td>
-                  <td className="px-4 py-3 font-semibold text-gray-800">{r.branch}</td>
-                  <td className="px-4 py-3 text-gray-700">{r.requester || '-'}</td>
-                  <td className="px-4 py-3 text-right font-bold text-sky-700">{fmt0(r.qty)}</td>
-                  <td className="px-4 py-3">
-                    <StatusControl status={r.status || 'pending'} saving={savingIds.has(r.requestId)}
-                      onSave={(st) => saveStatus([r.requestId], st)} />
-                    {r.status !== 'pending' && (r.statusBy || r.statusAt) && (
-                      <div className="text-[11px] text-gray-400 mt-1">{[r.statusBy, r.statusAt].filter(Boolean).join(' · ')}</div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {!list.length && <tr><td colSpan={5} className="px-4 py-10 text-center text-gray-400">ไม่พบรายการ</td></tr>}
+              {list.map((r) => {
+                const who = r.status === 'received' ? [r.receivedBy && `สาขารับ: ${r.receivedBy}`, r.receivedAt] : [r.statusBy, r.statusAt];
+                return (
+                  <tr key={r.requestId} className="hover:bg-sky-50/40 align-top">
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
+                      {r.savedAt || '-'}
+                      {r.wantDate && <div className="text-[11px] text-gray-400">ต้องการรับ {r.wantDate}</div>}
+                    </td>
+                    <td className="px-4 py-3 font-semibold text-gray-800">{r.branch}</td>
+                    <td className="px-4 py-3 text-gray-700">
+                      {r.requester || '-'}
+                      {r.hrCode && <div className="text-[11px] text-gray-400">{r.hrCode}</div>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="font-mono text-xs font-semibold text-sky-700">{r.itemCode}</span>
+                      <div className="text-gray-700">{r.itemName || '-'}</div>
+                    </td>
+                    <td className="px-4 py-3 text-right font-bold text-sky-700 whitespace-nowrap">{fmt0(r.qty)} <span className="text-xs font-normal text-gray-400">{r.unit}</span></td>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-500 whitespace-nowrap">{r.docNo || '—'}</td>
+                    <td className="px-4 py-3">
+                      <StatusActions status={r.status} saving={savingIds.has(r.requestId)}
+                        onSave={(st) => saveStatus([r.requestId], st)} />
+                      {r.status !== 'pending' && who.some(Boolean) && (
+                        <div className="text-[11px] text-gray-400 mt-1">{who.filter(Boolean).join(' · ')}</div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {!list.length && <tr><td colSpan={7} className="px-4 py-10 text-center text-gray-400">{statusFilter === 'all' ? 'ยังไม่มีคำขอเบิกยูนิฟอร์ม' : `ไม่มีคำขอที่สถานะ "${STATUS[statusFilter]?.label}"`}</td></tr>}
             </tbody>
             {list.length > 0 && (
               <tfoot className="bg-gray-50 font-semibold"><tr>
-                <td className="px-4 py-3" colSpan={3}>รวม</td>
-                <td className="px-4 py-3 text-right text-sky-700">{fmt0(list.reduce((s, r) => s + r.qty, 0))}</td>
-                <td />
+                <td className="px-4 py-3" colSpan={4}>รวม {fmt0(list.length)} รายการ</td>
+                <td className="px-4 py-3 text-right text-sky-700">{fmt0(list.reduce((sum, r) => sum + r.qty, 0))}</td>
+                <td colSpan={2} />
               </tr></tfoot>
             )}
           </table>
@@ -521,8 +480,8 @@ export default function UniformReport() {
         <SummaryCard icon={Building2} tone="amber" title="อยู่ในสาขา" value={fmt0(issuedTotal)} unit="ชิ้น"
           sub={`${fmt0(byBranch.length)} สาขา · กดเพื่อดูรายสาขาและรายชื่อพนักงาน`}
           loading={issued.loading} error={issued.error} active={view === 'branch'} onClick={() => openView('branch')} />
-        <SummaryCard icon={ClipboardList} tone="sky" title="ขอเบิกยูนิฟอร์ม" value={fmt0(requestTotal)} unit="ชิ้น"
-          sub={`${fmt0(byItem.length)} รายการ · รออนุมัติ ${fmt0(statusCounts.pending)} ใบ · กดเพื่อดูรายละเอียด`}
+        <SummaryCard icon={ClipboardList} tone="sky" title="ขอเบิกยูนิฟอร์ม" value={fmt0(openRequestTotal)} unit="ชิ้นที่ยังไม่จบ"
+          sub={`รออนุมัติ ${fmt0(statusCounts.pending)} · รอสินค้าเข้า ${fmt0(statusCounts.waiting_stock)} · รอจัดส่ง ${fmt0(statusCounts.shipping)} · กดเพื่อจัดการ`}
           loading={requests.loading} error={requests.error} active={view === 'request'} onClick={() => openView('request')} />
       </div>
 
@@ -544,7 +503,7 @@ export default function UniformReport() {
 
       <div className="text-[11px] text-gray-400">
         อยู่ในสาขา: dbo.UniformBranch{issued.data?.source ? ` (${issued.data.source})` : ''}
-        {' · '}ขอเบิก: dbo.stock_request เฉพาะไอเทมยูนิฟอร์ม{requests.data?.source ? ` (${requests.data.source})` : ''}
+        {' · '}ขอเบิก: dbo.UniformRequest (อนุมัติเบิกแล้วออกใบเบิกลง dbo.stock_request){requests.data?.source ? ` (${requests.data.source})` : ''}
       </div>
     </div>
   );

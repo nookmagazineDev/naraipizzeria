@@ -4,11 +4,12 @@
 //
 //   GET /api/uniform-branch              -> แถวล่าสุดไม่เกิน 20000 แถว ครบทุกคอลัมน์
 //   GET /api/uniform-branch?limit=50000  -> ขอแถวเพิ่ม (สูงสุด 50000)
-//   GET /api/uniform-branch?view=requests -> ใบขอเบิกยูนิฟอร์มของสาขา (dbo.stock_request)
-//        { rows: [{ requestId, branch, itemKey, itemCode, itemName, unit, qty, requester, savedAt,
-//                   status: 'pending'|'waiting_order'|'shipping', statusBy, statusAt }] }
+//   GET /api/uniform-branch?view=requests -> คำขอเบิกยูนิฟอร์มจากสาขา (dbo.UniformRequest)
+//        { rows: [{ requestId, branch, hrCode, requester, itemCode, itemName, unit, qty, wantDate, savedAt,
+//                   status: 'pending'|'waiting_stock'|'approved'|'shipping'|'received', statusBy, statusAt, docNo }] }
 //   POST /api/uniform-branch { action: 'setStatus', requestIds: [..], status }
-//        -> ตั้งสถานะใบขอเบิก (บันทึกชื่อผู้กดจากคุกกี้ล็อกอิน) ลง dbo.uniform_request_status
+//        -> status = waiting_stock | approved | shipping | pending (บันทึกชื่อผู้กดจากคุกกี้ล็อกอิน)
+//           approved = ออกใบเบิกลง dbo.stock_request (ใบละ 1 พนักงาน) คืนเลขที่ใบเบิกใน data.docs
 //
 // คืน: { status:'success', data: { rows[], total, truncated, limit, layout, source } }
 //   layout.columns = คอลัมน์จริงในตาราง [{ name, type, kind: 'text'|'number'|'date' }]
@@ -29,9 +30,9 @@ function explain(msg) {
     return 'host-server ที่เครื่องออฟฟิศเป็นเวอร์ชันเก่า (ยังไม่มี endpoint ยูนิฟอร์มตัวใหม่) — ' +
       'ที่เครื่องนั้น: git pull แล้วรัน start-narai.ps1 -Restart';
   }
-  if (/CREATE TABLE permission|uniform_request_status/i.test(msg) && /permission|denied/i.test(msg)) {
-    return 'login ที่แดชบอร์ดใช้ไม่มีสิทธิ์สร้าง/เขียนตารางสถานะ — ' +
-      'รัน docs/schema-uniform-request-status.sql ที่เครื่องออฟฟิศ แล้วให้สิทธิ์ INSERT/UPDATE/DELETE ตารางนั้น';
+  if (/UniformRequest|stock_request/i.test(msg) && /permission|denied/i.test(msg)) {
+    return 'login ที่แดชบอร์ดใช้ยังไม่มีสิทธิ์เขียน dbo.UniformRequest / dbo.stock_request — ' +
+      'ให้สิทธิ์ SELECT/UPDATE ตาราง UniformRequest และ INSERT ตาราง stock_request ที่เครื่องออฟฟิศ';
   }
   if (/permission was denied|SELECT permission/i.test(msg)) {
     return 'login ที่แดชบอร์ดใช้ยังไม่มีสิทธิ์อ่านตาราง dbo.UniformBranch — ให้สิทธิ์ SELECT ที่เครื่องออฟฟิศก่อน';
@@ -68,7 +69,8 @@ export default async function handler(req, res) {
   try {
     if (view === 'requests') {
       const data = await readUniformRequests({ limit: limit > 0 ? limit : undefined });
-      res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+      // ไม่ให้ CDN จำ — กดเปลี่ยนสถานะแล้วหน้าเว็บโหลดใหม่ทันที ต้องเห็นค่าล่าสุด ไม่ใช่ของเมื่อนาทีก่อน
+      res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json({ status: 'success', data, meta: { rows: data.rows.length, source: data.source } });
     }
 
