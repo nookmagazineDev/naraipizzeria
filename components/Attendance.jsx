@@ -543,13 +543,15 @@ export default function Attendance() {
       ? `แก้เป็น ${e.time || 'ไม่มีเวลา'} จากเดิม ${e.before || 'ไม่มีเวลา'}` +
         `${e.savedAt ? ` · ${e.savedAt}` : ''}${e.editedBy ? ` · โดย ${e.editedBy}` : ''} (คลิกเพื่อแก้ใหม่)`
       : 'คลิกเพื่อแก้เวลา — บันทึกเป็นรายการใหม่ ไม่ทับข้อมูลเครื่องสแกน';
-    // ออกงานข้ามเที่ยงคืน — เวลาที่เห็นคือ 01:00 ตามกติกา บอกเวลาจริงของเครื่องไว้ใน tooltip
-    const overnight = field === 'last' && !e && d.lastRaw;
+    // ออกงานข้ามเที่ยงคืน — ขึ้น +1 ให้รู้ว่าเป็นเวลาของวันถัดไป ถ้าถูกตัดที่เพดาน 01:00 บอกเวลาจริงไว้ใน tooltip
+    const overnight = field === 'last' && !e && d.last && String(d.last).slice(0, 10) > d.date;
 
     return (
       <button
         type="button" onClick={() => startEdit(d, slot, field)} disabled={!d.empCode}
-        title={overnight ? `ออกงานข้ามเที่ยงคืน — สแกนจริง ${d.lastRaw.slice(0, 16)} นับเป็น ${t} · ${title}` : title}
+        title={overnight
+          ? `ออกงานข้ามเที่ยงคืน${d.lastRaw ? ` — สแกนจริง ${d.lastRaw.slice(0, 16)} นับได้ถึง ${t}` : ''} · ${title}`
+          : title}
         className={`group inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg hover:bg-amber-100/70 disabled:cursor-not-allowed disabled:hover:bg-transparent ${
           e ? 'bg-amber-50 ring-1 ring-amber-300' : ''
         }`}
