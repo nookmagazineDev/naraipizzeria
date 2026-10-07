@@ -747,7 +747,7 @@ export default function SalaryReport() {
                 </p>
                 {checkStats.day9People > 0 && (
                   <p className="text-emerald-700">
-                    <span className="font-medium">DAY9</span>: ย้ายเวลาทำงานวันละ 1 ชม. ไปเป็น OT ให้แล้ว (เฉพาะวันที่ทำงานครบ 8 ชม.) —
+                    <span className="font-medium">DAY9</span>: ย้ายเวลาทำงานวันละ 1 ชม. ไปเป็น OT ให้แล้ว (เฉพาะวันที่ทำงานสุทธิครบ 9 ชม.) —
                     {` ${checkStats.day9People} คน · ${checkStats.day9Days} วัน · รวม ${round2(checkStats.day9Hours)} ชม.`}
                     {' '}(เวลาทำงานลดลงเท่ากัน · จำนวนวันทำงานเท่าเดิม)
                   </p>
