@@ -5,7 +5,7 @@ import {
   Building2, Download, AlertCircle, RefreshCw, CalendarClock,
   Pencil, Check, X, CheckCircle
 } from 'lucide-react';
-import { hhmm, hoursToHm, assignOvernight, addDays, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel, totalLateOf } from '../lib/attendance';
+import { hhmm, hoursToHm, assignOvernight, addDays, scanQueryBranch, keepBranchScans, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel, totalLateOf } from '../lib/attendance';
 import { useBranches, useScanBranches } from '../lib/useBranches';
 import { dayWork } from '../lib/payroll';
 
@@ -234,7 +234,7 @@ export default function Attendance() {
       // ดึงเผื่อหัว-ท้ายช่วงอีกวัน: สแกนออกหลังเที่ยงคืนของวันสุดท้ายอยู่ในวันถัดไป
       // และสแกนเช้ามืดของวันแรกต้องรู้ว่าเมื่อวานมีกะหรือไม่ (ดู assignOvernight) แล้วค่อยตัดกลับให้เหลือช่วงที่เลือก
       const params = new URLSearchParams({ start: addDays(s, -1), end: addDays(e, 1) });
-      if (b) params.set('branch', b);
+      if (scanQueryBranch(b)) params.set('branch', b);
       const res = await fetch(`/api/attendance?${params.toString()}`);
       const json = await res.json().catch(() => null);
       if (!res.ok || !json || json.status !== 'success') {
@@ -242,7 +242,7 @@ export default function Attendance() {
         e.code = json && json.code;
         throw e;
       }
-      const punches = assignOvernight(json.data || []).filter((r) => r.date >= s && r.date <= e);
+      const punches = assignOvernight(keepBranchScans(json.data, b)).filter((r) => r.date >= s && r.date <= e);
       setRows(punches);
       rememberAreas(json.data);
       setWarning(json.truncated ? (json.message || 'ข้อมูลถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
@@ -318,7 +318,7 @@ export default function Attendance() {
   const loadScanEdits = async ({ start: s, end: e, branch: b }) => {
     try {
       const p = new URLSearchParams({ start: s, end: e });
-      if (b) p.set('branch', b);
+      if (scanQueryBranch(b)) p.set('branch', b);
       const res = await fetch(`/api/attendance-edit?${p.toString()}`);
       const json = await res.json().catch(() => null);
       if (!res.ok || !json || json.status !== 'success') {

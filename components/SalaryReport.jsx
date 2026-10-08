@@ -4,7 +4,7 @@ import {
   Wallet, Loader2, Search, Building2, Download, AlertCircle, RefreshCw,
   Printer, CalendarClock, CalendarDays, X,
 } from 'lucide-react';
-import { assignOvernight, addDays, summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf, otNote } from '../lib/attendance';
+import { assignOvernight, addDays, scanQueryBranch, keepBranchScans, summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf, otNote } from '../lib/attendance';
 import { useBranches, useScanBranches } from '../lib/useBranches';
 import {
   summarizeSalary, payableTotal, payableUnitLabel, payUnitOf, periodDays, dayWork,
@@ -219,14 +219,14 @@ export default function SalaryReport() {
     try {
       // ดึงเผื่อหัว-ท้ายช่วงอีกวันเพื่อจับกะที่ออกข้ามเที่ยงคืน (ดู assignOvernight) แล้วตัดกลับให้เหลือช่วงที่เลือก
       const p = new URLSearchParams({ start: addDays(s, -1), end: addDays(e, 1) });
-      if (b) p.set('branch', b);
+      if (scanQueryBranch(b)) p.set('branch', b);
       const res = await fetch(`/api/attendance?${p.toString()}`);
       const json = await res.json().catch(() => null);
       if (!res.ok || !json || json.status !== 'success') {
         throw new Error((json && json.message) || `ดึงเวลาสแกนไม่สำเร็จ (${res.status})`);
       }
       rememberAreas(json.data);
-      setPunches(assignOvernight(json.data || []).filter((r) => r.date >= s && r.date <= e));
+      setPunches(assignOvernight(keepBranchScans(json.data, b)).filter((r) => r.date >= s && r.date <= e));
       setScanNote(json.truncated ? (json.message || 'เวลาสแกนถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
     } catch (err) {
       setPunches([]);
@@ -241,7 +241,7 @@ export default function SalaryReport() {
   const loadScanEdits = async ({ start: s, end: e, branch: b }) => {
     try {
       const p = new URLSearchParams({ start: s, end: e });
-      if (b) p.set('branch', b);
+      if (scanQueryBranch(b)) p.set('branch', b);
       const res = await fetch(`/api/attendance-edit?${p.toString()}`);
       const json = await res.json().catch(() => null);
       if (!res.ok || !json || json.status !== 'success') {
