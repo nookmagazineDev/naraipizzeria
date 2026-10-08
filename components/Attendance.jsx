@@ -6,7 +6,7 @@ import {
   Pencil, Check, X, CheckCircle
 } from 'lucide-react';
 import { hhmm, hoursToHm, assignOvernight, addDays, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel, totalLateOf } from '../lib/attendance';
-import { useBranches } from '../lib/useBranches';
+import { useBranches, useScanBranches } from '../lib/useBranches';
 import { dayWork } from '../lib/payroll';
 
 /*
@@ -189,7 +189,9 @@ const PRESETS = [
 ];
 
 export default function Attendance() {
-  const { codes: branchCodes } = useBranches();
+  const { codes: registryCodes } = useBranches();
+  // ทะเบียนสาขา + พื้นที่ที่เจอในข้อมูลสแกน (เช่น OFFICE) — ดู useScanBranches
+  const { codes: branchCodes, rememberAreas } = useScanBranches(registryCodes);
   const today = fmtDate(new Date());
 
   const [branch, setBranch] = useState('');          // '' = ทุกสาขา
@@ -242,6 +244,7 @@ export default function Attendance() {
       }
       const punches = assignOvernight(json.data || []).filter((r) => r.date >= s && r.date <= e);
       setRows(punches);
+      rememberAreas(json.data);
       setWarning(json.truncated ? (json.message || 'ข้อมูลถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
 
       // ขาดเป็นวันๆ = คนละเรื่องกับ "ไม่มีข้อมูลเลย" — บอกไปเลยว่าขาดวันไหน จะได้ไม่ต้องไล่หาเอง

@@ -5,7 +5,7 @@ import {
   Printer, CalendarClock, CalendarDays, X,
 } from 'lucide-react';
 import { assignOvernight, addDays, summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf, otNote } from '../lib/attendance';
-import { useBranches } from '../lib/useBranches';
+import { useBranches, useScanBranches } from '../lib/useBranches';
 import {
   summarizeSalary, payableTotal, payableUnitLabel, payUnitOf, periodDays, dayWork,
   hhmmOfMinutes, hhmmOfHours, LEAVE_COLUMNS, loadHolidays, saveHolidays, round2,
@@ -139,7 +139,9 @@ const HEAD_LEFT = [
 ];
 
 export default function SalaryReport() {
-  const { codes: branchCodes } = useBranches();
+  const { codes: registryCodes } = useBranches();
+  // ทะเบียนสาขา + พื้นที่ที่เจอในข้อมูลสแกน (เช่น OFFICE) — ดู useScanBranches
+  const { codes: branchCodes, rememberAreas } = useScanBranches(registryCodes);
   const today = fmtDate(new Date());
   const initial = presetRange(DEFAULT_PRESET);
 
@@ -223,6 +225,7 @@ export default function SalaryReport() {
       if (!res.ok || !json || json.status !== 'success') {
         throw new Error((json && json.message) || `ดึงเวลาสแกนไม่สำเร็จ (${res.status})`);
       }
+      rememberAreas(json.data);
       setPunches(assignOvernight(json.data || []).filter((r) => r.date >= s && r.date <= e));
       setScanNote(json.truncated ? (json.message || 'เวลาสแกนถูกตัดเพราะช่วงวันที่กว้างเกินไป') : '');
     } catch (err) {
