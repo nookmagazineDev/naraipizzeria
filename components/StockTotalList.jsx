@@ -23,6 +23,14 @@ async function fetchInBatches(list, makeUrl) {
   return out;
 }
 
+// สาขาที่ไม่นับรวมในหน้านี้ — ไม่ขึ้นใน dropdown/export ไม่ดึงยอดใช้ และไม่รวมในยอดคงเหลือ
+const EXCLUDED_BRANCHES = new Set(['clk']);
+const isIncludedBranch = name => !EXCLUDED_BRANCHES.has(String(name ?? '').trim().toLowerCase());
+const stripExcluded = list => (list || []).map(item => ({
+  ...item,
+  branchDetails: (item.branchDetails || []).filter(bd => isIncludedBranch(bd.branch)),
+}));
+
 export default function StockTotalList() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -53,7 +61,7 @@ export default function StockTotalList() {
     try {
       const branchesRes = await apiCall('getBranches');
       if (branchesRes.status === 'success') {
-        const validBranches = branchesRes.data.filter(b => String(b.name).toLowerCase() !== 'all');
+        const validBranches = branchesRes.data.filter(b => String(b.name).toLowerCase() !== 'all' && isIncludedBranch(b.name));
         setBranches(validBranches);
       }
       
@@ -61,7 +69,7 @@ export default function StockTotalList() {
       // apiRead = /api/stock-read ซึ่งอ่านยอดนับจาก SQL (ฐานเดียวกับที่สาขาบันทึก) ไม่ใช่ชีทที่หยุดอัปเดตแล้ว
       const itemsRes = await apiRead('getStockTotal', { endDate: '' });
       if (itemsRes.status === 'success') {
-        setItems(itemsRes.data);
+        setItems(stripExcluded(itemsRes.data));
         if (itemsRes.warning) toast.error(itemsRes.warning, { duration: 8000 });
       }
     } catch (err) {
@@ -90,7 +98,7 @@ export default function StockTotalList() {
 
       const validBranches = branches.filter(b => b.outletId);
       if (validBranches.length === 0) {
-        setItems(stockRes.data);
+        setItems(stripExcluded(stockRes.data));
         toast.error('ไม่พบสาขาที่มีรหัส outlet — ดึงยอดใช้ไม่ได้');
         return;
       }
@@ -116,7 +124,7 @@ export default function StockTotalList() {
         }
       });
 
-      const mergedItems = stockRes.data.map(item => {
+      const mergedItems = stripExcluded(stockRes.data).map(item => {
         const normId = normalizeId(item.productId);
         let uiTotalUsage = 0;
         validBranches.forEach(b => {
