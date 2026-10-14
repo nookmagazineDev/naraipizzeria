@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { useBranches } from '../lib/useBranches';
+import { isIncludedBranch } from '../lib/excludedBranches';
 
 /*
  * NARAI OFFICE — ACC → รายงานจากซัพหน้าสาขา
@@ -118,7 +119,7 @@ export default function BranchSupReport() {
       const r = await fetch(`/api/sup-cost?start=${from}&end=${to}`);
       const res = await r.json();
       if (res.status !== 'success') throw new Error(res.message || 'โหลดข้อมูลไม่สำเร็จ');
-      setRows(res.data || []);
+      setRows((res.data || []).filter((r) => isIncludedBranch(r.branch)));  // ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js)
       setLoadedRange([from, to]);
     } catch (e) {
       setError(e.message);
@@ -166,7 +167,7 @@ export default function BranchSupReport() {
   const branchOptions = useMemo(() => {
     const set = new Set(branchCodes.map((c) => String(c).toLowerCase()));
     rows.forEach((r) => set.add(r.branch));
-    return [...set].filter(Boolean).sort();
+    return [...set].filter((b) => b && isIncludedBranch(b)).sort();
   }, [branchCodes, rows]);
 
   const detailRows = useMemo(() => {

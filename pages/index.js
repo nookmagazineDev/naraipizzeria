@@ -66,6 +66,7 @@ import UserList from '../components/UserList';
 import ChangePasswordModal from '../components/ChangePasswordModal';
 import { MENU_GROUPS, MENU_LABELS, ROLE_ADMIN, firstAllowedMenu, hasPerm } from '../lib/permissions';
 import { FALLBACK_BRANCHES } from '../lib/branches';
+import { isIncludedBranch } from '../lib/excludedBranches';
 import {
   OPEN_DATE_BUFFER_DAYS, addDaysStr, dateFromRow, fetchChunkJson, getChunks, normalizeArray,
 } from '../lib/salesFetch';
@@ -107,7 +108,9 @@ import * as XLSX from 'xlsx';
 const OUTLETS = Object.fromEntries(
   FALLBACK_BRANCHES.filter((b) => b.outletId).map((b) => [b.outletId, b.code]));
 
+// สาขาที่ไม่นับรวม (lib/excludedBranches.js) ไม่ขึ้นใน dropdown/ตัวเลือกเปรียบเทียบสาขา
 const outletListOf = (map) => Object.entries(map)
+  .filter(([, name]) => isIncludedBranch(name))
   .map(([id, name]) => ({ id: parseInt(id), name }))
   .sort((a, b) => a.id - b.id);
 
@@ -1031,6 +1034,12 @@ export default function App() {
         : (extra.details || []);
       allSales = allSales.concat(extraSales);
       allDetails = allDetails.concat(extraDetails);
+
+      // ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js) ก่อนทุกอย่าง — ทุกหน้าในกลุ่ม ACC
+      // (แดชบอร์ด/ยอดขาย/ยอดรายวัน/รายละเอียด/ค้นหารายไอเทม/ใบกำกับภาษี) อ่านจากชุดนี้
+      const keepOutlet = r => isIncludedBranch(OUTLETS[parseInt(r.outletID ?? r.OutletID)]);
+      allSales = allSales.filter(keepOutlet);
+      allDetails = allDetails.filter(keepOutlet);
 
       // คัดเฉพาะแถวที่ "วันเปิดบิล" (startTime) อยู่ในช่วงที่เลือกจริง ๆ
       // (ตัดบิลส่วนเกินที่ดึงเผื่อมาจาก buffer ท้ายช่วงออก)

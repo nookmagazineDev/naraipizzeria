@@ -3,7 +3,7 @@ import { Calendar, Search, Loader2, AlertCircle, AlertTriangle, Download, Refres
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style';
 import { useBranches } from '../lib/useBranches';
-import { isStockBranch } from '../lib/stockExcludedBranches';
+import { isIncludedBranch } from '../lib/excludedBranches';
 // ชื่อเดือน/วันที่ไทยของกลาง — หน้ารายงานใช้ต่อหัวอ่านชุดเดียวกัน ตัวย่อจะได้ไม่เพี้ยนกันคนละหน้า
 import { monthLabel, dateLabel } from '../lib/thaiDate';
 
@@ -147,8 +147,8 @@ export default function MonthEndList() {
       const res = await fetch('/api/stock-month-end?view=summary');
       const json = await res.json();
       if (json.status !== 'success') throw new Error(json.message || 'ดึงสรุปการปิดรอบไม่สำเร็จ');
-      // ตัดสาขาที่ไม่นับรวม (lib/stockExcludedBranches.js) — ไม่ขึ้นในสรุป และไม่ถูก export
-      const branches = (json.data.branches || []).filter((b) => isStockBranch(b.branch));
+      // ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js) — ไม่ขึ้นในสรุป และไม่ถูก export
+      const branches = (json.data.branches || []).filter((b) => isIncludedBranch(b.branch));
       setSummary({ ...json.data, branches });
       if (!quiet) toast.success(`โหลดสรุป ${branches.length} สาขาแล้ว`);
     } catch (err) {
@@ -180,8 +180,8 @@ export default function MonthEndList() {
 
       setDetail({
         ...json.data,
-        branches: (json.data.branches || []).filter((b) => isStockBranch(b)),
-        rows: (json.data.rows || []).filter((r) => isStockBranch(r.branch)),
+        branches: (json.data.branches || []).filter((b) => isIncludedBranch(b)),
+        rows: (json.data.rows || []).filter((r) => isIncludedBranch(r.branch)),
       });
       // ไม่ได้ระบุเดือนไป — จำเดือนที่ API เลือกให้ไว้ dropdown จะได้ตรงกับของที่แสดงอยู่
       if (!wantMonth && json.data.month) setMonth(json.data.month);
@@ -564,7 +564,7 @@ function SummaryView({ summary, loading, error, onReload, onOpen, renderError, o
 
   // ไม่มีแถวในตารางเลยสักรอบ — คนละเรื่องกับ "ตามหลัง" (ตามหลัง = เคยปิด แต่ยังไม่ถึงรอบล่าสุด)
   const withData = new Set(branches.map((b) => b.branch));
-  const never = registryCodes.filter((code) => isStockBranch(code) && !withData.has(code)).map((code) => ({ branch: code }));
+  const never = registryCodes.filter((code) => isIncludedBranch(code) && !withData.has(code)).map((code) => ({ branch: code }));
   const notDone = [...behind, ...never];
 
   return (

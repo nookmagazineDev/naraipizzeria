@@ -3,7 +3,7 @@ import { PackageSearch, Search, Loader2, AlertCircle, Download } from 'lucide-re
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
 import { apiCall, apiRead } from '../lib/stockApi';
-import { isStockBranch } from '../lib/stockExcludedBranches';
+import { isIncludedBranch } from '../lib/excludedBranches';
 
 // ต้องตรงกับ normalizeId ใน /api/usage-bom เป๊ะ ไม่งั้นคีย์รหัสสินค้าจับคู่กันไม่ติด
 const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
@@ -24,10 +24,10 @@ async function fetchInBatches(list, makeUrl) {
   return out;
 }
 
-// ตัดสาขาที่ไม่นับรวม (lib/stockExcludedBranches.js) — ไม่ขึ้นใน dropdown/export ไม่ดึงยอดใช้ และไม่รวมในยอดคงเหลือ
+// ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js) — ไม่ขึ้นใน dropdown/export ไม่ดึงยอดใช้ และไม่รวมในยอดคงเหลือ
 const stripExcluded = list => (list || []).map(item => ({
   ...item,
-  branchDetails: (item.branchDetails || []).filter(bd => isStockBranch(bd.branch)),
+  branchDetails: (item.branchDetails || []).filter(bd => isIncludedBranch(bd.branch)),
 }));
 
 export default function StockTotalList() {
@@ -60,7 +60,7 @@ export default function StockTotalList() {
     try {
       const branchesRes = await apiCall('getBranches');
       if (branchesRes.status === 'success') {
-        const validBranches = branchesRes.data.filter(b => String(b.name).toLowerCase() !== 'all' && isStockBranch(b.name));
+        const validBranches = branchesRes.data.filter(b => String(b.name).toLowerCase() !== 'all' && isIncludedBranch(b.name));
         setBranches(validBranches);
       }
       

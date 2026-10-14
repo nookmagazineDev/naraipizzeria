@@ -31,7 +31,7 @@ import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
 import { apiRead } from '../lib/stockApi';
 import { shiftMonth, closingByBranch, cycleWindow, branchFlow, monthLabel, dateLabel } from '../lib/usageClosing';
-import { isStockBranch } from '../lib/stockExcludedBranches';
+import { isIncludedBranch } from '../lib/excludedBranches';
 
 // ต้องตรงกับ normalizeId ใน /api/usage-bom เป๊ะ ไม่งั้นคีย์รหัสสินค้าจับคู่กันไม่ติด
 const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
@@ -136,8 +136,8 @@ export default function StockUsagePerHead() {
         apiRead('getStockTotal', { endDate: '' }),
       ]);
       if (branchRes.status === 'success') {
-        // ตัดสาขาที่ไม่นับรวม (lib/stockExcludedBranches.js) — ไม่ขึ้นให้เลือก ไม่ดึงยอด ไม่รวมในค่าเฉลี่ย
-        const list = (branchRes.data || []).filter(b => String(b.name).toLowerCase() !== 'all' && isStockBranch(b.name));
+        // ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js) — ไม่ขึ้นให้เลือก ไม่ดึงยอด ไม่รวมในค่าเฉลี่ย
+        const list = (branchRes.data || []).filter(b => String(b.name).toLowerCase() !== 'all' && isIncludedBranch(b.name));
         setBranches(list);
         setSelectedKeys(list.filter(b => b.outletId).map(b => String(b.name).toLowerCase()));
       }

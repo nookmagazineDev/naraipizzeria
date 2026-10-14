@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { PackageOpen, Search, Loader2, AlertCircle, Download, Info, ImageOff, Calendar } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
-import { isStockBranch } from '../lib/stockExcludedBranches';
+import { isIncludedBranch } from '../lib/excludedBranches';
 
 /*
  * จัดซื้อ — เบิกของสาขา: อ่านชีท "ใบเบิก" + "data" ผ่าน /api/branch-requisition
@@ -63,9 +63,9 @@ export default function BranchRequisition() {
       .then(r => r.json())
       .then(res => {
         if (res.status === 'success') {
-          // ตัดสาขาที่ไม่นับรวม (lib/stockExcludedBranches.js) — ไม่ขึ้นเป็นคอลัมน์/ตัวกรอง และไม่รวมในยอด
-          setBranches((res.data?.branches || []).filter(b => isStockBranch(b)));
-          setLogs((res.data?.logs || []).filter(r => isStockBranch(r.branch)));
+          // ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js) — ไม่ขึ้นเป็นคอลัมน์/ตัวกรอง และไม่รวมในยอด
+          setBranches((res.data?.branches || []).filter(b => isIncludedBranch(b)));
+          setLogs((res.data?.logs || []).filter(r => isIncludedBranch(r.branch)));
           setItemInfo(res.data?.itemInfo || {});
           setError('');
         } else setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
