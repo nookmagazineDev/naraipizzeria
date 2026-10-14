@@ -4,7 +4,7 @@ import {
   Wallet, Loader2, Search, Building2, Download, AlertCircle, RefreshCw,
   Printer, CalendarClock, CalendarDays, X,
 } from 'lucide-react';
-import { assignOvernight, addDays, scanQueryBranch, keepBranchScans, summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf, otNote } from '../lib/attendance';
+import { assignOvernight, addDays, scanQueryBranch, keepBranchScans, summarizeDaily, attachSchedule, applyScanEdits, hhmm, totalLateOf, otNote, SCAN_SLOTS } from '../lib/attendance';
 import { useBranches, useScanBranches } from '../lib/useBranches';
 import {
   summarizeSalary, payableTotal, payableUnitLabel, payUnitOf, periodDays, dayWork,
@@ -750,7 +750,7 @@ export default function SalaryReport() {
                 </p>
                 {checkStats.day9People > 0 && (
                   <p className="text-emerald-700">
-                    <span className="font-medium">DAY9</span>: ย้ายเวลาทำงานวันละ 1 ชม. ไปเป็น OT ให้แล้ว (เฉพาะวันที่ทำงานสุทธิครบ 9 ชม.) —
+                    <span className="font-medium">DAY9</span>: ย้ายเวลาทำงานวันละ 1 ชม. ไปเป็น OT ให้แล้ว (เฉพาะวันที่ลงตารางครบ 9 ชม. — สายไปหักที่เวลาทำงาน) —
                     {` ${checkStats.day9People} คน · ${checkStats.day9Days} วัน · รวม ${round2(checkStats.day9Hours)} ชม.`}
                     {' '}(เวลาทำงานลดลงเท่ากัน · จำนวนวันทำงานเท่าเดิม)
                   </p>
@@ -876,15 +876,32 @@ export default function SalaryReport() {
                           </>
                         )}
 
-                        {/* ฝั่งสแกนจริง */}
-                        {d.count > 0 ? (
+                        {/* ฝั่งสแกนจริง — รวมเวลาที่แก้ด้วยมือในหน้าดูสแกนหน้า (ขอบเหลือง) ซึ่งใช้คิดเวลาทำงาน/OT ด้วย
+                            วันที่เครื่องไม่มีสแกนเลยแต่มีคนเติมเวลาให้ ก็ต้องเห็นเวลาที่เติม ไม่ใช่ขึ้นว่าไม่มีสแกน */}
+                        {d.count > 0 || SCAN_SLOTS.some(({ field }) => d[field]) ? (
                           <>
-                            <td className="px-2 py-1 text-center font-mono font-semibold text-emerald-700 border-l border-slate-200">{hhmm(d.first)}</td>
-                            <td className="px-2 py-1 text-center font-mono text-amber-600">{d.breakOut ? hhmm(d.breakOut) : '—'}</td>
-                            <td className="px-2 py-1 text-center font-mono text-amber-600">{d.breakIn ? hhmm(d.breakIn) : '—'}</td>
-                            <td className="px-2 py-1 text-center font-mono font-semibold text-rose-700">{d.last ? hhmm(d.last) : '—'}</td>
+                            {SCAN_SLOTS.map(({ slot, field }, i) => {
+                              const e = d.edits?.[slot];
+                              const color = field === 'first' ? 'font-semibold text-emerald-700'
+                                : field === 'last' ? 'font-semibold text-rose-700' : 'text-amber-600';
+                              return (
+                                <td key={slot} className={`px-2 py-1 text-center font-mono ${color}${i === 0 ? ' border-l border-slate-200' : ''}`}>
+                                  <span
+                                    className={e ? 'px-1 rounded bg-amber-50 ring-1 ring-amber-300' : undefined}
+                                    title={e
+                                      ? `แก้ด้วยมือ: ${e.time || 'ไม่มีเวลา'} จากเดิม ${e.before || 'ไม่มีเวลา'}` +
+                                        `${e.savedAt ? ` · ${e.savedAt}` : ''}${e.editedBy ? ` · โดย ${e.editedBy}` : ''}${e.note ? ` · ${e.note}` : ''}`
+                                      : undefined}
+                                  >
+                                    {d[field] ? hhmm(d[field]) : '—'}
+                                  </span>
+                                </td>
+                              );
+                            })}
                             <td className="px-2 py-1 text-center font-mono text-slate-500 whitespace-nowrap">
-                              {(d.times || []).map(hhmm).join(', ')}
+                              {d.count > 0
+                                ? (d.times || []).map(hhmm).join(', ')
+                                : <span className="font-sans text-[10px] text-amber-700">ไม่มีสแกนจริง · เวลาแก้ด้วยมือ</span>}
                             </td>
                           </>
                         ) : (
@@ -932,9 +949,9 @@ export default function SalaryReport() {
 
             <div className="px-6 py-3 bg-slate-50 border-t border-slate-100 text-[11px] text-slate-500 flex-shrink-0">
               แสดงเฉพาะวันที่มีข้อมูล (อยู่ในตารางงาน หรือมีการสแกน) ในงวดที่ดึงมา ·
-              เวลาทำงานของวัน = เวลาที่ลงตารางไว้ (หักเบรค) − นาทีที่สาย ตรงกับที่รวมไว้ในตารางสรุป ·
-              OT = OT ที่ลงไว้ในตารางงาน + 1 ชม. ของ DAY9 (D9 — ย้ายมาจากเวลาทำงาน) ·
-              &quot;ออกก่อน&quot; ไม่ได้ถูกนำไปหักในรายงาน แสดงไว้ให้ตรวจเฉยๆ
+              เวลาสแกนที่มีขอบเหลือง = แก้ด้วยมือในหน้า &quot;ดูสแกนหน้า&quot; (ชี้ดูได้ว่าใครแก้ จากเท่าไหร่) ·
+              เวลาทำงานของวัน = เวลาที่ลงตารางไว้ (หักเบรค) − รวมสาย (เข้าสาย + เบรคสาย + ออกก่อน) ตรงกับที่รวมไว้ในตารางสรุป ·
+              OT = OT ที่ลงไว้ในตารางงาน + 1 ชม. ของ DAY9 (D9 — ย้ายมาจากเวลาทำงาน เมื่อลงตารางครบ 9 ชม. สายไปหักที่เวลาทำงาน)
             </div>
           </div>
         </div>
