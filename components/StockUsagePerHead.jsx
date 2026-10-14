@@ -82,6 +82,8 @@ const BRANCH_COLS = {
   perHead:  { label: 'ต่อหัว',  head: 'text-purple-600 bg-purple-50/40', title: 'ยอดใช้ ÷ จำนวนหัวลูกค้าของสาขานั้น' },
 };
 
+const EXCLUDED_BRANCHES = new Set(['all', 'clk']);
+
 export default function StockUsagePerHead() {
   const [items, setItems] = useState([]);          // ทะเบียนสินค้า (ชื่อ/หน่วย/หมวด) จากยอดรวมทุกสาขา
   const [branches, setBranches] = useState([]);
@@ -135,7 +137,8 @@ export default function StockUsagePerHead() {
         apiRead('getStockTotal', { endDate: '' }),
       ]);
       if (branchRes.status === 'success') {
-        const list = (branchRes.data || []).filter(b => String(b.name).toLowerCase() !== 'all');
+        // CLK ไม่นับรวมในหน้านี้ (เหมือนหน้าดูยอดรวมทุกสาขา) — ไม่ขึ้นให้เลือก ไม่ดึงยอด ไม่รวมในค่าเฉลี่ย
+        const list = (branchRes.data || []).filter(b => !EXCLUDED_BRANCHES.has(String(b.name).trim().toLowerCase()));
         setBranches(list);
         setSelectedKeys(list.filter(b => b.outletId).map(b => String(b.name).toLowerCase()));
       }
