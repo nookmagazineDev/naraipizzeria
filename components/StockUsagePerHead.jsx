@@ -31,6 +31,7 @@ import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style'; // fork ของ xlsx ที่ใส่สี/ฟอนต์ในเซลล์ได้ (API เดียวกัน)
 import { apiRead } from '../lib/stockApi';
 import { shiftMonth, closingByBranch, cycleWindow, branchFlow, monthLabel, dateLabel } from '../lib/usageClosing';
+import { isStockBranch } from '../lib/stockExcludedBranches';
 
 // ต้องตรงกับ normalizeId ใน /api/usage-bom เป๊ะ ไม่งั้นคีย์รหัสสินค้าจับคู่กันไม่ติด
 const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
@@ -81,8 +82,6 @@ const BRANCH_COLS = {
   usage:    { label: 'ยอดใช้',  head: 'text-purple-600 bg-purple-50/40', title: '' },
   perHead:  { label: 'ต่อหัว',  head: 'text-purple-600 bg-purple-50/40', title: 'ยอดใช้ ÷ จำนวนหัวลูกค้าของสาขานั้น' },
 };
-
-const EXCLUDED_BRANCHES = new Set(['all', 'clk']);
 
 export default function StockUsagePerHead() {
   const [items, setItems] = useState([]);          // ทะเบียนสินค้า (ชื่อ/หน่วย/หมวด) จากยอดรวมทุกสาขา
@@ -137,8 +136,8 @@ export default function StockUsagePerHead() {
         apiRead('getStockTotal', { endDate: '' }),
       ]);
       if (branchRes.status === 'success') {
-        // CLK ไม่นับรวมในหน้านี้ (เหมือนหน้าดูยอดรวมทุกสาขา) — ไม่ขึ้นให้เลือก ไม่ดึงยอด ไม่รวมในค่าเฉลี่ย
-        const list = (branchRes.data || []).filter(b => !EXCLUDED_BRANCHES.has(String(b.name).trim().toLowerCase()));
+        // ตัดสาขาที่ไม่นับรวม (lib/stockExcludedBranches.js) — ไม่ขึ้นให้เลือก ไม่ดึงยอด ไม่รวมในค่าเฉลี่ย
+        const list = (branchRes.data || []).filter(b => String(b.name).toLowerCase() !== 'all' && isStockBranch(b.name));
         setBranches(list);
         setSelectedKeys(list.filter(b => b.outletId).map(b => String(b.name).toLowerCase()));
       }

@@ -3,6 +3,7 @@ import { Calendar, Search, Loader2, AlertCircle, AlertTriangle, Download, Refres
 import { toast } from 'react-hot-toast';
 import * as XLSX from 'xlsx-js-style';
 import { useBranches } from '../lib/useBranches';
+import { isStockBranch } from '../lib/stockExcludedBranches';
 // ชื่อเดือน/วันที่ไทยของกลาง — หน้ารายงานใช้ต่อหัวอ่านชุดเดียวกัน ตัวย่อจะได้ไม่เพี้ยนกันคนละหน้า
 import { monthLabel, dateLabel } from '../lib/thaiDate';
 
@@ -146,8 +147,10 @@ export default function MonthEndList() {
       const res = await fetch('/api/stock-month-end?view=summary');
       const json = await res.json();
       if (json.status !== 'success') throw new Error(json.message || 'ดึงสรุปการปิดรอบไม่สำเร็จ');
-      setSummary(json.data);
-      if (!quiet) toast.success(`โหลดสรุป ${json.data.branches.length} สาขาแล้ว`);
+      // ตัดสาขาที่ไม่นับรวม (lib/stockExcludedBranches.js) — ไม่ขึ้นในสรุป และไม่ถูก export
+      const branches = (json.data.branches || []).filter((b) => isStockBranch(b.branch));
+      setSummary({ ...json.data, branches });
+      if (!quiet) toast.success(`โหลดสรุป ${branches.length} สาขาแล้ว`);
     } catch (err) {
       setSummaryError(err.message);
       setSummary({ branches: [], latestDate: '', layout: null, source: '' });
@@ -175,7 +178,11 @@ export default function MonthEndList() {
       if (json.status !== 'success') throw new Error(json.message || 'ดึงข้อมูลปิดรอบเดือนไม่สำเร็จ');
       if (req !== reqRef.current) return;
 
-      setDetail(json.data);
+      setDetail({
+        ...json.data,
+        branches: (json.data.branches || []).filter((b) => isStockBranch(b)),
+        rows: (json.data.rows || []).filter((r) => isStockBranch(r.branch)),
+      });
       // ไม่ได้ระบุเดือนไป — จำเดือนที่ API เลือกให้ไว้ dropdown จะได้ตรงกับของที่แสดงอยู่
       if (!wantMonth && json.data.month) setMonth(json.data.month);
       if (!quiet) toast.success(`โหลดข้อมูลปิดรอบ ${monthLabel(json.data.month)} แล้ว`);
@@ -557,7 +564,7 @@ function SummaryView({ summary, loading, error, onReload, onOpen, renderError, o
 
   // ไม่มีแถวในตารางเลยสักรอบ — คนละเรื่องกับ "ตามหลัง" (ตามหลัง = เคยปิด แต่ยังไม่ถึงรอบล่าสุด)
   const withData = new Set(branches.map((b) => b.branch));
-  const never = registryCodes.filter((code) => !withData.has(code)).map((code) => ({ branch: code }));
+  const never = registryCodes.filter((code) => isStockBranch(code) && !withData.has(code)).map((code) => ({ branch: code }));
   const notDone = [...behind, ...never];
 
   return (
