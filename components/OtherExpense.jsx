@@ -3,6 +3,7 @@ import { DollarSign, Save, Building2, Calendar, Info, Loader2, CheckCircle, Aler
 import * as XLSX from 'xlsx-js-style';
 import { apiCall } from '../lib/expenseApi';
 import { useBranches } from '../lib/useBranches';
+import { isIncludedBranch } from '../lib/excludedBranches';
 
 /*
  * NARAI OFFICE — ค่าใช้จ่ายอื่นๆ
@@ -96,7 +97,8 @@ export default function OtherExpense() {
   // สาขาที่ให้เลือก: ชีท "ข้อมูลค่าใช้อื่น" คอลัมน์ B เป็นตัวตั้ง (เพราะต้องจับคู่กับรหัสมิเตอร์ใน codesMap)
   // ชีทยังไม่มีสาขาไหนเลย/ต่อ GAS ไม่ได้ ค่อยถอยไปใช้ทะเบียนสาขากลาง
   const branchOptions = useMemo(
-    () => (refs.branches.length ? refs.branches : registryBranches),
+    // ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js)
+    () => (refs.branches.length ? refs.branches : registryBranches).filter(isIncludedBranch),
     [refs.branches, registryBranches]
   );
 
@@ -131,7 +133,7 @@ export default function OtherExpense() {
   const loadHistory = () => {
     setHistory(h => ({ ...h, loading: true }));
     apiCall('getExpenses', {})
-      .then(res => setHistory({ loading: false, loaded: true, rows: res.data || [] }))
+      .then(res => setHistory({ loading: false, loaded: true, rows: (res.data || []).filter(r => isIncludedBranch(r.branch)) }))
       .catch(() => setHistory({ loading: false, loaded: true, rows: [] }));
   };
   useEffect(loadHistory, []);

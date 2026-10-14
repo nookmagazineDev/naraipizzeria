@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { apiCall, apiRead } from '../lib/stockApi';
-import { isStockBranch } from '../lib/stockExcludedBranches';
+import { isIncludedBranch } from '../lib/excludedBranches';
 import { Loader2, Save, Search, AlertCircle, PackageSearch, Eye, FileText, ClipboardList } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -72,8 +72,8 @@ export default function StockList() {
   useEffect(() => {
     if (isAll) {
       // ตอนเปิดหน้า โหลดแค่รายชื่อสาขาสำหรับ dropdown — ข้อมูลที่เหลือรอเลือกสาขาก่อน
-      // ตัดสาขาที่ไม่นับรวม (lib/stockExcludedBranches.js) ออกจาก dropdown
-      apiRead('getBranches').then(res => setBranches((res.data || []).filter(b => isStockBranch(b.name)))).catch(() => {});
+      // ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js) ออกจาก dropdown
+      apiRead('getBranches').then(res => setBranches((res.data || []).filter(b => isIncludedBranch(b.name)))).catch(() => {});
     } else {
       loadData(user?.branch);
     }
@@ -668,7 +668,7 @@ export default function StockList() {
                               const other = isPar ? item.avgPerHead : item.parQty;
                               const has = active !== '' && active !== undefined && active !== null;
                               const hasOther = other !== '' && other !== undefined && other !== null;
-                              const branches = (item.calcBranches || []).filter(b => isStockBranch(b.branch));
+                              const branches = (item.calcBranches || []).filter(b => isIncludedBranch(b.branch));
                               const openCompare = () => branches.length > 0 && setSelectedCalcBranches({
                                 name: item.name, productId: item.productId, unit: item.unit,
                                 branch: effectiveBranch, rows: branches,

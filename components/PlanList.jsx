@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info, RefreshCw, Plus, Trash2, Settings } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
-import { isStockBranch } from '../lib/stockExcludedBranches';
+import { isIncludedBranch } from '../lib/excludedBranches';
 import { makePlanMatcher, normItemCode, validateItemCode, STATUS_INACTIVE } from '../lib/planItems';
 
 /*
@@ -146,7 +146,7 @@ export default function PlanList() {
       .then(res => {
         if (myId !== reqId.current) return;   // มีคำขอใหม่แซงไปแล้ว ทิ้งคำตอบนี้
         if (res.status === 'success') {
-          setRows((res.data || []).filter(r => isStockBranch(r.branch)));  // ตัดสาขาที่ไม่นับรวม (lib/stockExcludedBranches.js)
+          setRows((res.data || []).filter(r => isIncludedBranch(r.branch)));  // ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js)
           setError(''); setWarning(res.warning || ''); setSource(res.source || '');
         } else { setError(res.message || 'โหลดข้อมูลไม่สำเร็จ'); setWarning(''); }
       })
