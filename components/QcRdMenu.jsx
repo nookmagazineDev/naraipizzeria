@@ -5,6 +5,7 @@ import { rcpNameKey, rcpItemKey } from '../lib/rcpMatch';
 import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
 import { rcpLinesToBom, toSaveItems } from '../lib/rcpCopy.mjs';
 import { stockUnitOf, suggestUseUnit } from '../lib/unitFromName.mjs';
+import { nudgeModal } from '../lib/modalNudge';
 
 /*
  * QC/RD — เมนู: รายชื่อเมนู + สูตร (BOM) ของแต่ละเมนู
@@ -293,7 +294,15 @@ export default function QcRdMenu() {
       isNew: false, items: rows.length ? rows : [emptyIng()], sources,
     });
   };
-  const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000, tag: TAG_MATERIAL, noDeduct: false });
+  const emptyIng = () => ({ itemCode: '', itemName: '', qty: '', converter: 1000, tag: TAG_MATERIAL, noDeduct: false, _k: newRowKey() });
+
+  // ทุกแถววัตถุดิบต้องมีคีย์ประจำตัว (_k) — แถวใหม่แทรกไว้บนสุด ถ้าใช้ลำดับแถวเป็นคีย์
+  // ช่องค้นหาที่พิมพ์ค้างไว้จะเลื่อนไปโผล่ผิดแถว แถวที่มาจากสูตรเดิม/ดึงจากเมนูอื่นยังไม่มีคีย์ เติมให้ตรงนี้
+  useEffect(() => {
+    if (editMenu?.items.some(r => !r._k)) {
+      setEditMenu(m => ({ ...m, items: m.items.map(r => r._k ? r : { ...r, _k: newRowKey() }) }));
+    }
+  }, [editMenu]);
 
   // ───── ดึงวัตถุดิบจากเมนูอื่นเข้ามาในสูตรที่กำลังแก้ (ทำเมนูเซ็ต/เมนูรวม) ─────
   // factor = สัดส่วนของสูตรต้นทาง (1 = ทั้งสูตร, 0.2 = 20% ของสูตร, 2 = 2 เท่า)
@@ -1105,7 +1114,7 @@ export default function QcRdMenu() {
 
       {/* ───── Modal เพิ่ม/แก้ไขเมนู ───── */}
       {editMenu && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !saving && setEditMenu(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={nudgeModal}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-slate-800">{editMenu.isNew ? '➕ เพิ่มเมนูใหม่' : `✏️ แก้ไขเมนู ${editMenu.code}`}</h3>
@@ -1229,7 +1238,8 @@ export default function QcRdMenu() {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-xs font-bold text-slate-500">วัตถุดิบในสูตร (ยอดใช้เป็นหน่วยเล็ก เช่น กรัม · ตัวแปลง = หน่วยเล็กต่อ 1 หน่วยซื้อ)</label>
-                  <button onClick={() => setEditMenu(m => ({ ...m, items: [...m.items, emptyIng()] }))}
+                  {/* แถวใหม่ขึ้นบนสุดเสมอ (ไม่ต้องเลื่อนลงไปหาท้ายสูตรยาว ๆ) ติดแถบเขียวไว้ที่แถวล่าสุดแถวเดียว */}
+                  <button onClick={() => setEditMenu(m => ({ ...m, items: [{ ...emptyIng(), _fresh: true }, ...m.items.map(r => r._fresh ? { ...r, _fresh: false } : r)] }))}
                     className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800">
                     <Plus size={13} /> เพิ่มวัตถุดิบ
                   </button>
@@ -1246,7 +1256,7 @@ export default function QcRdMenu() {
                 </datalist>
                 <div className="space-y-2">
                   {editMenu.items.map((r, idx) => (
-                    <IngredientRow key={idx} row={r} items={items}
+                    <IngredientRow key={r._k || idx} row={r} items={items}
                       useUnit={useUnitOf(r)} purchaseUnit={itemMap[r.itemCode]?.unit || ''}
                       onUseUnitChange={u => setEditMenu(m => ({ ...m, useUnitEdits: { ...m.useUnitEdits, [r.itemCode]: u } }))}
                       onChange={next => setEditMenu(m => ({ ...m, items: m.items.map((x, i) => i === idx ? next : x) }))}
@@ -1916,6 +1926,10 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
   );
 }
 
+// คีย์ประจำแถววัตถุดิบในฟอร์ม (ดู _k ใน QcRdMenu)
+let rowKeySeq = 0;
+const newRowKey = () => `ing${++rowKeySeq}`;
+
 // แถววัตถุดิบในฟอร์ม: ค้นหาไอเทมจากชีท item + กรอกยอดใช้/หน่วยใช้/ตัวแปลง
 //
 // "หน่วยใช้" (หน่วยของตัวเลขในช่องยอดใช้ เช่น กรัม) เป็นข้อมูลของทะเบียนวัตถุดิบ ไม่ได้เก็บซ้ำไว้ในสูตร
@@ -1947,7 +1961,7 @@ function IngredientRow({ row, items, useUnit: useUnitInfo, purchaseUnit, onUseUn
   }, [items, query]);
 
   return (
-    <div className="flex flex-wrap items-start gap-2 p-2 bg-slate-50/70 rounded-xl border border-slate-100">
+    <div className={`flex flex-wrap items-start gap-2 p-2 rounded-xl border ${row._fresh ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50/70 border-slate-100'}`}>
       <div className="relative flex-1 min-w-[240px]">
         {row.itemCode ? (
           <div className="flex items-center justify-between gap-2 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm">
@@ -1969,7 +1983,7 @@ function IngredientRow({ row, items, useUnit: useUnitInfo, purchaseUnit, onUseUn
           </div>
         ) : (
           <>
-            <input value={query} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+            <input value={query} autoFocus={Boolean(row._fresh)} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
               onChange={e => { setQuery(e.target.value); setOpen(true); }}
               placeholder="พิมพ์ค้นหาวัตถุดิบ (รหัส/ชื่อ)…"
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500" />
