@@ -228,3 +228,15 @@ tr.row-void td:nth-child(5) {
     page-break-after: always;
   }
 }
+
+/* ป๊อปอัพที่กดพื้นที่ว่างแล้วไม่ปิด — สั่นเตือนให้รู้ว่าต้องกด ✕ หรือ "ยกเลิก" */
+@keyframes modal-nudge {
+  20% { transform: translateX(-7px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(3px); }
+}
+.modal-nudge { animation: modal-nudge 0.38s; }
+@media (prefers-reduced-motion: reduce) {
+  .modal-nudge { animation: none; outline: 3px solid #6366f1; }
+}

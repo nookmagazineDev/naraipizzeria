@@ -3,6 +3,7 @@ import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, P
 import { apiCall, syncNote, syncOk, syncSql, fillUseUnits, HOST_OUTDATED_NOTE } from '../lib/qcrdApi';
 import { useBranches } from '../lib/useBranches';
 import { suggestUseUnit } from '../lib/unitFromName.mjs';
+import { nudgeModal } from '../lib/modalNudge';
 
 /*
  * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน / หมวดสโตร์
@@ -993,7 +994,7 @@ export default function QcRdItems() {
 
       {/* ───── Modal แก้ไขวัตถุดิบ ───── */}
       {editItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !savingItem && setEditItem(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={nudgeModal}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-slate-800">
