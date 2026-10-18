@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { PackageSearch, Search, Loader2, AlertCircle, Save, CheckCircle, Info, Pencil, X, Plus, ArrowRightLeft, Trash2, AlertTriangle, UploadCloud, Download, Database, Copy, Ruler } from 'lucide-react';
 import { apiCall, syncNote, syncOk, syncSql, fillUseUnits, HOST_OUTDATED_NOTE } from '../lib/qcrdApi';
 import { useBranches } from '../lib/useBranches';
 import { suggestUseUnit } from '../lib/unitFromName.mjs';
 import { nudgeModal } from '../lib/modalNudge';
 import { ItemUsageDialog, buildUsageIndex, itemKey } from './ItemMenuUsage';
+import { PriceImportDialog, readPriceFile } from './ItemPriceImport';
+import { dateLabel } from '../lib/thaiDate';
 
 /*
  * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน / หมวดสโตร์
@@ -165,6 +167,10 @@ export default function QcRdItems() {
   // โหลดแยกเบื้องหลัง ตารางวัตถุดิบไม่ต้องรอ · พลาดก็แค่คอลัมน์ "ใช้ในเมนู" ขึ้นว่าโหลดไม่ได้
   const [usageData, setUsageData] = useState({ menus: [], bom: {}, status: 'loading' });
   const [usageItem, setUsageItem] = useState(null);   // วัตถุดิบที่เปิดป๊อปอัพ "ใช้ในเมนู" อยู่
+  // อัปเดตราคาจากไฟล์ "ราคาซื้อสินค้าล่าสุด" — { fileName, parsed } (ดู ItemPriceImport.jsx)
+  const [priceImport, setPriceImport] = useState(null);
+  const [readingFile, setReadingFile] = useState(false);
+  const priceFileRef = useRef(null);
 
   // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งตาราง (ใช้หลังกดบันทึก — ตารางเดิมยังอ่านได้ระหว่างรอ)
   //
@@ -193,6 +199,26 @@ export default function QcRdItems() {
       .finally(() => { if (!quiet) setLoading(false); });
   };
   useEffect(() => { load(); }, []);
+
+  const onPriceFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';   // เลือกไฟล์เดิมซ้ำได้
+    if (!file) return;
+    setReadingFile(true);
+    setToast(null);
+    try {
+      const parsed = await readPriceFile(file);
+      if (!parsed.lines.length) {
+        setToast({ ok: false, msg: `อ่าน "${file.name}" ไม่พบรายการ — ต้องมีหัวตาราง รหัส / ชื่อ / ราคา แบบไฟล์ "ราคาซื้อสินค้าล่าสุด"` });
+        return;
+      }
+      setPriceImport({ fileName: file.name, parsed });
+    } catch (err) {
+      setToast({ ok: false, msg: `อ่านไฟล์ไม่ได้: ${err.message}` });
+    } finally {
+      setReadingFile(false);
+    }
+  };
 
   const loadUsage = () => {
     const bust = `&t=${Date.now()}`;
@@ -789,6 +815,12 @@ export default function QcRdItems() {
                 <Copy size={14} /> คัดลอกจากสาขาอื่น
               </button>
             )}
+            <input ref={priceFileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={onPriceFile} />
+            <button onClick={() => priceFileRef.current?.click()} disabled={degraded || loading || readingFile}
+              title={degraded ? LOCK_HINT : 'เลือกไฟล์ Excel "ราคาซื้อสินค้าล่าสุด" (รหัส / ชื่อ / ราคา) — ดูสรุปก่อนบันทึก'}
+              className="inline-flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+              {readingFile ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />} อัปเดตราคาจากไฟล์
+            </button>
             <button onClick={() => setSrcModal(true)} disabled={degraded}
               title={degraded ? LOCK_HINT : 'ดึงวัตถุดิบที่มีอยู่จริงในสูตรเมนู / แพลนสั่งของ / ปิดรอบ แต่ยังไม่มีในทะเบียนนี้'}
               className="inline-flex items-center gap-2 bg-white hover:bg-emerald-50 disabled:bg-slate-100 disabled:text-slate-400 text-emerald-600 border border-emerald-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
@@ -883,6 +915,7 @@ export default function QcRdItems() {
                 <th className="px-3 py-3 text-left">itemID (POS)</th>
                 <th className="px-4 py-3 text-left">ชื่อ</th>
                 <th className="px-4 py-3 text-center">หน่วย</th>
+                <th className="px-3 py-3 text-right">ราคาก่อนหน้า</th>
                 <th className="px-4 py-3 text-right">ราคาต้นทุน</th>
                 <th className="px-3 py-3 text-right">ตัวแปลง</th>
                 <th className="px-3 py-3 text-left">สาขาที่ใช้</th>
@@ -895,11 +928,11 @@ export default function QcRdItems() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
+                <tr><td colSpan={13} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
               ) : filtered.map(i => (
                 <tr key={i._row ?? i.code} className={`hover:bg-slate-50/60 ${i.status === 'ปิดการใช้งาน' ? 'bg-rose-50/40 text-slate-400' : ''}`}>
                   <td className="px-4 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">
@@ -943,7 +976,19 @@ export default function QcRdItems() {
                       </span>
                     ) : <span className="text-slate-300">—</span>}
                   </td>
-                  <td className="px-4 py-2 text-right font-mono">{fmt(i.price)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-400 whitespace-nowrap">
+                    {i.prevPrice != null ? fmt(i.prevPrice) : '—'}
+                    {i.prevPriceAt && <div className="text-[10px] font-sans">{dateLabel(i.prevPriceAt)}</div>}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono whitespace-nowrap">
+                    {fmt(i.price)}
+                    {i.prevPrice > 0 && i.price != null && Math.abs(i.price - i.prevPrice) >= 0.0001 && (
+                      <span className={`ml-1 px-1 rounded-full text-[10px] font-bold ${i.price > i.prevPrice ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                        {i.price > i.prevPrice ? '▲' : '▼'}{Math.abs((i.price - i.prevPrice) / i.prevPrice * 100).toFixed(1)}%
+                      </span>
+                    )}
+                    {i.priceAt && <div className="text-[10px] font-sans text-slate-400">{dateLabel(i.priceAt)}</div>}
+                  </td>
                   <td className="px-3 py-2 text-right font-mono text-slate-500">
                     {i.converter != null && !isNaN(i.converter) ? Number(i.converter).toLocaleString() : <span className="text-slate-300">—</span>}
                     {i.useUnit ? (
@@ -1044,6 +1089,12 @@ export default function QcRdItems() {
           </div>
         )}
       </div>
+
+      {priceImport && (
+        <PriceImportDialog fileName={priceImport.fileName} parsed={priceImport.parsed} items={items}
+          degraded={degraded} lockHint={LOCK_HINT}
+          onClose={() => setPriceImport(null)} onDone={() => load({ quiet: true })} />
+      )}
 
       {usageItem && (
         <ItemUsageDialog item={usageItem} uses={usesOf(usageItem.code)}
