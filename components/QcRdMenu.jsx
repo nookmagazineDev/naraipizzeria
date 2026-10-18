@@ -6,6 +6,8 @@ import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
 import { rcpLinesToBom, toSaveItems } from '../lib/rcpCopy.mjs';
 import { stockUnitOf, suggestUseUnit } from '../lib/unitFromName.mjs';
 import { nudgeModal } from '../lib/modalNudge';
+import { RecostDialog, FoodCost, CostDelta } from './MenuRecost';
+import { dateLabel } from '../lib/thaiDate';
 
 /*
  * QC/RD — เมนู: รายชื่อเมนู + สูตร (BOM) ของแต่ละเมนู
@@ -66,6 +68,7 @@ export default function QcRdMenu() {
   // วัตถุดิบที่ใช้ซ้ำหลายเมนูจะถูกสั่งเติมซ้ำทุกเมนูถ้าไม่จำไว้
   const useUnitDone = useRef(new Set());
   const [groupModal, setGroupModal] = useState(false);
+  const [recostModal, setRecostModal] = useState(false);   // ปุ่ม "คำนวณต้นทุนใหม่" (ดู MenuRecost.jsx)
   const [srcModal, setSrcModal] = useState(false);   // ตัวเลือกเมนูจากฐานอื่น (ดู MenuSourcePicker)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -784,6 +787,11 @@ export default function QcRdMenu() {
               className="inline-flex items-center gap-2 bg-white hover:bg-indigo-50 disabled:bg-slate-100 disabled:text-slate-400 text-indigo-600 border border-indigo-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
               <Database size={14} /> เพิ่มจากฐานข้อมูล
             </button>
+            <button onClick={() => setRecostModal(true)} disabled={degraded || loading}
+              title={degraded ? LOCK_HINT : 'คิดต้นทุนทุกเมนูใหม่จากราคาวัตถุดิบล่าสุด — ดูสรุปก่อนบันทึก ต้นทุนเดิมเก็บไว้เป็นต้นทุนก่อนหน้า'}
+              className="inline-flex items-center gap-2 bg-white hover:bg-indigo-50 disabled:bg-slate-100 disabled:text-slate-400 text-indigo-600 border border-indigo-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+              <ArrowRightLeft size={14} /> คำนวณต้นทุนใหม่
+            </button>
             <button onClick={openAdd} disabled={degraded} title={degraded ? LOCK_HINT : ''}
               className="inline-flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all">
               <Plus size={14} /> เพิ่มเมนู
@@ -828,7 +836,9 @@ export default function QcRdMenu() {
                 <th className="px-4 py-3 text-left">ชื่อเมนู</th>
                 <th className="px-4 py-3 text-left">หมวดหมู่</th>
                 <th className="px-4 py-3 text-right">ราคาขาย</th>
+                <th className="px-3 py-3 text-right">ต้นทุนก่อนหน้า</th>
                 <th className="px-4 py-3 text-right">ต้นทุน</th>
+                <th className="px-3 py-3 text-right" title="ต้นทุน ÷ ราคาขาย">ต้นทุน/ราคาขาย</th>
                 <th className="px-4 py-3 text-center">วัตถุดิบ</th>
                 <th className="px-4 py-3 text-center">สถานะ</th>
                 <th className="px-4 py-3 text-center">จัดการ</th>
@@ -836,11 +846,11 @@ export default function QcRdMenu() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : pageRows.length === 0 ? (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-slate-400">ไม่พบเมนู</td></tr>
+                <tr><td colSpan={10} className="px-4 py-10 text-center text-slate-400">ไม่พบเมนู</td></tr>
               ) : pageRows.map(m => {
                 const nIng = bomCount(m.code);
                 const rcp = nIng ? null : rcpFor(m);     // สูตรฝั่ง POS มาเติมเมื่อไม่มีสูตรในชีท
@@ -857,7 +867,17 @@ export default function QcRdMenu() {
                         : <span className="text-slate-300">—</span>}
                     </td>
                     <td className={`px-4 py-2 text-right font-mono ${off ? 'text-slate-300' : ''}`}>{fmt(m.price, 0)}</td>
-                    <td className={`px-4 py-2 text-right font-mono ${off ? 'text-slate-300' : 'text-slate-600'}`}>{fmt(m.cost)}</td>
+                    <td className={`px-3 py-2 text-right font-mono whitespace-nowrap ${off ? 'text-slate-300' : 'text-slate-400'}`}>
+                      {m.prevCost != null ? fmt(m.prevCost) : '—'}
+                      {m.prevCostAt && <div className="text-[10px] font-sans">{dateLabel(m.prevCostAt)}</div>}
+                    </td>
+                    <td className={`px-4 py-2 text-right font-mono whitespace-nowrap ${off ? 'text-slate-300' : 'text-slate-600'}`}>
+                      {fmt(m.cost)}<CostDelta from={m.prevCost} to={m.cost} />
+                      {m.costAt && <div className="text-[10px] font-sans text-slate-400">{dateLabel(m.costAt)}</div>}
+                    </td>
+                    <td className={`px-3 py-2 text-right text-xs whitespace-nowrap ${off ? 'opacity-40' : ''}`}>
+                      <FoodCost cost={m.cost} price={m.price} />
+                    </td>
                     <td className="px-4 py-2 text-center whitespace-nowrap">
                       {nIng ? (
                         <span className="inline-flex items-center gap-1">
@@ -1300,6 +1320,12 @@ export default function QcRdMenu() {
             </div>
           </div>
         </div>
+      )}
+
+      {recostModal && (
+        <RecostDialog degraded={degraded} lockHint={LOCK_HINT}
+          onClose={() => setRecostModal(false)}
+          onDone={() => loadAll({ quiet: true, only: ['menu', 'bom'] })} />
       )}
 
       {/* ───── Modal จัดการหมวดหมู่ ───── */}

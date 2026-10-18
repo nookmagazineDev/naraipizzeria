@@ -2,7 +2,8 @@
 //
 // ส่งต่อไป /api/qcrd-gas (Apps Script เขียนลงชีทต้นทุนเมนู) ที่เดียวกับที่ /api/qcrd อ่าน
 // action: saveMenu · saveMenuStatus · saveMenuGroup · saveItem · addItem · deleteItem ·
-// updateItemUnits · updateItemUseUnits · sortBom · copyBranchItems (โหมด SQL เท่านั้น)
+// updateItemUnits · updateItemUseUnits · sortBom · copyBranchItems · updateItemPrices · recostMenus
+// (สามตัวท้ายโหมด SQL เท่านั้น)
 //
 // บันทึกลงชีทสำเร็จแล้ว "ดันขึ้น SQL" ต่อให้อัตโนมัติ เพราะหน้านับสต๊อกของ Narai-branch
 // อ่าน dbo.stock_item / stock_item_branch จากฐาน ไม่ได้อ่านชีท
@@ -60,6 +61,14 @@ export default async function handler(req, res) {
       // หน้าเว็บอ่านข้อความนี้ไปแสดงตรง ๆ จึงคืน 200 พร้อม status:'error' เหมือนที่ Apps Script ทำ
       return res.status(200).json({ status: 'error', message: err.message });
     }
+  }
+
+  // อัปเดตราคาจากไฟล์ / คำนวณต้นทุนใหม่ เก็บราคา-ต้นทุนก่อนหน้าไว้ในคอลัมน์ของฐาน — ชีทไม่มีที่เก็บ
+  if (action === 'updateItemPrices' || action === 'recostMenus') {
+    return res.status(200).json({
+      status: 'error',
+      message: 'อัปเดตราคาจากไฟล์และคำนวณต้นทุนใหม่ใช้ได้เฉพาะโหมด SQL (QCRD_SOURCE=sql)',
+    });
   }
 
   // คัดลอกวัตถุดิบข้ามสาขาทำทีเดียวบนฐาน — Apps Script ไม่มี action นี้

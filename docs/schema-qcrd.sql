@@ -171,6 +171,31 @@ IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_ite
     ALTER TABLE dbo.stock_item ADD use_unit NVARCHAR(50) NULL;     -- Q หน่วยใช้ (หน่วยเล็กในสูตร)
 GO
 
+/* ==================== ประวัติราคาวัตถุดิบ / ต้นทุนเมนู ====================
+   เก็บค่าก่อนหน้าไว้ 1 รอบ พร้อมวันที่ของทั้งค่าปัจจุบันและค่าก่อนหน้า
+   หน้าวัตถุดิบ: ปุ่ม "อัปเดตราคาจากไฟล์" (action updateItemPrices) + แก้ราคาทีละตัว (saveItem)
+   หน้าเมนู:    ปุ่ม "คำนวณต้นทุนใหม่" (action recostMenus) + บันทึกสูตร (saveMenu และ cascade)
+   ทุกทางที่เปลี่ยนราคา/ต้นทุนจะย้ายค่าเดิมไปช่อง prev_* ให้เอง (เฉพาะตอนค่าเปลี่ยนจริง)
+   ยังไม่รันส่วนนี้ = หน้าเว็บใช้ได้ตามเดิม แต่ปุ่มอัปเดตราคา/คำนวณต้นทุนใหม่จะแจ้งให้รันก่อน */
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'price_updated_at') IS NULL
+    ALTER TABLE dbo.stock_item ADD price_updated_at DATETIME2(0) NULL;       -- วันที่ของราคาปัจจุบัน
+GO
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'prev_price') IS NULL
+    ALTER TABLE dbo.stock_item ADD prev_price DECIMAL(18,4) NULL;            -- ราคาก่อนหน้า
+GO
+IF OBJECT_ID(N'dbo.stock_item', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.stock_item', N'prev_price_updated_at') IS NULL
+    ALTER TABLE dbo.stock_item ADD prev_price_updated_at DATETIME2(0) NULL;  -- วันที่ของราคาก่อนหน้า
+GO
+IF OBJECT_ID(N'dbo.qcrd_menu', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.qcrd_menu', N'cost_updated_at') IS NULL
+    ALTER TABLE dbo.qcrd_menu ADD cost_updated_at DATETIME2(0) NULL;         -- วันที่ของต้นทุนปัจจุบัน
+GO
+IF OBJECT_ID(N'dbo.qcrd_menu', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.qcrd_menu', N'prev_cost') IS NULL
+    ALTER TABLE dbo.qcrd_menu ADD prev_cost DECIMAL(18,4) NULL;              -- ต้นทุนก่อนหน้า
+GO
+IF OBJECT_ID(N'dbo.qcrd_menu', N'U') IS NOT NULL AND COL_LENGTH(N'dbo.qcrd_menu', N'prev_cost_updated_at') IS NULL
+    ALTER TABLE dbo.qcrd_menu ADD prev_cost_updated_at DATETIME2(0) NULL;    -- วันที่ของต้นทุนก่อนหน้า
+GO
+
 /* ==================== สิทธิ์ของ login ที่เว็บ/API ใช้ ====================
    ฐานนี้ถูกเรียกใช้จากหลายทาง และแต่ละทางใช้ login คนละตัวได้:
      - Vercel ต่อ SQL ตรง   ใช้ QCRD_DB_USER หรือ ZK_DB_USER (ตัวเดียวกับหน้าสแกนหน้า) หรือ HR_DB_USER
