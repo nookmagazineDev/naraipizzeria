@@ -4,6 +4,7 @@ import { apiCall, syncNote, syncOk, syncSql, fillUseUnits, HOST_OUTDATED_NOTE } 
 import { useBranches } from '../lib/useBranches';
 import { suggestUseUnit } from '../lib/unitFromName.mjs';
 import { nudgeModal } from '../lib/modalNudge';
+import { ItemUsageDialog, buildUsageIndex, itemKey } from './ItemMenuUsage';
 
 /*
  * QC/RD — วัตถุดิบ: รหัส / ชื่อ / หน่วย / ราคาต้นทุน / สถานะ / ไอเทมทดแทน / หมวดสโตร์
@@ -160,6 +161,10 @@ export default function QcRdItems() {
   const [copyForm, setCopyForm] = useState(null);
   const [copying, setCopying] = useState(false);
   const [useUnitModal, setUseUnitModal] = useState(false);   // เติมหน่วยใช้จากชื่อ (ดู UseUnitFillDialog)
+  // สูตรเมนู (ชุดเดียวกับหน้าเมนู) — ไว้บอกว่าวัตถุดิบแต่ละตัวใช้ในเมนูไหน ยอดเท่าไร (ดู ItemMenuUsage.jsx)
+  // โหลดแยกเบื้องหลัง ตารางวัตถุดิบไม่ต้องรอ · พลาดก็แค่คอลัมน์ "ใช้ในเมนู" ขึ้นว่าโหลดไม่ได้
+  const [usageData, setUsageData] = useState({ menus: [], bom: {}, status: 'loading' });
+  const [usageItem, setUsageItem] = useState(null);   // วัตถุดิบที่เปิดป๊อปอัพ "ใช้ในเมนู" อยู่
 
   // quiet = โหลดใหม่เบื้องหลัง ไม่ขึ้นสปินเนอร์คลุมทั้งตาราง (ใช้หลังกดบันทึก — ตารางเดิมยังอ่านได้ระหว่างรอ)
   //
@@ -188,6 +193,40 @@ export default function QcRdItems() {
       .finally(() => { if (!quiet) setLoading(false); });
   };
   useEffect(() => { load(); }, []);
+
+  const loadUsage = () => {
+    const bust = `&t=${Date.now()}`;
+    const get = (sheet) => fetch(`/api/qcrd?sheet=${sheet}${bust}`).then(r => r.json());
+    return Promise.all([get('menu'), get('bom')])
+      .then(([m, b]) => {
+        if (m.status !== 'success' || b.status !== 'success') throw new Error(m.message || b.message || 'โหลดสูตรเมนูไม่สำเร็จ');
+        setUsageData({ menus: m.data || [], bom: b.data || {}, status: 'ok' });
+      })
+      .catch(() => setUsageData(d => ({ ...d, status: d.status === 'ok' ? 'ok' : 'error' })));
+  };
+  useEffect(() => { loadUsage(); }, []);
+  const usageIndex = useMemo(() => buildUsageIndex(usageData.menus, usageData.bom), [usageData]);
+  const usesOf = (code) => usageIndex[itemKey(code)] || [];
+
+  // บันทึกจากป๊อปอัพ "ใช้ในเมนู" ผ่านแล้ว — แปะยอดใหม่ลงสูตรในเครื่องทันที (ป๊อปอัพเห็นค่าใหม่เลย)
+  // แล้วโหลดสูตรใหม่เบื้องหลัง ให้ได้ต้นทุนกับเมนูที่ผูกสูตรกันซึ่งฐานคิดใหม่ให้
+  const onUsageSaved = (codes, edits) => {
+    setUsageData(d => {
+      const bom = { ...d.bom };
+      codes.forEach(code => {
+        if (!bom[code]) return;
+        bom[code] = {
+          ...bom[code],
+          items: bom[code].items.map((r, idx) => {
+            const q = edits[`${code}#${idx}`];
+            return q === undefined ? r : { ...r, qty: q };
+          }),
+        };
+      });
+      return { ...d, bom };
+    });
+    loadUsage();
+  };
 
   /**
    * ตรวจหลังบันทึกว่าของที่อ่านจากต้นทางตรงกับที่เพิ่งเขียนไหม — ขอมาแค่รหัสเดียว
@@ -850,16 +889,17 @@ export default function QcRdItems() {
                 <th className="px-3 py-3 text-left">หมวดสโตร์</th>
                 <th className="px-4 py-3 text-center">สถานะ</th>
                 <th className="px-4 py-3 text-left">ไอเทมทดแทน</th>
+                <th className="px-3 py-3 text-left">ใช้ในเมนู</th>
                 <th className="px-4 py-3 text-center">จัดการ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={11} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={11} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
+                <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
               ) : filtered.map(i => (
                 <tr key={i._row ?? i.code} className={`hover:bg-slate-50/60 ${i.status === 'ปิดการใช้งาน' ? 'bg-rose-50/40 text-slate-400' : ''}`}>
                   <td className="px-4 py-2 font-mono text-xs text-slate-500 whitespace-nowrap">
@@ -958,6 +998,19 @@ export default function QcRdItems() {
                       </div>
                     )}
                   </td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {usageData.status === 'loading' ? <Loader2 size={12} className="animate-spin text-slate-300" />
+                      : usageData.status === 'error' ? <span className="text-slate-300 text-xs" title="โหลดสูตรเมนูไม่สำเร็จ">—</span>
+                      : (() => {
+                        const n = new Set(usesOf(i.code).map(u => u.menuCode)).size;
+                        return n ? (
+                          <button onClick={() => setUsageItem(i)}
+                            className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-full text-[11px] font-semibold hover:bg-indigo-100">
+                            ใช้ใน {n} เมนู
+                          </button>
+                        ) : <span className="text-slate-300 text-xs">ยังไม่มีเมนูใช้</span>;
+                      })()}
+                  </td>
                   <td className="px-4 py-2 text-center">
                     <div className="inline-flex items-center gap-1.5">
                       <button onClick={() => openEdit(i)} disabled={degraded} title={degraded ? LOCK_HINT : ''}
@@ -991,6 +1044,12 @@ export default function QcRdItems() {
           </div>
         )}
       </div>
+
+      {usageItem && (
+        <ItemUsageDialog item={usageItem} uses={usesOf(usageItem.code)}
+          menus={usageData.menus} bom={usageData.bom} degraded={degraded} lockHint={LOCK_HINT}
+          onClose={() => setUsageItem(null)} onSaved={onUsageSaved} />
+      )}
 
       {/* ───── Modal แก้ไขวัตถุดิบ ───── */}
       {editItem && (
@@ -1264,7 +1323,7 @@ export default function QcRdItems() {
 
       {/* ───── Modal ยืนยันลบวัตถุดิบ ───── */}
       {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !deleting && setDeleteTarget(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={nudgeModal}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
             <div className="p-5 flex items-start gap-3">
               <div className="p-2 bg-rose-50 text-rose-500 rounded-xl flex-shrink-0"><AlertTriangle size={20} /></div>
@@ -1294,7 +1353,7 @@ export default function QcRdItems() {
         </div>
       )}
       {copyForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !copying && setCopyForm(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={nudgeModal}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1565,7 +1624,7 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={() => !saving && onClose()}>
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={nudgeModal}>
       <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
           <div>
@@ -1882,7 +1941,7 @@ function ItemSourcePicker({ existing, onClose, onPick, onSaved }) {
   const active = (schema || []).find(s => s.id === tab);
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={nudgeModal}>
       <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
           <div>
