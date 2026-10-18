@@ -1264,7 +1264,7 @@ export default function QcRdItems() {
 
       {/* ───── Modal ยืนยันลบวัตถุดิบ ───── */}
       {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !deleting && setDeleteTarget(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={nudgeModal}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm" onClick={e => e.stopPropagation()}>
             <div className="p-5 flex items-start gap-3">
               <div className="p-2 bg-rose-50 text-rose-500 rounded-xl flex-shrink-0"><AlertTriangle size={20} /></div>
@@ -1294,7 +1294,7 @@ export default function QcRdItems() {
         </div>
       )}
       {copyForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !copying && setCopyForm(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={nudgeModal}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -1565,7 +1565,7 @@ function UseUnitFillDialog({ rows, onClose, onEdit, onSaved }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={() => !saving && onClose()}>
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={nudgeModal}>
       <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
           <div>
@@ -1882,7 +1882,7 @@ function ItemSourcePicker({ existing, onClose, onPick, onSaved }) {
   const active = (schema || []).find(s => s.id === tab);
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={nudgeModal}>
       <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
           <div>

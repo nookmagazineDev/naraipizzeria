@@ -915,7 +915,7 @@ export default function QcRdMenu() {
 
       {/* ───── Modal ดูสูตร ───── */}
       {viewMenu && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setViewCode(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={nudgeModal}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div>
@@ -1435,7 +1435,7 @@ function RcpCopyDialog({ candidates, onCopy, onClose, onDone }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={() => !running && onClose()}>
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={nudgeModal}>
       <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
           <div>
@@ -1752,7 +1752,7 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
   const active = tabInfo(tab);
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50" onClick={nudgeModal}>
       <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
           <div>
@@ -2159,7 +2159,7 @@ function GroupManager({ groups, menus, onClose, onSaved }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={nudgeModal}>
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
           <div>
