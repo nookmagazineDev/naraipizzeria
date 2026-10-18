@@ -23,6 +23,8 @@
 //    GET  /aoringo/ping | /aoringo/schema  → ต่อฐานได้ไหม + ตาราง/คอลัมน์ที่จับคู่ได้
 //    GET  /aoringo/sales | /aoringo/detail | /aoringo/expense?start=…&end=…  → บิล/รายการ/รายจ่าย
 //    GET  /aoringo/activity?start=…&end=…  → ประวัติออเดอร์ (OrderActivity)
+//  endpoint ค้นหาสมาชิก (ACC > ค้นหาสมาชิก — ทั้งฐาน ไม่จำกัดวันที่):
+//    GET /members | /member-bills?member=… | /bill-lines?outlet=&check=&day=YYYY-MM-DD
 //  endpoint ช่วย debug:
 //    GET /tables                 → รายชื่อตารางทั้งหมด
 //    GET /columns?table=ชื่อ      → คอลัมน์ของตาราง (default = Ctrans)
@@ -312,6 +314,117 @@ app.get('/cpaidbetweendate', async (req, res) => {
     res.json({ data: result.recordset.map(mapRow) });
   } catch (e) {
     console.error('cpaid query error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── ค้นหาสมาชิก (เมนู ACC > ค้นหาสมาชิก) — ทั้งฐาน ไม่จำกัดช่วงวันที่ ──
+//
+//   GET /members                     → ทุกเลขสมาชิกที่เคยมีบิล + จำนวนบิล/ยอดรวม/ครั้งแรก/ล่าสุด
+//   GET /member-bills?member=…       → ทุกบิลของสมาชิกคนนั้น (ใหม่→เก่า)
+//   GET /bill-lines?outlet=&check=&day=YYYY-MM-DD → รายการในบิลเดียว (ดึงตอนกดดูบิล)
+//
+// สองเส้นแรกอ่าน Cpaid (หลักแสนแถว) — เร็วเมื่อมี index บน MemberTel
+// (docs/member-lookup-index.sql · ไม่มี index ก็ใช้ได้ แค่ต้องสแกนทั้งตาราง)
+// เส้นที่สามอ่าน Ctrans (หลักล้านแถว) แต่จำกัดด้วย StartTime ±1 วันของบิล
+// ซึ่งมี index อยู่แล้ว จึงไม่ต้องสแกนทั้งตาราง
+const MEMBER_BILL_LIMIT = 2000;   // กันสมาชิกที่ผูกเลขผิด (เช่น เลขกลางของร้าน) ลากบิลเป็นหมื่นกลับมา
+
+app.get('/members', async (req, res) => {
+  try {
+    const pool = await getPool();
+    const result = await pool.request().query(`
+      SELECT
+        [MemberTel]                                     AS member,
+        COUNT(*)                                        AS bills,
+        SUM(ISNULL(TRY_CONVERT(DECIMAL(18,2), [BillTotal]), 0)) AS total,
+        MIN([${PAID_DATE_COL}])                         AS firstDate,
+        MAX([${PAID_DATE_COL}])                         AS lastDate,
+        COUNT(DISTINCT [OutletID])                      AS outlets
+      FROM ${PAID_TABLE}
+      WHERE [MemberTel] IS NOT NULL AND LTRIM(RTRIM(CONVERT(NVARCHAR(100), [MemberTel]))) <> ''
+      GROUP BY [MemberTel]
+    `);
+    res.json({ data: result.recordset.map(mapRow) });
+  } catch (e) {
+    console.error('members query error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/member-bills', async (req, res) => {
+  const member = String(req.query.member ?? '');
+  if (!member.trim()) return res.status(400).json({ error: 'ต้องมี member' });
+  try {
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('m', sql.NVarChar(100), member)
+      .input('n', sql.Int, MEMBER_BILL_LIMIT)
+      .query(`
+        SELECT TOP (@n)
+          [OutletID]     AS outletID,
+          [CheckID]      AS checkID,
+          [Amount]       AS amount,
+          [BillTotal]    AS billTotal,
+          [CashierName]  AS cashierName,
+          [Cover]        AS cover,
+          [Date]         AS [date],
+          [StartTime]    AS startTime,
+          [TableID]      AS tableID,
+          [TaxInvNo]     AS taxInvNo,
+          [PaidType]     AS paidType,
+          [MemberTel]    AS memberTel
+        FROM ${PAID_TABLE}
+        WHERE [MemberTel] = @m
+        ORDER BY [${PAID_DATE_COL}] DESC
+      `);
+    res.json({ data: result.recordset.map(mapRow), limit: MEMBER_BILL_LIMIT });
+  } catch (e) {
+    console.error('member-bills query error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/bill-lines', async (req, res) => {
+  const { outlet, check, day } = req.query;
+  if (outlet == null || !String(check ?? '').trim() || !/^\d{4}-\d{2}-\d{2}$/.test(String(day || ''))) {
+    return res.status(400).json({ error: 'ต้องมี outlet, check และ day (YYYY-MM-DD)' });
+  }
+  // จำกัดช่วงด้วยคอลัมน์เวลาที่มี index — StartTime ก่อน (มี index มาแต่เดิม)
+  // ไม่เจอ/ใช้ไม่ได้ (เช่นรุ่นที่ StartTime ไม่ใช่วันที่เต็ม) ค่อยถอยไป PostTime
+  const run = async (col) => {
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('outlet', sql.Int, parseInt(outlet, 10))
+      .input('check', sql.VarChar(50), String(check).trim())
+      .input('day', sql.VarChar(10), day)
+      .query(`
+        SELECT
+          [PostTime]   AS postTime,
+          [ItemCode]   AS itemCode,
+          [NameThai]   AS nameThai,
+          [NameEng]    AS nameEng,
+          [Quantity]   AS quantity,
+          [UnitPrice]  AS unitPrice,
+          [GrossPrice] AS grossPrice,
+          [Void]       AS [void],
+          [VoidType]   AS voidType
+        FROM dbo.Ctrans
+        WHERE [OutletID] = @outlet AND [ChkCheckID] = @check
+          AND [${col}] >= DATEADD(day, -1, CAST(@day AS DATE))
+          AND [${col}] <  DATEADD(day,  2, CAST(@day AS DATE))
+        ORDER BY [PostTime]
+      `);
+    return result.recordset.map(mapRow);
+  };
+  try {
+    let rows = [];
+    try { rows = await run('StartTime'); }
+    catch (e) { console.error('bill-lines (StartTime) error, ถอยไป PostTime:', e.message); }
+    if (!rows.length) rows = await run('PostTime');
+    res.json({ data: rows });
+  } catch (e) {
+    console.error('bill-lines query error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

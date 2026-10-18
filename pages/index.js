@@ -55,6 +55,7 @@ import UniformReport from '../components/UniformReport';
 import OtherExpense from '../components/OtherExpense';
 import BranchSupReport from '../components/BranchSupReport';
 import TaxInvoice from '../components/TaxInvoice';
+import MemberLookup from '../components/MemberLookup';
 import QcRdMenu from '../components/QcRdMenu';
 import QcRdItems from '../components/QcRdItems';
 import AiNarai from '../components/AiNarai';
@@ -724,7 +725,7 @@ const FRANCHISE_TITLES = {
    ที่นี่เก็บเฉพาะ "หน้าตา" ของแต่ละกลุ่ม/เมนู (ไอคอนและสี) ซึ่งเป็นเรื่องของหน้าเว็บล้วน ๆ */
 const MENU_ICONS = {
   dashboard: LayoutDashboard, sales: TrendingUp, dailySale: Receipt, details: Layers,
-  itemSearch: Search, taxInvoice: FileText, otherExpense: DollarSign, supReport: Truck,
+  itemSearch: Search, taxInvoice: FileText, otherExpense: DollarSign, supReport: Truck, memberLookup: Users,
   stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar,
   employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, uniformReport: ShoppingBag, branchList: Building2,
   branchUsers: KeyRound,
@@ -2672,6 +2673,7 @@ export default function App() {
                 {activeTab === 'taxInvoice' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
                 {activeTab === 'supReport' && <Truck size={20} className="text-amber-600" />}
+                {activeTab === 'memberLookup' && <Users size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdMenu' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdItems' && <ClipboardList size={20} className="text-amber-600" />}
                 {activeTab === 'planList' && <ShoppingBag size={20} className="text-amber-600" />}
@@ -2700,6 +2702,7 @@ export default function App() {
                   : activeTab === 'taxInvoice' ? 'ใบกำกับภาษี (เต็มรูป / อย่างย่อ ABB)'
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : activeTab === 'supReport' ? 'รายงานจากซัพหน้าสาขา'
+                  : activeTab === 'memberLookup' ? 'ค้นหาสมาชิก (ทุกบิลของสาขาหลัก)'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
                   : activeTab === 'planList' ? 'จัดซื้อ — แพลนสินค้า'
@@ -2793,6 +2796,9 @@ export default function App() {
 
             {/* ACC: รายงานจากซัพหน้าสาขา — ของที่สาขาซื้อเองหน้าร้าน (ชีท "ต้นทุนจากsup" ที่ Narai-branch กรอก) */}
             {activeTab === 'supReport' && <BranchSupReport />}
+
+            {/* ACC: ค้นหาสมาชิก — ทุกบิลในฐาน NaraiPos ตามเลขสมาชิก (ช่อง MemberTel) ไม่จำกัดช่วงวันที่ */}
+            {activeTab === 'memberLookup' && <MemberLookup />}
 
             {/* QC/RD: เมนู+สูตร (BOM) และวัตถุดิบ จากชีทต้นทุนเมนู */}
             {activeTab === 'qcrdMenu' && <QcRdMenu />}
