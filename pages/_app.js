@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import '../styles/globals.css';
 import { Toaster } from 'react-hot-toast';
+import { startTableEnhance } from '../lib/tableEnhance';
 
 /**
  * ตั๋วเข้าระบบหมดอายุระหว่างเปิดหน้าค้างไว้ → /api/* จะเริ่มตอบ 401 (ดู middleware.js)
@@ -25,6 +26,8 @@ function useLogoutOn401() {
 
 export default function App({ Component, pageProps }) {
   useLogoutOn401();
+  // ตารางที่กว้างเกินจอทุกหน้า: แถบเลื่อนเหนือหัวตาราง + หมุดล็อกคอลัมน์
+  useEffect(() => startTableEnhance(), []);
   return (
     <>
       <Component {...pageProps} />
