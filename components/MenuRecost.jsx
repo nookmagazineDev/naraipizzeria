@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Loader2, AlertCircle, CheckCircle, X, Search, AlertTriangle } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle, X, Search, AlertTriangle, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import { apiCall } from '../lib/qcrdApi';
 import { nudgeModal } from '../lib/modalNudge';
 import { dateLabel } from '../lib/thaiDate';
@@ -14,6 +14,7 @@ import { dateLabel } from '../lib/thaiDate';
 export const FOOD_COST_WARN = 35;   // ต้นทุน/ราคาขาย เกินนี้ (%) ขึ้นสีแดง
 const fmtMoney = (n) => (n === null || n === undefined ? '—'
   : Number(n).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const costPct = (c) => (c.oldCost > 0 ? ((c.newCost - c.oldCost) / c.oldCost) * 100 : null);
 const foodCost = (cost, price) => (cost !== null && cost !== undefined && price > 0 ? (cost / price) * 100 : null);
 
 export function FoodCost({ cost, price }) {
@@ -37,6 +38,8 @@ export function RecostDialog({ degraded, lockHint, onClose, onDone }) {
   const [loadErr, setLoadErr] = useState('');
   const [filter, setFilter] = useState('all');   // all | up | down
   const [search, setSearch] = useState('');
+  // กดหัวคอลัมน์เรียงตาม % — { key: 'cost' (ต้นทุนเปลี่ยนกี่ %) | 'fc' (food cost ใหม่ %), dir: 'desc' | 'asc' }
+  const [sort, setSort] = useState(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [done, setDone] = useState(false);
@@ -61,8 +64,35 @@ export function RecostDialog({ degraded, lockHint, onClose, onDone }) {
     const q = search.trim().toLowerCase();
     const base = changes.filter(c => filter === 'all' || (c.oldCost !== null
       && (filter === 'up' ? c.newCost > c.oldCost : c.newCost < c.oldCost)));
-    return q ? base.filter(c => `${c.code} ${c.name}`.toLowerCase().includes(q)) : base;
-  }, [changes, filter, search]);
+    const hit = q ? base.filter(c => `${c.code} ${c.name}`.toLowerCase().includes(q)) : base;
+    if (!sort) return hit;
+    const val = sort.key === 'cost' ? costPct : (c => foodCost(c.newCost, c.price));
+    // ไม่มีค่า (ไม่มีต้นทุนเดิม/ไม่มีราคาขาย) ไว้ท้ายเสมอ ไม่ว่าจะเรียงทางไหน
+    return [...hit].sort((a, b) => {
+      const x = val(a);
+      const y = val(b);
+      if (x === null) return y === null ? 0 : 1;
+      if (y === null) return -1;
+      return sort.dir === 'desc' ? y - x : x - y;
+    });
+  }, [changes, filter, search, sort]);
+
+  // กดครั้งแรก = มากไปน้อย · ครั้งที่สอง = น้อยไปมาก · ครั้งที่สาม = เลิกเรียง
+  const toggleSort = (key) => setSort(s => (!s || s.key !== key ? { key, dir: 'desc' }
+    : s.dir === 'desc' ? { key, dir: 'asc' } : null));
+  const SortHead = ({ id, children, hint }) => {
+    const on = sort?.key === id;
+    const Icon = !on ? ArrowUpDown : sort.dir === 'desc' ? ArrowDown : ArrowUp;
+    return (
+      <th className="px-3 py-2 text-right">
+        <button onClick={() => toggleSort(id)} title={hint}
+          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-slate-200/70 ${on ? 'text-indigo-600 font-bold' : ''}`}>
+          {children}<Icon size={12} />
+          {on && <span className="text-[10px] font-normal">{sort.dir === 'desc' ? 'มาก→น้อย' : 'น้อย→มาก'}</span>}
+        </button>
+      </th>
+    );
+  };
 
   const apply = async () => {
     if (degraded) { setMsg({ ok: false, msg: lockHint }); return; }
@@ -147,8 +177,8 @@ export function RecostDialog({ degraded, lockHint, onClose, onDone }) {
                           <th className="px-3 py-2 text-left">เมนู</th>
                           <th className="px-3 py-2 text-right">ราคาขาย</th>
                           <th className="px-3 py-2 text-right">ต้นทุนเดิม</th>
-                          <th className="px-3 py-2 text-right">ต้นทุนใหม่</th>
-                          <th className="px-3 py-2 text-right">food cost</th>
+                          <SortHead id="cost" hint="เรียงตามต้นทุนที่เปลี่ยน (%) — กดซ้ำเพื่อสลับมาก/น้อย">ต้นทุนใหม่</SortHead>
+                          <SortHead id="fc" hint="เรียงตาม food cost ใหม่ (%) — กดซ้ำเพื่อสลับมาก/น้อย">food cost</SortHead>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
