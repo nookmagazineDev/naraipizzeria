@@ -1,6 +1,6 @@
 // ACC > ค้นหาสมาชิก — ส่งต่อไป host-server (ฐาน NaraiPos สาขาหลัก) ทางเดียวกับ /api/sales
 //
-//   GET /api/members                                   → ทุกเลขสมาชิก + จำนวนบิล/ยอดรวม/ครั้งแรก/ล่าสุด
+//   GET /api/members[?q=…&sort=last|bills|total]       → เลขสมาชิกทีละไม่เกิน 300 คน (q = ค้นทั้งฐาน)
 //   GET /api/members?member=…                          → ทุกบิลของสมาชิกคนนั้น
 //   GET /api/members?outlet=…&check=…&day=YYYY-MM-DD   → รายการในบิลเดียว
 //
@@ -19,7 +19,11 @@ export default async function handler(req, res) {
   } else if (member != null) {
     path = `/member-bills?member=${encodeURIComponent(member)}`;
   } else {
-    path = '/members';
+    // ทีละไม่เกิน 300 คน — q = ค้นเลขสมาชิกจากทั้งฐาน (ส่งทั้งแสนคนทีเดียวเกินเพดานคำตอบของ Vercel)
+    const qs = new URLSearchParams();
+    if (req.query.q) qs.set('q', String(req.query.q));
+    if (req.query.sort) qs.set('sort', String(req.query.sort));
+    path = `/members${qs.toString() ? `?${qs}` : ''}`;
   }
 
   try {
