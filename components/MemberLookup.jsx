@@ -7,13 +7,15 @@ import { dateLabel } from '../lib/thaiDate';
 /*
  * ACC > ค้นหาสมาชิก — ทุกบิลของสาขาหลัก (NaraiPos) ในฐาน ไม่จำกัดช่วงวันที่
  *
- *   1) เปิดหน้า → โหลดรายชื่อสมาชิกทั้งหมดครั้งเดียว (/api/members)
- *      พิมพ์ค้นหา = กรองในรายชื่อที่โหลดมาแล้ว ไม่ยิงฐานทุกตัวอักษร พิมพ์บางส่วนก็เจอ
+ *   1) เปิดหน้า → 300 คนแรกตามที่เรียง (มาล่าสุด/จำนวนบิล/ยอดรวม) จาก /api/members
+ *      พิมพ์เลขสมาชิกตั้งแต่ 3 ตัว → ค้นจากทั้งฐาน (หยุดพิมพ์ครู่หนึ่งค่อยยิง) พิมพ์บางส่วนก็เจอ
+ *      ไม่โหลดทั้งหมดทีเดียวแล้ว — สมาชิกเป็นแสนคน = ราว 15 MB เกินเพดานคำตอบของ Vercel (4.5 MB)
  *   2) กดสมาชิก → ดึงบิลทั้งหมดของคนนั้น (/api/members?member=…)
  *   3) กดบิล → ดึงรายการในบิลนั้นบิลเดียว (/api/members?outlet=&check=&day=)
  */
 
-const LIST_LIMIT = 300;   // รายชื่อที่วาดพร้อมกัน — เกินนี้ให้พิมพ์ค้นหาให้แคบลง
+const MIN_QUERY = 3;      // พิมพ์น้อยกว่านี้ยังไม่ค้น (เลข 1-2 ตัวตรงกับแทบทุกคน)
+const TYPE_DELAY = 350;  // ms — รอให้หยุดพิมพ์ก่อนค่อยยิงฐาน
 const digits = (v) => String(v ?? '').replace(/[^0-9A-Za-z]/g, '').toLowerCase();
 const trimMember = (v) => String(v ?? '').trim();
 const money = (n) => Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -44,9 +46,11 @@ export default function MemberLookup() {
     };
   }, [branches]);
 
-  const [members, setMembers] = useState(null);
+  const [members, setMembers] = useState(null);   // ผลชุดล่าสุดจากฐาน (ไม่เกิน limit คน)
+  const [listMeta, setListMeta] = useState({ total: 0, limit: 0, q: '' });
   const [listErr, setListErr] = useState('');
   const [loadMs, setLoadMs] = useState(0);
+  const [reloadKey, setReloadKey] = useState(0);
   const [q, setQ] = useState('');
   const [sort, setSort] = useState('last');   // last | bills | total
 
@@ -58,29 +62,32 @@ export default function MemberLookup() {
   const [openKey, setOpenKey] = useState(null);
   const [lines, setLines] = useState({});   // key → { rows, err }
 
-  const loadMembers = () => {
-    setMembers(null);
-    setListErr('');
-    const t0 = performance.now();
-    getJson('/api/members')
-      .then(j => { setMembers(j.data || []); setLoadMs(performance.now() - t0); })
-      .catch(err => setListErr(err.message));
-  };
-  useEffect(loadMembers, []);
+  const k = digits(q);
+  const tooShort = k.length > 0 && k.length < MIN_QUERY;
+  const effQ = tooShort ? '' : k;   // ยังพิมพ์ไม่ถึง 3 ตัว = ใช้รายชื่อหน้าแรกไปก่อน
 
-  const list = useMemo(() => {
-    if (!members) return [];
-    const k = digits(q);
-    const hit = k ? members.filter(m => digits(m.member).includes(k)) : members;
-    const key = sort === 'bills' ? (m => Number(m.bills) || 0)
-      : sort === 'total' ? (m => Number(m.total) || 0)
-        : (m => String(m.lastDate || ''));
-    return [...hit].sort((a, b) => {
-      const x = key(a);
-      const y = key(b);
-      return x < y ? 1 : x > y ? -1 : 0;
-    });
-  }, [members, q, sort]);
+  // ยิงฐานเมื่อคำค้น/การเรียงเปลี่ยน — คำตอบที่มาช้ากว่าคำขอถัดไปทิ้ง (พิมพ์เร็วแล้วผลเก่ามาทับผลใหม่)
+  useEffect(() => {
+    let alive = true;
+    const timer = setTimeout(() => {
+      setMembers(null);
+      setListErr('');
+      const t0 = performance.now();
+      const qs = new URLSearchParams({ sort });
+      if (effQ) qs.set('q', effQ);
+      getJson(`/api/members?${qs}`)
+        .then(j => {
+          if (!alive) return;
+          setMembers(j.data || []);
+          setListMeta({ total: Number(j.total) || (j.data || []).length, limit: Number(j.limit) || 0, q: effQ });
+          setLoadMs(performance.now() - t0);
+        })
+        .catch(err => { if (alive) setListErr(err.message); });
+    }, effQ ? TYPE_DELAY : 0);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [effQ, sort, reloadKey]);
+
+  const list = members || [];
 
   const pick = (member) => {
     setCurrent(member);
@@ -124,7 +131,7 @@ export default function MemberLookup() {
         <section className="p-4 space-y-3 border-b lg:border-b-0 lg:border-r border-slate-100">
           <div className="flex items-center justify-between gap-2">
             <h3 className="font-bold text-slate-800 flex items-center gap-1.5"><Users size={16} /> สมาชิก</h3>
-            <button onClick={loadMembers} disabled={!members && !listErr} title="โหลดรายชื่อใหม่"
+            <button onClick={() => setReloadKey(n => n + 1)} disabled={!members && !listErr} title="โหลดรายชื่อใหม่"
               className="text-slate-400 hover:text-slate-700 disabled:opacity-30"><RefreshCw size={15} /></button>
           </div>
           <div className="relative">
@@ -132,10 +139,16 @@ export default function MemberLookup() {
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="พิมพ์เลขสมาชิก (บางส่วนก็ได้)…"
               className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500" />
           </div>
+          {tooShort && (
+            <div className="text-[11px] text-amber-700">พิมพ์อย่างน้อย {MIN_QUERY} ตัวเพื่อค้นจากทั้งฐาน</div>
+          )}
           {members && (
             <div className="text-[11px] text-emerald-700 bg-emerald-50 rounded-lg px-2.5 py-1">
-              {q ? `พบ ${list.length.toLocaleString()} จาก ` : 'สมาชิกทั้งหมด '}
-              {members.length.toLocaleString()} คน · ค้นทุกบิลในฐาน · โหลด {(loadMs / 1000).toFixed(1)} วินาที
+              {listMeta.q
+                ? `พบ ${listMeta.total.toLocaleString()} คนที่มี "${listMeta.q}"`
+                : `สมาชิกทั้งหมด ${listMeta.total.toLocaleString()} คน`}
+              {listMeta.total > list.length && ` · แสดง ${list.length.toLocaleString()} คนแรก`}
+              {' '}· ค้นทุกบิลในฐาน · {(loadMs / 1000).toFixed(1)} วินาที
             </div>
           )}
           <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
@@ -143,14 +156,14 @@ export default function MemberLookup() {
           </div>
 
           {!members && !listErr && (
-            <div className="py-10 text-center text-sm text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดรายชื่อสมาชิกทั้งหมด…</div>
+            <div className="py-10 text-center text-sm text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline mr-2" />{effQ ? `กำลังค้น "${effQ}" ในทุกบิล…` : 'กำลังโหลดรายชื่อสมาชิก…'}</div>
           )}
           {listErr && (
             <div className="text-xs text-rose-600 flex items-start gap-1.5"><AlertCircle size={14} className="flex-shrink-0 mt-0.5" />{listErr}</div>
           )}
           {members && (
             <div className="space-y-1.5 max-h-[560px] overflow-y-auto pr-1">
-              {list.slice(0, LIST_LIMIT).map(m => {
+              {list.map(m => {
                 const on = current === m.member;
                 return (
                   <button key={m.member} onClick={() => pick(m.member)}
@@ -166,9 +179,9 @@ export default function MemberLookup() {
                 );
               })}
               {list.length === 0 && <div className="py-8 text-center text-sm text-slate-400">ไม่พบเลขสมาชิกนี้</div>}
-              {list.length > LIST_LIMIT && (
+              {listMeta.total > list.length && (
                 <div className="py-2 text-center text-[11px] text-slate-400">
-                  แสดง {LIST_LIMIT} จาก {list.length.toLocaleString()} คน — พิมพ์เลขสมาชิกเพื่อค้นให้แคบลง
+                  แสดง {list.length.toLocaleString()} จาก {listMeta.total.toLocaleString()} คน — พิมพ์เลขสมาชิกเพื่อค้นให้แคบลง
                 </div>
               )}
             </div>

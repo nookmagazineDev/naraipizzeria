@@ -24,7 +24,7 @@
 //    GET  /aoringo/sales | /aoringo/detail | /aoringo/expense?start=…&end=…  → บิล/รายการ/รายจ่าย
 //    GET  /aoringo/activity?start=…&end=…  → ประวัติออเดอร์ (OrderActivity)
 //  endpoint ค้นหาสมาชิก (ACC > ค้นหาสมาชิก — ทั้งฐาน ไม่จำกัดวันที่):
-//    GET /members | /member-bills?member=… | /bill-lines?outlet=&check=&day=YYYY-MM-DD
+//    GET /members[?q=…&sort=last|bills|total] | /member-bills?member=… | /bill-lines?outlet=&check=&day=YYYY-MM-DD
 //  endpoint ช่วย debug:
 //    GET /tables                 → รายชื่อตารางทั้งหมด
 //    GET /columns?table=ชื่อ      → คอลัมน์ของตาราง (default = Ctrans)
@@ -320,7 +320,7 @@ app.get('/cpaidbetweendate', async (req, res) => {
 
 // ── ค้นหาสมาชิก (เมนู ACC > ค้นหาสมาชิก) — ทั้งฐาน ไม่จำกัดช่วงวันที่ ──
 //
-//   GET /members                     → ทุกเลขสมาชิกที่เคยมีบิล + จำนวนบิล/ยอดรวม/ครั้งแรก/ล่าสุด
+//   GET /members[?q=&sort=]          → เลขสมาชิกทีละไม่เกิน 300 คน + จำนวนบิล/ยอดรวม/ครั้งแรก/ล่าสุด
 //   GET /member-bills?member=…       → ทุกบิลของสมาชิกคนนั้น (ใหม่→เก่า)
 //   GET /bill-lines?outlet=&check=&day=YYYY-MM-DD → รายการในบิลเดียว (ดึงตอนกดดูบิล)
 //
@@ -330,11 +330,28 @@ app.get('/cpaidbetweendate', async (req, res) => {
 // ซึ่งมี index อยู่แล้ว จึงไม่ต้องสแกนทั้งตาราง
 const MEMBER_BILL_LIMIT = 2000;   // กันสมาชิกที่ผูกเลขผิด (เช่น เลขกลางของร้าน) ลากบิลเป็นหมื่นกลับมา
 
+// สมาชิกมีเป็นแสนคน (ต.ค. 69 = 125,465) — ส่งทั้งหมดทีเดียวราว 15 MB เกินเพดานคำตอบของ Vercel (4.5 MB)
+// จึงคืนทีละไม่เกิน MEMBER_LIST_LIMIT คน: ไม่มี q = มาล่าสุด/บิลเยอะสุด/ยอดสูงสุด · มี q = ค้นจากทั้งฐาน
+//   GET /members?sort=last|bills|total            → 300 คนแรกตามที่เรียง
+//   GET /members?q=2034&sort=…                    → เลขสมาชิกที่มี "2034" อยู่ข้างใน (อย่างน้อย 3 ตัว)
+const MEMBER_LIST_LIMIT = 300;
+const MEMBER_SORTS = { last: 'MAX([__D__]) DESC', bills: 'COUNT(*) DESC', total: 'SUM(ISNULL(TRY_CONVERT(DECIMAL(18,2), [BillTotal]), 0)) DESC' };
+// ช่องสมาชิกที่ไม่ได้กรอกจริง: ว่าง · ขีด · ศูนย์ล้วน (กติกาเดียวกับ hasMemberTel ใน pages/index.js)
+const MEMBER_REAL = `
+  [MemberTel] IS NOT NULL
+  AND LTRIM(RTRIM(CONVERT(NVARCHAR(100), [MemberTel]))) NOT IN ('', '-')
+  AND REPLACE(LTRIM(RTRIM(CONVERT(NVARCHAR(100), [MemberTel]))), '0', '') <> ''`;
+
 app.get('/members', async (req, res) => {
+  const q = String(req.query.q ?? '').replace(/[^0-9A-Za-z]/g, '').slice(0, 30);
+  if (q && q.length < 3) return res.status(400).json({ error: 'พิมพ์เลขสมาชิกอย่างน้อย 3 ตัว' });
+  const order = (MEMBER_SORTS[req.query.sort] || MEMBER_SORTS.last).replace('__D__', PAID_DATE_COL);
   try {
     const pool = await getPool();
-    const result = await pool.request().query(`
-      SELECT
+    const dbReq = pool.request().input('n', sql.Int, MEMBER_LIST_LIMIT);
+    if (q) dbReq.input('q', sql.NVarChar(40), `%${q}%`);
+    const result = await dbReq.query(`
+      SELECT TOP (@n)
         [MemberTel]                                     AS member,
         COUNT(*)                                        AS bills,
         SUM(ISNULL(TRY_CONVERT(DECIMAL(18,2), [BillTotal]), 0)) AS total,
@@ -342,10 +359,16 @@ app.get('/members', async (req, res) => {
         MAX([${PAID_DATE_COL}])                         AS lastDate,
         COUNT(DISTINCT [OutletID])                      AS outlets
       FROM ${PAID_TABLE}
-      WHERE [MemberTel] IS NOT NULL AND LTRIM(RTRIM(CONVERT(NVARCHAR(100), [MemberTel]))) <> ''
+      WHERE ${MEMBER_REAL}${q ? ' AND CONVERT(NVARCHAR(100), [MemberTel]) LIKE @q' : ''}
       GROUP BY [MemberTel]
+      ORDER BY ${order};
+
+      SELECT COUNT(DISTINCT [MemberTel]) AS n
+      FROM ${PAID_TABLE}
+      WHERE ${MEMBER_REAL}${q ? ' AND CONVERT(NVARCHAR(100), [MemberTel]) LIKE @q' : ''};
     `);
-    res.json({ data: result.recordset.map(mapRow) });
+    const [rows, count] = result.recordsets;
+    res.json({ data: rows.map(mapRow), total: Number(count[0]?.n) || 0, limit: MEMBER_LIST_LIMIT });
   } catch (e) {
     console.error('members query error:', e.message);
     res.status(500).json({ error: e.message });
