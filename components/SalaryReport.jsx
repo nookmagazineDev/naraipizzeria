@@ -734,7 +734,8 @@ export default function SalaryReport() {
                 </tbody>
               </table>
 
-              <div className="px-4 py-3 text-xs text-slate-400 border-t border-slate-100 space-y-1">
+              {/* คำอธิบายช่องต่าง ๆ — โชว์เฉพาะบนจอ ไม่ติดไปกับใบสรุปที่สั่งพิมพ์ */}
+              <div className="px-4 py-3 text-xs text-slate-400 border-t border-slate-100 space-y-1 no-print">
                 <p>
                   <span className="font-medium text-amber-700">กดที่ชื่อพนักงาน</span> เพื่อดูตารางงานที่ลงไว้และเวลาสแกนนิ้ว/สแกนหน้ารายวันในงวดนี้ ·
                   <span className="font-medium text-slate-500"> วันทำงาน / เวลาทำงาน</span> มาจากตารางงานที่สาขาลงไว้
