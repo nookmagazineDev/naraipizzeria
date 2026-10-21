@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save, Database, Copy } from 'lucide-react';
+import { FileText, Search, Loader2, AlertCircle, CheckCircle, Plus, Pencil, X, Download, Trash2, ChevronLeft, ChevronRight, Info, Power, AlertTriangle, ArrowRightLeft, ClipboardList, Save, Database, Copy } from 'lucide-react';
 import { apiCall, syncNote, syncOk, fillUseUnits } from '../lib/qcrdApi';
 import { rcpNameKey, rcpItemKey } from '../lib/rcpMatch';
 import { patchSavedMenu, bomRowsFromForm } from '../lib/qcrdPatch.mjs';
@@ -7,6 +7,7 @@ import { rcpLinesToBom, toSaveItems } from '../lib/rcpCopy.mjs';
 import { stockUnitOf, suggestUseUnit } from '../lib/unitFromName.mjs';
 import { nudgeModal } from '../lib/modalNudge';
 import { RecostDialog, FoodCost, CostDelta } from './MenuRecost';
+import { exportMenusToExcel } from '../lib/qcrdMenuExport';
 import { dateLabel } from '../lib/thaiDate';
 
 /*
@@ -68,7 +69,8 @@ export default function QcRdMenu() {
   // วัตถุดิบที่ใช้ซ้ำหลายเมนูจะถูกสั่งเติมซ้ำทุกเมนูถ้าไม่จำไว้
   const useUnitDone = useRef(new Set());
   const [groupModal, setGroupModal] = useState(false);
-  const [recostModal, setRecostModal] = useState(false);   // ปุ่ม "คำนวณต้นทุนใหม่" (ดู MenuRecost.jsx)
+  const [recostModal, setRecostModal] = useState(false);
+  const [exporting, setExporting] = useState(false);   // ปุ่ม "ส่งออก Excel" (ดู lib/qcrdMenuExport.js)   // ปุ่ม "คำนวณต้นทุนใหม่" (ดู MenuRecost.jsx)
   const [srcModal, setSrcModal] = useState(false);   // ตัวเลือกเมนูจากฐานอื่น (ดู MenuSourcePicker)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -786,6 +788,29 @@ export default function QcRdMenu() {
             <button onClick={() => setSrcModal(true)} disabled={degraded} title={degraded ? LOCK_HINT : 'ดึงเมนูจากฐาน Aoringo / HumlaiPOS / NaraiPos'}
               className="inline-flex items-center gap-2 bg-white hover:bg-indigo-50 disabled:bg-slate-100 disabled:text-slate-400 text-indigo-600 border border-indigo-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
               <Database size={14} /> เพิ่มจากฐานข้อมูล
+            </button>
+            <button disabled={loading || exporting || !filtered.length}
+              onClick={async () => {
+                setExporting(true);
+                try {
+                  // ส่งออกเฉพาะเมนูที่ผ่านตัวกรอง (ชุดเดียวกับในตาราง ทุกหน้าไม่ใช่แค่หน้าที่เปิดอยู่)
+                  const r = await exportMenusToExcel({
+                    menus: filtered, bom, items,
+                    filters: { search, group: groupFilter, status: statusFilter },
+                  });
+                  setToast({ ok: true, msg: `ส่งออก Excel แล้ว — ${r.menus.toLocaleString()} เมนู · ${r.lines.toLocaleString()} บรรทัดสูตร` });
+                } catch (err) {
+                  setToast({ ok: false, msg: `ส่งออก Excel ไม่สำเร็จ: ${err.message}` });
+                } finally {
+                  setExporting(false);
+                }
+              }}
+              title={search.trim() || groupFilter || statusFilter
+                ? 'ส่งออกเฉพาะเมนูที่ผ่านตัวกรองที่เลือกอยู่'
+                : 'ส่งออกทุกเมนู (แผ่นงาน เมนู + สูตร BOM)'}
+              className="inline-flex items-center gap-2 bg-white hover:bg-emerald-50 disabled:bg-slate-100 disabled:text-slate-400 text-emerald-700 border border-emerald-200 font-semibold text-xs px-4 py-2 rounded-xl transition-all">
+              {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              ส่งออก Excel ({filtered.length.toLocaleString()} เมนู)
             </button>
             <button onClick={() => setRecostModal(true)} disabled={degraded || loading}
               title={degraded ? LOCK_HINT : 'คิดต้นทุนทุกเมนูใหม่จากราคาวัตถุดิบล่าสุด — ดูสรุปก่อนบันทึก ต้นทุนเดิมเก็บไว้เป็นต้นทุนก่อนหน้า'}
