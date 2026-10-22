@@ -347,9 +347,10 @@ export default function SalaryReport() {
   const timeText = (minutes) => (minutes ? hhmmOfMinutes(minutes) : '');
   const otText = (hours) => (hours ? hhmmOfHours(hours) : '');
   // ช่อง "วันทำงาน" ท้ายฟอร์ม — P/T คิดเป็นชั่วโมงทำงาน จึงแสดงเป็น ชม.:นาที เหมือนช่องเวลาทำงาน
-  // (ไม่ใช่ทศนิยม 66.98) · ใช้นาทีรวมตรงๆ ไม่ผ่านค่าที่ปัดเป็นชั่วโมงแล้ว ตัวเลขจึงตรงกับช่องเวลาทำงาน
+  // (ไม่ใช่ทศนิยม 66.98) · เป็นชั่วโมงเต็มที่ตัดเศษนาทีทิ้งแล้ว (152:29 -> 152:00 ดู payableTotal)
+  // ช่องเวลาทำงาน/เวลาทำงาน นข ยังโชว์นาทีจริงไว้ให้ตรวจ
   const payableText = (r) => (payUnitOf(r.empType) === 'hourly'
-    ? timeText(r.workMinutes + r.holidayWorkMinutes)
+    ? timeText(r.payable * 60)
     : numText(r.payable));
 
   /** ค่าของแต่ละคนเรียงตามคอลัมน์ในฟอร์ม (ใช้ทั้งตารางบนจอและไฟล์ Excel) */
@@ -747,7 +748,7 @@ export default function SalaryReport() {
                   (แยกออกจากวันทำงานปกติ) ·
                   <span className="font-medium text-amber-700"> วันทำงาน</span> ช่องท้ายสุด = ยอดที่ใช้คิดค่าแรง —
                   F/T คิดเต็มงวด ({Math.min(days, 30)} วัน) − วันหยุดไม่รับค่าแรง (21 ป่วย · 22 กิจ · 23 ขาดงาน) ·
-                  P/T คิดเป็นชั่วโมงทำงานรวม · DAY/DAY9 คิดเป็นวันทำงานจริง + นข + วันลาที่ยังได้ค่าแรง
+                  P/T คิดเป็นชั่วโมงทำงานรวม (ตัดเศษนาทีทิ้ง) · DAY/DAY9 คิดเป็นวันทำงานจริง + นข + วันลาที่ยังได้ค่าแรง
                 </p>
                 {checkStats.day9People > 0 && (
                   <p className="text-emerald-700">
