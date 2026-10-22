@@ -23,6 +23,7 @@ import {
 } from '../../lib/zkDb';
 // ตัวช่วยชุดเดียวกับที่ /api/hr-schedule ใช้ — ทั้งสองฝั่งของหน้านี้เจอปัญหาเพดานแถวเหมือนกัน
 import { dateChunks, capByDay, missingDates, dayOf, inRange } from '../../lib/dateRange';
+import { branchAliasMap, branchGroupOf } from '../../lib/branchRegistry';
 
 // ช่วงกว้างๆ ทุกสาขาใช้เวลาหลายสิบวินาที — เผื่อเวลาให้พอเหมือน /api/sales
 export const config = { maxDuration: 60 };
@@ -207,7 +208,21 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { data: raw, source } = await loadPunches({ start, end, branch, emp });
+    // สาขาที่มีรหัสพ้อง (เช่น SJP = ZJP) เครื่องสแกนอาจตั้ง area ไว้ชื่อใดชื่อหนึ่ง — ดึงให้ครบทุกชื่อ
+    // แล้วเปลี่ยน area เป็นรหัสจริง หน้าเว็บจะเห็นเป็นสาขาเดียว คนเดียวกัน (รหัสเดียวกัน) ไม่แยกแถว
+    const aliasTo = await branchAliasMap().catch(() => ({}));
+    const group = branch ? await branchGroupOf(branch).catch(() => [branch.toLowerCase()]) : [''];
+    // ชื่อหลักต้องดึงได้ ส่วนรหัสพ้องดึงไม่ได้ (ส่วนมากคือไม่มีเครื่องไหนใช้ชื่อนั้น) ก็ข้ามไป
+    const loads = [await loadPunches({ start, end, branch: group[0].toUpperCase(), emp })];
+    for (const b of group.slice(1)) {
+      loads.push(await loadPunches({ start, end, branch: b.toUpperCase(), emp })
+        .catch((e) => { console.warn(`attendance: ดึงรหัสพ้อง ${b} ไม่ได้ — ข้าม:`, e.message); return { data: [] }; }));
+    }
+    const source = loads[0].source;
+    const raw = mergePunches(loads.map((l) => l.data)).map((r) => {
+      const canon = aliasTo[txt(r.area).toLowerCase()];
+      return canon ? { ...r, area: canon.toUpperCase() } : r;
+    });
 
     // ตัดให้เหลือเฉพาะวันที่ขอ — ต้นทางบางทางส่งวันนอกช่วงติดมาด้วย (ดู inRange ที่ lib/dateRange.js)
     // ต้องตัดก่อนคิดอย่างอื่น ไม่งั้น count/missing/การตัดตามเพดาน เพี้ยนตามไปทั้งชุด
