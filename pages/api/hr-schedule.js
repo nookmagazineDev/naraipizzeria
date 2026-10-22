@@ -12,6 +12,7 @@
 import { fetchScheduleBranches, fetchTimesheet, fetchTimesheetMany } from '../../lib/hrSchedule';
 // ตัวช่วยชุดเดียวกับ /api/attendance — ทั้งสองฝั่งของหน้า "ดูสแกนหน้า" เจอปัญหาเพดานแถวเหมือนกัน
 import { capByDay, missingDates, dayOf, inRange } from '../../lib/dateRange';
+import { branchAliasMap } from '../../lib/branchRegistry';
 
 // ยิงทีละสาขาหลายรอบ — เผื่อเวลาให้พอเหมือน /api/attendance
 export const config = { maxDuration: 60 };
@@ -34,6 +35,41 @@ const isCleared = (r) => txt(r.otherNote) === 'ล้างข้อมูล';
 
 /** 'SJP,crm' -> ['SJP','crm'] (ตัดค่าว่างและตัวซ้ำทิ้ง) */
 const splitList = (v) => [...new Set(txt(v).split(',').map((s) => s.trim()).filter(Boolean))];
+
+/**
+ * ใส่รหัสพ้องของสาขาที่ขอเข้าไปด้วย — สาขาเดียวกันอาจลงตารางไว้ทั้งสองชื่อ
+ * (เช่น SJP: เครื่องสแกน/ทะเบียนใช้ SJP แต่หน้าเว็บสาขาล็อกอินด้วย zjp) ขอ SJP ต้องได้ zjp มาด้วย และกลับกัน
+ */
+function withAliasBranches(wanted, aliasTo) {
+  const canonOf = (c) => aliasTo[c.toLowerCase()] || c.toLowerCase();
+  const groups = new Set(wanted.map(canonOf));
+  const extra = Object.keys(aliasTo).filter((a) => groups.has(aliasTo[a]));
+  return [...new Set([...wanted, ...groups, ...extra])];
+}
+
+/** ความครบของแถวตารางงาน — ไว้เลือกตัวที่จะเก็บเมื่อคนเดียวกันมีสองแถวในวันเดียว */
+const rowScore = (r) => (isCleared(r) ? 0 : 2) +
+  (txt(r.checkIn) || txt(r.leaveNote) || txt(r.unpaidLeave) || txt(r.status) ? 1 : 0);
+
+/**
+ * รหัสพ้อง -> รหัสจริง แล้วตัดแถวซ้ำ: วันเดียวกัน รหัสพนักงานเดียวกัน ในสาขาเดียวกัน = คนเดียวกัน
+ * (เช่นลงไว้ทั้งใน sjp และ zjp) เก็บแถวที่ครบกว่า (เท่ากันเก็บตัวหลัง) ไม่งั้นหน้าเว็บขึ้นเป็นสองแถว/นับวันซ้ำ
+ */
+function mergeAliasRows(rows, aliasTo) {
+  const keep = new Map();
+  const out = [];
+  for (const r0 of rows) {
+    const canon = aliasTo[txt(r0.branch).toLowerCase()];
+    const r = canon ? { ...r0, branch: canon } : r0;
+    const code = txt(r.hrCode);
+    if (!code) { out.push(r); continue; }
+    const key = `${rowDate(r)}|${txt(r.branch).toLowerCase()}|${code}`;
+    const seen = keep.get(key);
+    if (seen === undefined) { keep.set(key, out.length); out.push(r); }
+    else if (rowScore(r) >= rowScore(out[seen])) out[seen] = r;   // เท่ากัน = ตัวหลังชนะ เหมือน byCode ใน attachSchedule
+  }
+  return out;
+}
 
 /**
  * แปลงรหัสสาขาที่ผู้ใช้ส่งมา ให้เป็นตัวสะกดที่เก็บจริงในตาราง hr_branch
@@ -68,12 +104,21 @@ export default async function handler(req, res) {
   }
 
   try {
-    const known = await fetchScheduleBranches();
-    const wanted = branch ? [branch] : branches;
+    const [known, aliasTo] = await Promise.all([
+      fetchScheduleBranches(),
+      branchAliasMap().catch(() => ({})),
+    ]);
+    const asked = branch ? [branch] : branches;
+    const wanted = asked.length ? withAliasBranches(asked, aliasTo) : [];
     // ไม่ได้ระบุมาเลย = เอาทุกสาขาที่มีในฐาน HR
-    const { resolved, unknown } = wanted.length
+    const { resolved, unknown: notFound } = wanted.length
       ? resolveBranches(wanted, known)
       : { resolved: known.map((b) => b.name), unknown: [] };
+    // รหัสพ้องที่เติมเข้าไปเองแล้วไม่มีในฐาน HR ไม่ใช่เรื่องที่ต้องเตือน — เตือนเฉพาะสาขาที่ขอมา
+    // แล้วหาไม่เจอสักชื่อในกลุ่มเดียวกัน
+    const canonOf = (c) => aliasTo[c.toLowerCase()] || c.toLowerCase();
+    const found = new Set(resolved.map(canonOf));
+    const unknown = notFound.filter((u) => asked.some((a) => a.toLowerCase() === u.toLowerCase()) && !found.has(canonOf(u)));
 
     if (resolved.length === 0) {
       return res.status(200).json({
@@ -97,10 +142,11 @@ export default async function handler(req, res) {
     // ตัดให้เหลือเฉพาะวันที่ขอ — ตารางงานเก็บเป็นราย "สัปดาห์" ฝั่ง office-server จึงส่งวันที่
     // อยู่นอกช่วงติดมาได้ (ดู inRange ที่ lib/dateRange.js) ถ้าไม่ตัด หน้า "ดูสแกนหน้า" จะมีแถว
     // ของวันอื่นโผล่ขึ้นมาปนด้วย เพราะแถวตารางงานที่ไม่มีสแกนถูกดึงขึ้นตารางเองอยู่แล้ว
-    const rows = raw.filter((r) => inRange(rowDate(r), start, end));
-    if (rows.length !== raw.length) {
-      console.warn(`hr-schedule: ต้นทางส่งวันนอกช่วง ${start}..${end} มา ${raw.length - rows.length} แถว — ตัดทิ้งแล้ว`);
+    const inside = raw.filter((r) => inRange(rowDate(r), start, end));
+    if (inside.length !== raw.length) {
+      console.warn(`hr-schedule: ต้นทางส่งวันนอกช่วง ${start}..${end} มา ${raw.length - inside.length} แถว — ตัดทิ้งแล้ว`);
     }
+    const rows = mergeAliasRows(inside, aliasTo);
 
     // เรียงใหม่→เก่าก่อนตัด ไม่งั้น "วันเก่าสุด" ที่ capByDay จะตัด ไม่ใช่วันเก่าสุดจริงๆ
     // (แถวมาเรียงตามสาขาที่ตอบก่อน) — เรียงสาขา/ชื่อต่อท้ายให้ผลออกมาเหมือนเดิมทุกครั้ง
