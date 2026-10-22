@@ -66,66 +66,63 @@ function chunks(start, end, size = 5) {
   return out;
 }
 
-async function fetchDetails() {
-  const all = [];
-  for (const [s, e] of chunks(START, END)) {
-    process.stdout.write(`ดึงรายการ ${s} → ${e} ... `);
-    const r = await fetch(`${API}/ctranbetweendate?start=${s}&end=${e}${outletQuery}`);
-    if (!r.ok) throw new Error(`host API HTTP ${r.status}`);
-    const j = await r.json();
-    const rows = Array.isArray(j) ? j : j.data || [];
-    console.log(`${rows.length} แถว`);
-    all.push(...rows);
-  }
-  return all;
-}
-
-const rows = (await fetchDetails()).filter((r) => !EXCLUDE_TABLES.includes(parseInt(r.tableID)) && !isVoid(r));
-
-// รวมแถวเป็นบิล: สาขา + เลขบิล + วันเปิดบิล (เลขบิลวนซ้ำได้ข้ามวัน)
-const bills = new Map();
-for (const r of rows) {
-  const day = txt(r.startTime || r.postTime).slice(0, 10);
-  const key = `${r.outletID}|${txt(r.chkCheckID)}|${day}`;
-  if (!bills.has(key)) bills.set(key, { r0: r, day, lines: [] });
-  bills.get(key).lines.push(r);
-}
-
 const addItem = (m, name, q) => m.set(name, (m.get(name) || 0) + q);
 const fmtItems = (m) => [...m].map(([n, q]) => `${n} (${q})`).join(', ');
 
-const detail = [];
-for (const { r0, day, lines } of bills.values()) {
-  const promo = lines.filter((l) => parseInt(l.itemCode) === PROMO_CODE);
-  const freeCovers = promo.reduce((s, l) => s + num(l.quantity), 0);
-  if (freeCovers <= 0) continue;
-
-  const paidCovers = lines.filter((l) => isCoverItem(l.itemCode)).reduce((s, l) => s + num(l.quantity), 0);
-  const total = paidCovers + freeCovers;
-  const promoValue = Math.abs(promo.reduce((s, l) => s + num(l.grossPrice), 0)) || freeCovers * PROMO_VALUE;
-
-  const drinks = new Map();
-  const buffet = new Map();
-  for (const l of lines) {
-    const name = txt(l.nameThai) || txt(l.nameEng) || txt(l.itemCode);
-    if (DRINK_RE.test(`${l.nameThai} ${l.nameEng}`)) addItem(drinks, name, num(l.quantity));
-    if (isCoverItem(l.itemCode)) addItem(buffet, name, num(l.quantity));
+// สรุปทีละบิลระหว่างดึง ไม่เก็บแถวดิบไว้ทั้งหมด — 5 วันมีราว 1.5 แสนแถว ทั้งช่วงหลายเดือน
+// เก็บไว้ในหน่วยความจำไม่ไหว
+// คีย์บิล: สาขา + เลขบิล + วันเปิดบิล (เลขบิลวนซ้ำได้ข้ามวัน)
+const bills = new Map();
+function addRow(r, chunkNo) {
+  if (EXCLUDE_TABLES.includes(parseInt(r.tableID)) || isVoid(r)) return;
+  const day = txt(r.startTime || r.postTime).slice(0, 10);
+  const key = `${r.outletID}|${txt(r.chkCheckID)}|${day}`;
+  let b = bills.get(key);
+  if (!b) {
+    b = { outletID: r.outletID, bill: txt(r.chkCheckID), table: txt(r.tableID), day,
+      paid: 0, free: 0, promoGross: 0, drinks: new Map(), buffet: new Map() };
+    bills.set(key, b);
   }
-  const drinkQty = [...drinks.values()].reduce((a, b) => a + b, 0);
-  const short = Math.max(0, total - drinkQty);
+  b.lastChunk = chunkNo;
+  const q = num(r.quantity);
+  const name = txt(r.nameThai) || txt(r.nameEng) || txt(r.itemCode);
+  if (parseInt(r.itemCode) === PROMO_CODE) { b.free += q; b.promoGross += num(r.grossPrice); }
+  if (isCoverItem(r.itemCode)) { b.paid += q; addItem(b.buffet, name, q); }
+  if (DRINK_RE.test(`${r.nameThai} ${r.nameEng}`)) addItem(b.drinks, name, q);
+}
 
+const ranges = chunks(START, END);
+for (let i = 0; i < ranges.length; i++) {
+  const [s, e] = ranges[i];
+  process.stdout.write(`ดึงรายการ ${s} → ${e} ... `);
+  const r = await fetch(`${API}/ctranbetweendate?start=${s}&end=${e}${outletQuery}`);
+  if (!r.ok) throw new Error(`host API HTTP ${r.status}`);
+  const j = await r.json();
+  const rows = Array.isArray(j) ? j : j.data || [];
+  for (const row of rows) addRow(row, i);
+  // บิลที่ไม่มีโปรและไม่โผล่ในก้อนนี้แล้ว = ปิดไปแล้ว ทิ้งได้ (บิลข้ามเที่ยงคืนต่อได้แค่ก้อนถัดไป)
+  for (const [k, b] of bills) if (b.free <= 0 && b.lastChunk < i) bills.delete(k);
+  console.log(`${rows.length} แถว`);
+}
+
+const detail = [];
+for (const b of bills.values()) {
+  if (b.free <= 0) continue;
+  const total = b.paid + b.free;
+  const drinkQty = [...b.drinks.values()].reduce((x, y) => x + y, 0);
+  const short = Math.max(0, total - drinkQty);
   detail.push({
-    branch: OUTLET_TO_CODE[parseInt(r0.outletID)] || txt(r0.outletID),
-    month: day.slice(0, 7),
-    day,
-    bill: txt(r0.chkCheckID),
-    table: txt(r0.tableID),
-    paidCovers, freeCovers, total,
-    promoValue,
+    branch: OUTLET_TO_CODE[parseInt(b.outletID)] || txt(b.outletID),
+    month: b.day.slice(0, 7),
+    day: b.day,
+    bill: b.bill,
+    table: b.table,
+    paidCovers: b.paid, freeCovers: b.free, total,
+    promoValue: Math.abs(b.promoGross) || b.free * PROMO_VALUE,
     drinkQty,
     status: total === 0 ? '-' : short === 0 ? 'ครบ' : `ไม่ครบ (ขาด ${short})`,
-    drinks: fmtItems(drinks) || '-',
-    buffet: fmtItems(buffet) || '-',
+    drinks: fmtItems(b.drinks) || '-',
+    buffet: fmtItems(b.buffet) || '-',
   });
 }
 detail.sort((a, b) => a.branch.localeCompare(b.branch) || a.day.localeCompare(b.day) || a.bill.localeCompare(b.bill, undefined, { numeric: true }));
