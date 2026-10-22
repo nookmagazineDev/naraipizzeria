@@ -13,7 +13,8 @@
  * กติกาที่ใช้ (ดูประกอบ lib/coverRules.js):
  *   - หัวจ่ายเงิน   = จำนวนจานบุฟเฟต์ COVER_ITEM_CODES ในบิล
  *   - หัวฟรี        = จำนวนของรายการ 528009 ในบิล
- *   - ลูกค้ารวม     = หัวจ่าย + หัวฟรี
+ *   - เด็กฟรี       = จำนวนของรายการ 101005 ในบิล (มูลค่าส่วนลดนับรวมด้วย)
+ *   - ลูกค้ารวม     = หัวจ่าย + หัวฟรี + เด็กฟรี
  *   - เครื่องดื่ม   = รายการที่ชื่อตรงกับ --drink (ค่าเริ่มต้น: refill / รีฟิล / เครื่องดื่ม)
  *   - ข้ามแถว void ทุกแถว และตัดโต๊ะ 600 เหมือนแดชบอร์ด
  */
@@ -24,6 +25,7 @@ import { FALLBACK_BRANCHES } from '../lib/branchCore.mjs';
 
 const PROMO_CODE = 528009;
 const PROMO_VALUE = 259;
+const KID_FREE_CODE = 101005;
 const EXCLUDE_TABLES = [600];
 
 const args = Object.fromEntries(process.argv.slice(2)
@@ -80,13 +82,14 @@ function addRow(r, chunkNo) {
   let b = bills.get(key);
   if (!b) {
     b = { outletID: r.outletID, bill: txt(r.chkCheckID), table: txt(r.tableID), day,
-      paid: 0, free: 0, promoGross: 0, drinks: new Map(), buffet: new Map() };
+      paid: 0, free: 0, promoGross: 0, kids: 0, kidGross: 0, drinks: new Map(), buffet: new Map() };
     bills.set(key, b);
   }
   b.lastChunk = chunkNo;
   const q = num(r.quantity);
   const name = txt(r.nameThai) || txt(r.nameEng) || txt(r.itemCode);
   if (parseInt(r.itemCode) === PROMO_CODE) { b.free += q; b.promoGross += num(r.grossPrice); }
+  if (parseInt(r.itemCode) === KID_FREE_CODE) { b.kids += q; b.kidGross += num(r.grossPrice); }
   if (isCoverItem(r.itemCode)) { b.paid += q; addItem(b.buffet, name, q); }
   if (DRINK_RE.test(`${r.nameThai} ${r.nameEng}`)) addItem(b.drinks, name, q);
 }
@@ -108,7 +111,9 @@ for (let i = 0; i < ranges.length; i++) {
 const detail = [];
 for (const b of bills.values()) {
   if (b.free <= 0) continue;
-  const total = b.paid + b.free;
+  const total = b.paid + b.free + b.kids;
+  const promoValue = Math.abs(b.promoGross) || b.free * PROMO_VALUE;
+  const kidValue = Math.abs(b.kidGross);
   const drinkQty = [...b.drinks.values()].reduce((x, y) => x + y, 0);
   const short = Math.max(0, total - drinkQty);
   detail.push({
@@ -117,8 +122,8 @@ for (const b of bills.values()) {
     day: b.day,
     bill: b.bill,
     table: b.table,
-    paidCovers: b.paid, freeCovers: b.free, total,
-    promoValue: Math.abs(b.promoGross) || b.free * PROMO_VALUE,
+    paidCovers: b.paid, freeCovers: b.free, kidCovers: b.kids, total,
+    promoValue, kidValue, discount: promoValue + kidValue,
     drinkQty,
     status: total === 0 ? '-' : short === 0 ? 'ครบ' : `ไม่ครบ (ขาด ${short})`,
     drinks: fmtItems(b.drinks) || '-',
@@ -131,9 +136,9 @@ detail.sort((a, b) => a.branch.localeCompare(b.branch) || a.day.localeCompare(b.
 const sumMap = new Map();
 for (const d of detail) {
   const k = `${d.branch}|${d.month}`;
-  const s = sumMap.get(k) || { branch: d.branch, month: d.month, bills: 0, paid: 0, free: 0, total: 0, value: 0, drinks: 0, full: 0 };
-  s.bills++; s.paid += d.paidCovers; s.free += d.freeCovers; s.total += d.total;
-  s.value += d.promoValue; s.drinks += d.drinkQty; if (d.status === 'ครบ') s.full++;
+  const s = sumMap.get(k) || { branch: d.branch, month: d.month, bills: 0, paid: 0, free: 0, kids: 0, total: 0, value: 0, kidValue: 0, discount: 0, drinks: 0, full: 0 };
+  s.bills++; s.paid += d.paidCovers; s.free += d.freeCovers; s.kids += d.kidCovers; s.total += d.total;
+  s.value += d.promoValue; s.kidValue += d.kidValue; s.discount += d.discount; s.drinks += d.drinkQty; if (d.status === 'ครบ') s.full++;
   sumMap.set(k, s);
 }
 const summary = [...sumMap.values()].sort((a, b) => a.branch.localeCompare(b.branch) || a.month.localeCompare(b.month));
@@ -155,31 +160,31 @@ function sheet(headers, data, widths, styleRow) {
 
 const wb = XLSX.utils.book_new();
 
-const detailHeaders = ['สาขา', 'เดือน', 'วันที่', 'เลขบิล', 'โต๊ะ', 'จำนวนหัวจ่าย', 'จำนวนหัวฟรี (528009)', 'ลูกค้ารวม (คน)',
-  'มูลค่าส่วนลดฟรี (บาท)', 'จำนวนเครื่องดื่ม', 'ทานน้ำครบทุกคน?', 'รายการเครื่องดื่ม', 'รายการบุฟเฟต์ในบิล'];
+const detailHeaders = ['สาขา', 'เดือน', 'วันที่', 'เลขบิล', 'โต๊ะ', 'จำนวนหัวจ่าย', 'จำนวนหัวฟรี (528009)', 'เด็กฟรี (101005)', 'ลูกค้ารวม (คน)',
+  'มูลค่าส่วนลดฟรี 1แถม1 (บาท)', 'มูลค่าเด็กฟรี (บาท)', 'รวมส่วนลด (บาท)', 'จำนวนเครื่องดื่ม', 'ทานน้ำครบทุกคน?', 'รายการเครื่องดื่ม', 'รายการบุฟเฟต์ในบิล'];
 XLSX.utils.book_append_sheet(wb, sheet(detailHeaders,
-  detail.map((d) => [d.branch, d.month, d.day, d.bill, d.table, d.paidCovers, d.freeCovers, d.total,
-    d.promoValue, d.drinkQty, d.status, d.drinks, d.buffet]),
-  [8, 10, 12, 10, 8, 12, 14, 12, 14, 12, 18, 40, 40],
+  detail.map((d) => [d.branch, d.month, d.day, d.bill, d.table, d.paidCovers, d.freeCovers, d.kidCovers, d.total,
+    d.promoValue, d.kidValue, d.discount, d.drinkQty, d.status, d.drinks, d.buffet]),
+  [8, 10, 12, 10, 8, 12, 14, 12, 12, 16, 14, 14, 12, 18, 40, 40],
   (ws, r, row) => {
-    const cell = ws[XLSX.utils.encode_cell({ r, c: 10 })];
-    cell.s = row[10] === 'ครบ' ? GOOD : row[10] === '-' ? {} : BAD;
-    ws[XLSX.utils.encode_cell({ r, c: 8 })].z = '#,##0.00';
+    const cell = ws[XLSX.utils.encode_cell({ r, c: 13 })];
+    cell.s = row[13] === 'ครบ' ? GOOD : row[13] === '-' ? {} : BAD;
+    for (const c of [9, 10, 11]) ws[XLSX.utils.encode_cell({ r, c })].z = '#,##0.00';
   }), 'รายบิล');
 
-const sumHeaders = ['สาขา', 'เดือน', 'จำนวนบิล', 'หัวจ่าย', 'หัวฟรี', 'ลูกค้ารวม (คน)', 'มูลค่าส่วนลดฟรี (บาท)',
-  'จำนวนเครื่องดื่ม', 'บิลที่ทานน้ำครบ', 'บิลที่ไม่ครบ', '% บิลทานน้ำครบ'];
+const sumHeaders = ['สาขา', 'เดือน', 'จำนวนบิล', 'หัวจ่าย', 'หัวฟรี', 'เด็กฟรี', 'ลูกค้ารวม (คน)', 'มูลค่าส่วนลดฟรี 1แถม1 (บาท)',
+  'มูลค่าเด็กฟรี (บาท)', 'รวมส่วนลด (บาท)', 'จำนวนเครื่องดื่ม', 'บิลที่ทานน้ำครบ', 'บิลที่ไม่ครบ', '% บิลทานน้ำครบ'];
 const totals = summary.reduce((t, s) => {
-  for (const k of ['bills', 'paid', 'free', 'total', 'value', 'drinks', 'full']) t[k] += s[k];
+  for (const k of ['bills', 'paid', 'free', 'kids', 'total', 'value', 'kidValue', 'discount', 'drinks', 'full']) t[k] += s[k];
   return t;
-}, { bills: 0, paid: 0, free: 0, total: 0, value: 0, drinks: 0, full: 0 });
-const sumRow = (s, branch, month) => [branch, month, s.bills, s.paid, s.free, s.total, s.value, s.drinks, s.full,
+}, { bills: 0, paid: 0, free: 0, kids: 0, total: 0, value: 0, kidValue: 0, discount: 0, drinks: 0, full: 0 });
+const sumRow = (s, branch, month) => [branch, month, s.bills, s.paid, s.free, s.kids, s.total, s.value, s.kidValue, s.discount, s.drinks, s.full,
   s.bills - s.full, s.bills ? s.full / s.bills : 0];
 const sumData = [...summary.map((s) => sumRow(s, s.branch, s.month)), sumRow(totals, 'รวมทั้งหมด', '')];
-XLSX.utils.book_append_sheet(wb, sheet(sumHeaders, sumData, [12, 10, 10, 10, 10, 14, 18, 14, 14, 12, 14],
+XLSX.utils.book_append_sheet(wb, sheet(sumHeaders, sumData, [12, 10, 10, 10, 10, 10, 14, 18, 14, 14, 14, 14, 12, 14],
   (ws, r) => {
-    ws[XLSX.utils.encode_cell({ r, c: 6 })].z = '#,##0.00';
-    ws[XLSX.utils.encode_cell({ r, c: 10 })].z = '0.0%';
+    for (const c of [7, 8, 9]) ws[XLSX.utils.encode_cell({ r, c })].z = '#,##0.00';
+    ws[XLSX.utils.encode_cell({ r, c: 13 })].z = '0.0%';
     if (r === sumData.length) for (let c = 0; c < sumHeaders.length; c++) {
       const cell = ws[XLSX.utils.encode_cell({ r, c })];
       cell.s = { ...(cell.s || {}), font: { bold: true }, fill: { fgColor: { rgb: 'EDE9FE' } } };
@@ -193,7 +198,9 @@ const notes = [
   [''],
   ['หัวจ่าย = จำนวนจานบุฟเฟต์ในบิล (รหัส ' + COVER_ITEM_CODES.join(', ') + ')'],
   ['หัวฟรี = จำนวนรายการ 528009 ในบิล'],
-  ['ลูกค้ารวม = หัวจ่าย + หัวฟรี'],
+  ['เด็กฟรี = จำนวนรายการ 101005 ในบิล · มูลค่าเด็กฟรีใช้ยอดเงินของรายการนั้นในบิล'],
+  ['รวมส่วนลด = มูลค่าส่วนลดฟรี 1แถม1 + มูลค่าเด็กฟรี'],
+  ['ลูกค้ารวม = หัวจ่าย + หัวฟรี + เด็กฟรี'],
   [`เครื่องดื่ม = รายการที่ชื่อตรงกับ /${DRINK_RE.source}/i`],
   ['ทานน้ำครบ = จำนวนเครื่องดื่ม ≥ ลูกค้ารวม'],
   ['ไม่นับแถวที่ void และโต๊ะ 600'],
