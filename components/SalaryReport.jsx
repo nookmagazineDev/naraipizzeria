@@ -8,7 +8,7 @@ import { assignOvernight, addDays, scanQueryBranch, keepBranchScans, summarizeDa
 import { useBranches, useScanBranches } from '../lib/useBranches';
 import {
   summarizeSalary, payableTotal, payableUnitLabel, payUnitOf, periodDays, dayWork,
-  hhmmOfMinutes, hhmmOfHours, LEAVE_COLUMNS, loadHolidays, saveHolidays, round2,
+  hhmmOfMinutes, hhmmOfHours, LEAVE_COLUMNS, loadHolidays, saveHolidays, round2, MAX_PAY_DAYS,
 } from '../lib/payroll';
 
 /*
@@ -304,6 +304,9 @@ export default function SalaryReport() {
   );
 
   const days = loaded ? periodDays(loaded.start, loaded.end) : 0;
+  /** F/T ที่มีข้อมูลไม่เต็มงวด (เริ่มงาน/ลาออกกลางงวด) — วันทำงานจึงต่ำกว่าเต็มงวด ขึ้นหมายเหตุให้ตรวจ */
+  const partialMonth = (r) => payUnitOf(r.empType) === 'monthly' && r.firstDate
+    && periodDays(r.firstDate, r.lastDate) < Math.min(days, MAX_PAY_DAYS);
 
   // รหัสที่มีแต่การสแกน จับคู่กับตารางงานไม่ติดเลย — ไม่เอาลงรายงาน
   // ส่วนใหญ่เป็นคนเดียวกับแถวที่มีชื่ออยู่แล้ว (รหัสเครื่องสแกนกับรหัสตารางงานคนละตัว
@@ -679,6 +682,7 @@ export default function SalaryReport() {
                         r.noScanDays ? `ลงตารางว่าทำงานแต่ไม่มีสแกน ${r.noScanDays} วัน` : '',
                         r.noPlanDays ? `มีสแกนแต่ไม่มีในตารางงาน ${r.noPlanDays} วัน` : '',
                         r.hourlyLeave ? `ลาเป็นชั่วโมงรวม ${r.hourlyLeave} ชม.` : '',
+                        partialMonth(r) ? `F/T มีข้อมูลเฉพาะ ${dayLabel(r.firstDate)} – ${dayLabel(r.lastDate)} — นับวันทำงานเฉพาะช่วงนี้ (ตรวจว่าเริ่มงาน/ลาออกจริง ไม่ใช่ลืมลงตาราง)` : '',
                       ].filter(Boolean).join(' · ')}
                     >
                       <td className="px-1.5 py-1 text-slate-500">{r.branch}</td>
@@ -723,9 +727,11 @@ export default function SalaryReport() {
 
                       <td
                         className={`${numCls} bg-amber-50/60 font-bold text-slate-800 border-l border-slate-200`}
-                        title={`หน่วยเป็น${payableUnitLabel(r)}`}
+                        title={`หน่วยเป็น${payableUnitLabel(r)}${partialMonth(r)
+                          ? ` · F/T มีข้อมูลเฉพาะ ${dayLabel(r.firstDate)} – ${dayLabel(r.lastDate)} นับเฉพาะช่วงนี้` : ''}`}
                       >
                         {payableText(r)}
+                        {partialMonth(r) && <span className="ml-0.5 text-amber-600">*</span>}
                       </td>
                       <td className={cell(r.lateMinutes + r.holidayLateMinutes, 'text-rose-600')}>
                         {numText(r.lateMinutes + r.holidayLateMinutes)}
@@ -747,12 +753,12 @@ export default function SalaryReport() {
                   <span className="font-medium text-slate-500">นข</span> = วันที่มาทำงานในวันหยุดนักขัตฤกษ์ที่ระบุไว้ด้านบน
                   (แยกออกจากวันทำงานปกติ) ·
                   <span className="font-medium text-amber-700"> วันทำงาน</span> ช่องท้ายสุด = ยอดที่ใช้คิดค่าแรง —
-                  F/T คิดเต็มงวด ({Math.min(days, 30)} วัน) − วันหยุดไม่รับค่าแรง (21 ป่วย · 22 กิจ · 23 ขาดงาน) ·
+                  F/T คิดเต็มงวด ({Math.min(days, 30)} วัน) − วันหยุดไม่รับค่าแรง (21 ป่วย · 22 กิจ · 23 ขาดงาน) — เริ่มงาน/ลาออกกลางงวด นับเฉพาะช่วงที่มีข้อมูล (มี <span className="text-amber-600">*</span> ชี้ดูช่วงวันได้) ·
                   P/T คิดเป็นชั่วโมงทำงานรวม ไม่หักสาย (ตัดเศษนาทีทิ้ง) · DAY/DAY9 คิดเป็นวันทำงานจริง + นข + วันลาที่ยังได้ค่าแรง
                 </p>
                 {checkStats.day9People > 0 && (
                   <p className="text-emerald-700">
-                    <span className="font-medium">DAY9</span>: ย้ายเวลาทำงานวันละ 1 ชม. ไปเป็น OT ให้แล้ว (เฉพาะวันที่ลงตารางครบ 9 ชม. — สายไปหักที่เวลาทำงาน) —
+                    <span className="font-medium">DAY9</span>: ย้ายเวลาทำงานวันละ 1 ชม. ไปเป็น OT ให้แล้ว (เฉพาะวันที่ลงตารางครบ 9 ชม. — สายไม่ทำให้หลุด OT) —
                     {` ${checkStats.day9People} คน · ${checkStats.day9Days} วัน · รวม ${round2(checkStats.day9Hours)} ชม.`}
                     {' '}(เวลาทำงานลดลงเท่ากัน · จำนวนวันทำงานเท่าเดิม)
                   </p>
