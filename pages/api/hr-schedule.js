@@ -53,20 +53,30 @@ const rowScore = (r) => (isCleared(r) ? 0 : 2) +
 
 /**
  * รหัสพ้อง -> รหัสจริง แล้วตัดแถวซ้ำ: วันเดียวกัน รหัสพนักงานเดียวกัน ในสาขาเดียวกัน = คนเดียวกัน
- * (เช่นลงไว้ทั้งใน sjp และ zjp) เก็บแถวที่ครบกว่า (เท่ากันเก็บตัวหลัง) ไม่งั้นหน้าเว็บขึ้นเป็นสองแถว/นับวันซ้ำ
+ * (เช่นลงไว้ทั้งใน sjp และ zjp) เก็บแถวที่ครบกว่า ไม่งั้นหน้าเว็บขึ้นเป็นสองแถว/นับวันซ้ำ
+ *
+ * ครบเท่ากัน (เช่น แถวหนึ่ง "หยุด" อีกแถวมีเวลา) ให้แถวที่ลงไว้ใต้รหัสพ้องชนะ — รหัสพ้องคือชื่อที่สาขา
+ * ใช้ล็อกอินหน้าลงตาราง (zjp) แถวใต้รหัสจริงเป็นของค้างที่สาขามองไม่เห็นและแก้ไม่ได้
+ * เมื่อก่อนให้ "ตัวหลังชนะ" แต่ลำดับแถวขึ้นกับว่าสาขาไหนดึงเสร็จก่อน (fetchTimesheetMany ยิงพร้อมกัน)
+ * ผลจึงสุ่ม และไม่ตรงกับตารางรายสัปดาห์ที่สาขาเห็น
  */
 function mergeAliasRows(rows, aliasTo) {
   const keep = new Map();
   const out = [];
+  const fromAlias = new Set();   // แถวที่มาจากรหัสพ้อง (ดูจาก branch เดิมก่อนแปลง)
   for (const r0 of rows) {
     const canon = aliasTo[txt(r0.branch).toLowerCase()];
     const r = canon ? { ...r0, branch: canon } : r0;
+    if (canon) fromAlias.add(r);
     const code = txt(r.hrCode);
     if (!code) { out.push(r); continue; }
     const key = `${rowDate(r)}|${txt(r.branch).toLowerCase()}|${code}`;
     const seen = keep.get(key);
-    if (seen === undefined) { keep.set(key, out.length); out.push(r); }
-    else if (rowScore(r) >= rowScore(out[seen])) out[seen] = r;   // เท่ากัน = ตัวหลังชนะ เหมือน byCode ใน attachSchedule
+    if (seen === undefined) { keep.set(key, out.length); out.push(r); continue; }
+    const prev = out[seen];
+    const diff = rowScore(r) - rowScore(prev);
+    // ครบเท่ากัน: รหัสพ้องชนะรหัสจริง · มาจากชื่อเดียวกันทั้งคู่ = ตัวหลังชนะ เหมือน byCode ใน attachSchedule
+    if (diff > 0 || (diff === 0 && (fromAlias.has(r) || !fromAlias.has(prev)))) out[seen] = r;
   }
   return out;
 }
