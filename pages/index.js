@@ -58,6 +58,7 @@ import TaxInvoice from '../components/TaxInvoice';
 import MemberLookup from '../components/MemberLookup';
 import QcRdMenu from '../components/QcRdMenu';
 import QcRdItems from '../components/QcRdItems';
+import QcRdProduction from '../components/QcRdProduction';
 import AiNarai from '../components/AiNarai';
 import PlanList from '../components/PlanList';
 import BranchRequisition from '../components/BranchRequisition';
@@ -729,7 +730,7 @@ const MENU_ICONS = {
   stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar,
   employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, uniformReport: ShoppingBag, branchList: Building2,
   branchUsers: KeyRound,
-  qcrdMenu: FileText, qcrdItems: PackageSearch,
+  qcrdMenu: FileText, qcrdItems: PackageSearch, qcrdProduction: BarChart3,
   planList: ClipboardList, branchRequisition: PackageOpen,
   fcDashboard: LayoutDashboard, fcReport: FileText, fcDaily: Receipt,
   fcSales: TrendingUp, fcDetail: Layers, fcExpense: DollarSign,
@@ -2676,6 +2677,7 @@ export default function App() {
                 {activeTab === 'memberLookup' && <Users size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdMenu' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdItems' && <ClipboardList size={20} className="text-amber-600" />}
+                {activeTab === 'qcrdProduction' && <BarChart3 size={20} className="text-amber-600" />}
                 {activeTab === 'planList' && <ShoppingBag size={20} className="text-amber-600" />}
                 {activeTab === 'branchRequisition' && <PackageOpen size={20} className="text-amber-600" />}
                 {activeTab === 'fcDashboard' && <LayoutDashboard size={20} className="text-emerald-600" />}
@@ -2705,6 +2707,7 @@ export default function App() {
                   : activeTab === 'memberLookup' ? 'ค้นหาสมาชิก (ทุกบิลของสาขาหลัก)'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
+                  : activeTab === 'qcrdProduction' ? 'QC/RD — รายงานการผลิต (ครัวกลาง)'
                   : activeTab === 'planList' ? 'จัดซื้อ — แพลนสินค้า'
                   : activeTab === 'branchRequisition' ? 'จัดซื้อ — เบิกของสาขา'
                   : activeTab === 'userList' ? 'จัดการผู้ใช้และสิทธิ์'
@@ -2803,6 +2806,8 @@ export default function App() {
             {/* QC/RD: เมนู+สูตร (BOM) และวัตถุดิบ จากชีทต้นทุนเมนู */}
             {activeTab === 'qcrdMenu' && <QcRdMenu />}
             {activeTab === 'qcrdItems' && <QcRdItems />}
+            {/* รายงานการผลิตของครัวกลาง — ข้อมูลชุดเดียวกับหน้าครัวกลาง ดูอย่างเดียว (ดู lib/kitchenReport.js) */}
+            {activeTab === 'qcrdProduction' && <QcRdProduction />}
 
             {/* AI NARAI: แชทถามข้อมูลด้วย Gemini */}
             {activeTab === 'aiNarai' && <AiNarai />}
