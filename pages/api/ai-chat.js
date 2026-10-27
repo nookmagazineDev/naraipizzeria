@@ -325,6 +325,79 @@ const TOOL_HANDLERS = {
     };
   },
 
+  // บิลที่มีเมนูนี้ แยกรายใบ — โต๊ะ, จำนวนชิ้นของเมนูนี้, บิลนั้นมีกี่รายการ, กี่คน
+  // ดึงบิล + รายการอาหารของทั้งช่วงครั้งเดียวแล้วจับคู่ในหน่วยความจำ
+  // (เดิม AI ต้องไล่ get_bill_detail ทีละใบ ซึ่งดึงทั้งวันใหม่ทุกใบ จนเกิน maxDuration 60 วิ)
+  async get_item_bills({ item, start_date, end_date, branch, limit = 100 }) {
+    if (!item) throw new Error('ต้องระบุ item (รหัสหรือบางส่วนของชื่อเมนู)');
+    assertRange(start_date, end_date, 31);
+    const BUFFET = ['101001', '101002', '101003', '101004', '101107'];   // ชุดเดียวกับ get_covers
+    const COVERALL_OUTLETS = [501, 503];
+    const [dets, sales] = await Promise.all([
+      fetchDetails(start_date, end_date, branch),
+      fetchSales(start_date, end_date, branch),
+    ]);
+    // คีย์บิล = outletID|เลขบิล (กติกาเดียวกับ billKey ใน pages/index.js — เลขบิลซ้ำข้ามสาขาได้)
+    const keyOf = (outletID, checkID) => `${outletID ?? ''}|${String(checkID ?? '').trim()}`;
+    const kw = String(item).trim().toLowerCase();
+    const isHit = r => String(r.itemCode) === kw || String(r.nameThai || '').toLowerCase().includes(kw);
+
+    const perBill = new Map();
+    for (const r of dets) {
+      if (r.void || !r.chkCheckID) continue;
+      if (EXCLUDE_TABLES.includes(parseInt(r.tableID))) continue;
+      const k = keyOf(r.outletID, r.chkCheckID);
+      if (!perBill.has(k)) perBill.set(k, { lines: 0, qtyAll: 0, itemQty: 0, itemAmount: 0, buffet: 0, names: new Set() });
+      const b = perBill.get(k);
+      if (isExcludedItem(r.itemCode)) continue;
+      b.lines += 1;
+      b.qtyAll += num(r.quantity);
+      if (BUFFET.includes(String(r.itemCode))) b.buffet += num(r.quantity);
+      if (isHit(r)) {
+        b.itemQty += num(r.quantity);
+        b.itemAmount += num(r.grossPrice);
+        b.names.add(`${r.itemCode} ${String(r.nameThai || '').trim()}`);
+      }
+    }
+
+    const billOf = new Map(sales.map(b => [keyOf(b.outletID, b.checkID), b]));
+    const matched = new Set();
+    const bills = [];
+    for (const [k, b] of perBill) {
+      if (!b.itemQty) continue;
+      b.names.forEach(n => matched.add(n));
+      const bill = billOf.get(k);
+      const outletID = parseInt(k.split('|')[0]);
+      bills.push({
+        checkID: k.split('|')[1],
+        branch: OUTLETS[outletID] || String(outletID),
+        time: String(bill?.startTime || bill?.date || '').slice(0, 16),
+        table: bill?.tableID ?? null,
+        itemQty: r2(b.itemQty),
+        itemAmount: r2(b.itemAmount),
+        billLines: b.lines,
+        billQty: r2(b.qtyAll),
+        // จำนวนคน: สาขาบุฟเฟต์นับจานบุฟเฟต์ในบิล · สาขา coverAll ใช้ค่าจากบิล (กติกาเดียวกับ get_covers)
+        guests: COVERALL_OUTLETS.includes(outletID) ? (bill ? num(bill.coverAll) : null) : r2(b.buffet),
+        billTotal: bill ? r2(num(bill.billTotal) - num(bill.voucher1)) : null,
+      });
+    }
+    if (!bills.length) {
+      return { found: false, message: `ไม่พบบิลที่มีเมนู "${item}" ในช่วง ${start_date} ถึง ${end_date}` };
+    }
+    bills.sort((a, b) => a.time.localeCompare(b.time));
+    const cap = rowCap(limit, 100);
+    return {
+      found: true,
+      matchedItems: [...matched].slice(0, 10),
+      totalBills: bills.length,
+      totalItemQty: r2(bills.reduce((s, b) => s + b.itemQty, 0)),
+      bills: bills.slice(0, cap),
+      truncated: bills.length > cap ? `แสดง ${cap} จาก ${bills.length} ใบ` : undefined,
+      note: 'billLines = จำนวนบรรทัดรายการในบิล (ไม่รวม void) · billQty = จำนวนชิ้นรวมทั้งบิล · guests = จำนวนคน (จานบุฟเฟต์ หรือ coverAll ของบิล)',
+    };
+  },
+
   // เจาะยอดขายของเมนูเดียว (ค้นด้วยรหัสหรือชื่อ) แยกตามวันหรือตามสาขา
   async get_item_sales({ item, start_date, end_date, branch, group_by = 'day' }) {
     if (!item) throw new Error('ต้องระบุ item (รหัสหรือบางส่วนของชื่อเมนู)');
@@ -1106,6 +1179,21 @@ const TOOL_DECLARATIONS = [
     },
   },
   {
+    name: 'get_item_bills',
+    description: 'บิลที่มีเมนูหนึ่ง แยกรายใบ: เลขบิล เวลา โต๊ะ สั่งเมนูนี้กี่ชิ้น บิลนั้นมีกี่รายการ มีกี่คน ยอดบิล สูงสุด 31 วันต่อครั้ง — ใช้เมื่อถามว่า "เมนู X อยู่ในบิลไหน / แต่ละบิลแต่ละโต๊ะมีกี่รายการ กี่คน" (ห้ามไล่ get_bill_detail ทีละใบแทน)',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        item: { type: 'STRING', description: 'รหัสเมนู หรือบางส่วนของชื่อเมนู' },
+        start_date: { type: 'STRING', description: 'วันเริ่ม YYYY-MM-DD' },
+        end_date: { type: 'STRING', description: 'วันสิ้นสุด YYYY-MM-DD (ห่างกันไม่เกิน 31 วัน)' },
+        branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
+        limit: { type: 'NUMBER', description: 'จำนวนบิลสูงสุดที่แสดง (default 100) — ใส่ 0 = ทุกใบ' },
+      },
+      required: ['item', 'start_date', 'end_date'],
+    },
+  },
+  {
     name: 'get_item_sales',
     description: 'เจาะยอดขายของเมนูเดียว ค้นด้วยรหัสหรือบางส่วนของชื่อ แยกเป็นรายวันหรือรายสาขา — ใช้เมื่อถามถึงเมนูเฉพาะเจาะจง เช่น "เนื้อริบอายขายวันไหนเท่าไหร่"',
     parameters: {
@@ -1373,7 +1461,8 @@ export default async function handler(req, res) {
       `ช่วงวันที่: เครื่องมือยอดขาย/ต้นทุน/ลูกค้า ถามยาวได้ถึง 366 วันในครั้งเดียว (เช่น ทั้งปี หรือ ม.ค.–มิ.ย.) ` +
       `ห้ามตอบว่า "ดึงได้ทีละเดือน" หรือให้ผู้ใช้แบ่งช่วงเอง — ถามยาวไปเลยแล้วเลือก group_by ให้เหมาะ ` +
       `(หลายเดือน → group_by "month" หรือ "month_branch", ในเดือนเดียว → "day_branch") ` +
-      `ยกเว้น get_bills (บิลรายใบ) สูงสุด 31 วัน และ get_attendance สูงสุด 92 วัน ` +
+      `ยกเว้น get_bills / get_item_bills (บิลรายใบ) สูงสุด 31 วัน และ get_attendance สูงสุด 92 วัน ` +
+      `ถามถึงเมนูหนึ่งแยกตามบิล/โต๊ะ ให้ใช้ get_item_bills ครั้งเดียว ห้ามไล่ get_bill_detail ทีละใบ (ช้าจนหมดเวลา) ` +
       `ถ้าผู้ใช้ถามถึงหลายเดือน ให้ดึงทั้งช่วงในครั้งเดียวแล้วสรุปเทียบให้เลย ไม่ต้องถามกลับ ` +
       `ปกติให้ใส่ตัวกรอง (search/branch/ช่วงวันที่) หรือ group_by ก่อน จะได้คำตอบเร็วและตรงกว่า ` +
       `แต่ถ้าผู้ใช้ขอ "ทั้งหมด/ทุกรายการ/ครบทุกตัว" หรือคำถามต้องใช้ข้อมูลทั้งชุดจริง ๆ ` +

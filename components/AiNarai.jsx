@@ -193,6 +193,23 @@ function trimHistory(list, n) {
   return i > 0 ? cut.slice(i) : cut;
 }
 
+/**
+ * อ่านคำตอบของ /api/ai-chat — ปกติเป็น JSON แต่ถ้าฟังก์ชันบน Vercel ทำงานเกิน maxDuration (60 วิ) หรือล้ม
+ * Vercel จะตอบเป็นข้อความธรรมดา "An error occurred with your deployment ... FUNCTION_INVOCATION_TIMEOUT"
+ * ซึ่ง r.json() อ่านไม่ได้ แล้วผู้ใช้เห็นแค่ "Unexpected token 'A' ... is not valid JSON" — แปลเป็นข้อความที่บอกวิธีแก้แทน
+ */
+async function readChatReply(r) {
+  const raw = await r.text();
+  try {
+    return JSON.parse(raw);
+  } catch {
+    if (r.status === 504 || /TIMEOUT/i.test(raw)) {
+      throw new Error('คำถามนี้ใช้เวลาดึงข้อมูลนานเกิน 60 วินาที ระบบจึงตัดการทำงาน — ลองระบุสาขาหรือช่วงวันที่ให้แคบลง (เช่น สาขาเดียว / ไม่กี่วัน) แล้วถามใหม่');
+    }
+    throw new Error(`เซิร์ฟเวอร์ตอบกลับผิดพลาด (HTTP ${r.status}) ลองถามใหม่อีกครั้ง หรือระบุสาขา/ช่วงวันที่ให้แคบลง`);
+  }
+}
+
 export default function AiNarai() {
   const [messages, setMessages] = useState([]); // {role:'user'|'model', text, tools?}
   const [input, setInput] = useState('');
@@ -217,7 +234,7 @@ export default function AiNarai() {
         // ส่งเฉพาะ 16 ข้อความล่าสุด กัน token บวม (ตัดให้เริ่มด้วยฝั่งผู้ใช้เสมอ — Gemini ไม่รับประวัติที่ขึ้นต้นด้วย model)
         body: JSON.stringify({ messages: trimHistory(next, 16).map(m => ({ role: m.role, text: m.text })) }),
       });
-      const j = await r.json();
+      const j = await readChatReply(r);
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setMessages(m => [...m, { role: 'model', text: j.text, tools: j.toolCalls || [] }]);
     } catch (err) {
