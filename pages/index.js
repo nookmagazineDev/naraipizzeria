@@ -40,7 +40,8 @@ import {
   KeyRound,
   Lock,
   Loader2,
-  Truck
+  Truck,
+  ExternalLink
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
@@ -730,7 +731,7 @@ const MENU_ICONS = {
   stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar,
   employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, uniformReport: ShoppingBag, branchList: Building2,
   branchUsers: KeyRound,
-  qcrdMenu: FileText, qcrdItems: PackageSearch, qcrdProduction: BarChart3,
+  qcrdMenu: FileText, qcrdItems: PackageSearch, qcrdProduction: BarChart3, qcrdOrderWeb: Truck,
   planList: ClipboardList, branchRequisition: PackageOpen,
   fcDashboard: LayoutDashboard, fcReport: FileText, fcDaily: Receipt,
   fcSales: TrendingUp, fcDetail: Layers, fcExpense: DollarSign,
@@ -2600,6 +2601,22 @@ export default function App() {
                     <div className={`pl-4 space-y-1.5 mt-1 border-l ${style.rule} ml-6`}>
                       {items.map((item) => {
                         const Icon = MENU_ICONS[item.key] || Folder;
+                        // เมนูที่เป็นลิงก์ออกไปเว็บอื่น (href ใน lib/permissions.js) — เปิดแท็บใหม่ ไม่เปลี่ยน activeTab
+                        if (item.href) {
+                          return (
+                            <a
+                              key={item.key}
+                              href={item.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-xs font-medium transition-colors ${style.idle}`}
+                            >
+                              <Icon size={16} />
+                              <span className="flex-1">{item.label}</span>
+                              <ExternalLink size={12} className="opacity-60" />
+                            </a>
+                          );
+                        }
                         return (
                           <button
                             key={item.key}
