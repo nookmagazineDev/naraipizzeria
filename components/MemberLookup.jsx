@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Search, Loader2, AlertCircle, RefreshCw, ChevronRight, Users } from 'lucide-react';
+import { Search, Loader2, AlertCircle, RefreshCw, ChevronRight, Users, Download } from 'lucide-react';
+import * as XLSX from 'xlsx-js-style';
 import { useBranches } from '../lib/useBranches';
 import { normalizeOutletId } from '../lib/branches';
 import { dateLabel } from '../lib/thaiDate';
@@ -12,6 +13,9 @@ import { dateLabel } from '../lib/thaiDate';
  *      ไม่โหลดทั้งหมดทีเดียวแล้ว — สมาชิกเป็นแสนคน = ราว 15 MB เกินเพดานคำตอบของ Vercel (4.5 MB)
  *   2) กดสมาชิก → ดึงบิลทั้งหมดของคนนั้น (/api/members?member=…)
  *   3) กดบิล → ดึงรายการในบิลนั้นบิลเดียว (/api/members?outlet=&check=&day=)
+ *
+ * ปุ่ม Excel สองจุด ส่งออก "เท่าที่เห็นบนจอ" — รายชื่อชุดที่โหลดมา (ไม่เกิน 300 คนต่อครั้ง)
+ * กับบิลทั้งหมดของสมาชิกที่เลือก (รายการในบิลที่กดเปิดดูไว้แล้วแนบไปอีกชีท)
  */
 
 const MIN_QUERY = 3;      // พิมพ์น้อยกว่านี้ยังไม่ค้น (เลข 1-2 ตัวตรงกับแทบทุกคน)
@@ -27,6 +31,23 @@ const billDay = (b) => {
   const s = dayOf(b.startTime);
   return s && s >= '2000-01-01' ? s : dayOf(b.date);
 };
+
+const HEAD_STYLE = {
+  font: { name: 'Tahoma', sz: 11, bold: true, color: { rgb: 'FFFFFF' } },
+  fill: { patternType: 'solid', fgColor: { rgb: 'B45309' } }, // amber-700
+};
+const todayStamp = () => new Date().toISOString().slice(0, 10);
+
+/** แถวแรกเป็นหัวตาราง · cols = ความกว้างคอลัมน์ (ตัวอักษร) */
+function addSheet(wb, name, aoa, cols) {
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = cols.map(wch => ({ wch }));
+  for (let c = 0; c < aoa[0].length; c++) {
+    const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
+    if (cell) cell.s = HEAD_STYLE;
+  }
+  XLSX.utils.book_append_sheet(wb, ws, name);
+}
 
 async function getJson(url) {
   const r = await fetch(url, { cache: 'no-store' });
@@ -117,6 +138,40 @@ export default function MemberLookup() {
   const sumTotal = (bills || []).reduce((s, b) => s + billTotal(b), 0);
   const visitedBranches = [...new Set((bills || []).map(b => branchOf(b.outletID)))];
 
+  const exportMembers = () => {
+    if (!list.length) return;
+    const wb = XLSX.utils.book_new();
+    addSheet(wb, 'สมาชิก', [
+      ['เลขสมาชิก', 'จำนวนบิล', 'ยอดรวม', 'มาล่าสุด', 'ครั้งแรก'],
+      ...list.map(m => [trimMember(m.member), Number(m.bills) || 0, Number(m.total) || 0, dayOf(m.lastDate), dayOf(m.firstDate)]),
+    ], [18, 10, 14, 12, 12]);
+    XLSX.writeFile(wb, `members_${listMeta.q ? `${listMeta.q}_` : ''}${todayStamp()}.xlsx`);
+  };
+
+  const exportBills = () => {
+    if (!bills?.length) return;
+    const wb = XLSX.utils.book_new();
+    addSheet(wb, 'บิล', [
+      ['วันที่', 'เวลา', 'สาขา', 'เลขบิล', 'โต๊ะ', 'วิธีจ่าย', 'ยอดบิล'],
+      ...bills.map(b => [billDay(b), timeOf(b.startTime) || timeOf(b.date), branchOf(b.outletID),
+        b.checkID, b.tableID || '', b.paidType || '', billTotal(b)]),
+    ], [12, 7, 8, 12, 8, 12, 12]);
+    // รายการในบิลมีเฉพาะบิลที่กดเปิดดูแล้ว — ดึงทุกบิลใหม่หมด = ยิงฐานบิลละครั้ง
+    const opened = bills.filter(b => lines[`${b.outletID}#${b.checkID}`]?.rows?.length);
+    if (opened.length) {
+      const aoa = [['วันที่', 'สาขา', 'เลขบิล', 'รหัส', 'รายการ', 'จำนวน', 'ราคา/หน่วย', 'รวม', 'ยกเลิก']];
+      opened.forEach(b => lines[`${b.outletID}#${b.checkID}`].rows.forEach(r => {
+        const isVoid = Boolean(r.void) && r.void !== '0' && r.void !== 'N';
+        const qty = Number(r.quantity) || 0;
+        const total = r.grossPrice != null ? Number(r.grossPrice) : qty * (Number(r.unitPrice) || 0);
+        aoa.push([billDay(b), branchOf(b.outletID), b.checkID, r.itemCode, r.nameThai || r.nameEng,
+          qty, Number(r.unitPrice) || 0, total, isVoid ? 'ยกเลิก' : '']);
+      }));
+      addSheet(wb, 'รายการในบิล', aoa, [12, 8, 12, 10, 32, 8, 10, 10, 8]);
+    }
+    XLSX.writeFile(wb, `member_${trimMember(current)}_${todayStamp()}.xlsx`);
+  };
+
   const SortChip = ({ id, label }) => (
     <button onClick={() => setSort(id)}
       className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${sort === id ? 'bg-amber-50 border-amber-400 text-amber-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
@@ -131,8 +186,14 @@ export default function MemberLookup() {
         <section className="p-4 space-y-3 border-b lg:border-b-0 lg:border-r border-slate-100">
           <div className="flex items-center justify-between gap-2">
             <h3 className="font-bold text-slate-800 flex items-center gap-1.5"><Users size={16} /> สมาชิก</h3>
-            <button onClick={() => setReloadKey(n => n + 1)} disabled={!members && !listErr} title="โหลดรายชื่อใหม่"
-              className="text-slate-400 hover:text-slate-700 disabled:opacity-30"><RefreshCw size={15} /></button>
+            <div className="flex items-center gap-2">
+              <button onClick={exportMembers} disabled={!list.length} title="ส่งออกรายชื่อที่แสดงอยู่เป็น Excel"
+                className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:bg-slate-200 disabled:text-slate-400">
+                <Download size={13} /> Excel
+              </button>
+              <button onClick={() => setReloadKey(n => n + 1)} disabled={!members && !listErr} title="โหลดรายชื่อใหม่"
+                className="text-slate-400 hover:text-slate-700 disabled:opacity-30"><RefreshCw size={15} /></button>
+            </div>
           </div>
           <div className="relative">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -195,7 +256,14 @@ export default function MemberLookup() {
           )}
           {current && (
             <>
-              <h3 className="font-bold text-slate-800">สมาชิก <span className="font-mono">{trimMember(current)}</span></h3>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-bold text-slate-800">สมาชิก <span className="font-mono">{trimMember(current)}</span></h3>
+                <button onClick={exportBills} disabled={!bills?.length}
+                  title="ส่งออกบิลทั้งหมดของสมาชิกนี้ (รายการในบิลที่เปิดดูแล้วแนบไปอีกชีท)"
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:bg-slate-200 disabled:text-slate-400">
+                  <Download size={13} /> Excel
+                </button>
+              </div>
               {!bills && !billsErr && (
                 <div className="py-10 text-center text-sm text-slate-400"><Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังดึงบิลทั้งหมด…</div>
               )}
