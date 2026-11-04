@@ -123,9 +123,12 @@ export default async function handler(req, res) {
 
     // limit: รายงานเทียบต่อหัวขอทุกสาขาในรอบเดียว ซึ่งแถวเยอะกว่าที่หน้าตารางใช้
     // (เพดานจริงถูกคุมอีกชั้นที่ lib/monthEndSql.mjs — สูงสุด 20000 แถว)
-    const limit = Number(str(req.query.limit)) || 0;
+    // ทุกสาขาในเดือนเดียวเกินเพดานเริ่มต้น 5000 แถวได้ (สาขาละหลายร้อยไอเทม) — แถวที่ถูกตัด
+    // คือสาขาท้าย ๆ ตัวอักษรทั้งสาขา จึงขอเพดานสูงสุดให้เองเมื่อไม่ได้ระบุสาขา
+    const oneBranch = branch && branch.toLowerCase() !== 'all';
+    const limit = Number(str(req.query.limit)) || (oneBranch ? 0 : 20000);
     const data = await readMonthEnd({
-      month, branch: branch.toLowerCase() === 'all' ? '' : branch, limit: limit > 0 ? limit : undefined,
+      month, branch: oneBranch ? branch : '', limit: limit > 0 ? limit : undefined,
     });
 
     // ปิดรอบเดือนที่ปิดไปแล้วไม่เปลี่ยนอีก — ให้ CDN ตอบซ้ำได้สักพัก แต่ยังสั้นพอให้เดือนที่เพิ่งปิดขึ้นเร็ว
