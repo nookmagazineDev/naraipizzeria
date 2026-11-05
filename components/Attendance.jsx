@@ -9,6 +9,8 @@ import { hhmm, hoursToHm, assignOvernight, addDays, scanQueryBranch, keepBranchS
 import { useBranches, useScanBranches } from '../lib/useBranches';
 import { dayWork } from '../lib/payroll';
 import ScheduleLockPanel, { lockFor, thaiDate } from './ScheduleLockPanel';
+import PlanEditModal from './PlanEditModal';
+import { leaveText } from '../lib/leaveCodes';
 
 /*
  * NARAI OFFICE — ดูสแกนหน้า (เข้า-ออกงาน)
@@ -222,6 +224,8 @@ export default function Attendance() {
   // ล็อกตารางงานรายสาขา (ScheduleLockPanel โหลดให้) — ใช้ขึ้นแม่กุญแจหน้าวันที่ที่สาขาแก้ตารางไม่ได้แล้ว
   // ไม่ได้กันการแก้เวลาสแกนในหน้านี้ ออฟฟิศยังแก้ได้ทุกวัน
   const [schedLocks, setSchedLocks] = useState([]);
+  // แถวที่กำลังแก้ "ตารางงานที่ลงไว้" อยู่ (null = ปิด) — ดู PlanEditModal
+  const [planEdit, setPlanEdit] = useState(null);
   const lockOfRow = (d) => {
     const l = lockFor(schedLocks, d.branch);
     return l && d.date <= l.lockedUntil ? l : null;
@@ -453,6 +457,45 @@ export default function Attendance() {
       netHours: toHours(mins.netHours),
     };
   }, [daily]);
+
+  /* ------------------- แก้ตารางงานที่ลงไว้ (ฝั่งซ้าย) ------------------- */
+
+  // แก้ได้เฉพาะแถวที่สาขาลงไว้จริง (รู้คีย์ของแถวในฐาน) — คนที่ไม่มีในตารางงานต้องให้สาขาลงก่อน
+  // ตารางงานของพื้นที่ OFFICE เป็นเวลาคงที่ในโค้ด ไม่ได้มาจากฐาน จึงแก้ที่นี่ไม่ได้
+  const canEditPlan = (d) => Boolean(d.plan && !d.plan.office && d.plan.hrCode && d.plan.storedBranch);
+
+  /** บันทึกสำเร็จ — แทนแถวเดิมใน schedRows ด้วยแถวที่ฐานคืนมา ตารางคิดสาย/OT ใหม่เองจาก useMemo */
+  const onPlanSaved = (saved, sent) => {
+    const row = planEdit;
+    setPlanEdit(null);
+    if (saved) {
+      const same = (r) =>
+        String(r.workDate || '').slice(0, 10) === String(saved.workDate || '').slice(0, 10) &&
+        String(r.hrCode || '').trim() === String(saved.hrCode || '').trim() &&
+        String(r.storedBranch || r.branch || '').toLowerCase() === String(saved.branch || '').toLowerCase();
+      // คงรหัสสาขาที่แปลงแล้ว (branch) ไว้ตามเดิม จับคู่กับแถวสแกนได้เหมือนก่อนแก้
+      setSchedRows((prev) => prev.map((r) => (same(r) ? { ...saved, branch: r.branch, storedBranch: saved.branch } : r)));
+    }
+    const what = sent.leaveNote || sent.unpaidLeave
+      ? leaveText(sent.leaveNote || sent.unpaidLeave)
+      : `${sent.checkIn}–${sent.checkOut || '?'}`;
+    setEditMsg({
+      ok: true,
+      msg: `แก้ตารางงานของ ${row?.name || sent.hrCode} วันที่ ${sent.workDate} เป็น ${what} แล้ว — หน้าลงตารางของสาขาเห็นค่าใหม่เมื่อโหลดหน้า`,
+    });
+  };
+
+  /** ห่อช่องฝั่งตารางงานให้กดแก้ได้ (ถ้าแถวนั้นแก้ได้) */
+  const planButton = (d, children) => (canEditPlan(d) ? (
+    <button
+      type="button" onClick={() => { setEditMsg(null); setPlanEdit(d); }}
+      title="คลิกเพื่อแก้ตารางงานที่ลงไว้ — สาขาจะเห็นค่าใหม่ด้วย"
+      className="group inline-flex items-center gap-1 rounded-lg px-1.5 py-0.5 hover:bg-indigo-100/70"
+    >
+      {children}
+      <Pencil size={10} className="text-slate-300 group-hover:text-indigo-500" />
+    </button>
+  ) : children);
 
   /* ---------------------- แก้เวลาสแกนในช่อง ---------------------- */
 
@@ -988,14 +1031,15 @@ export default function Attendance() {
                           แล้วบอกไปเลยว่าวันนั้นลงไว้ว่าอะไร (เหมือนช่องหยุดในหน้าลงตารางของ Narai-branch) */}
                       {showPlan && (d.plan?.isOff ? (
                         <td colSpan={3} className={`px-3 py-2 text-center border-l border-slate-200 ${d.plan.offPaid ? 'bg-amber-50' : 'bg-rose-50/60'}`}>
-                          <span className={`font-semibold ${d.plan.offPaid ? 'text-amber-700' : 'text-rose-700'}`}>⊖ {d.plan.offLabel}</span>
+                          {planButton(d, <span className={`font-semibold ${d.plan.offPaid ? 'text-amber-700' : 'text-rose-700'}`}>⊖ {d.plan.offLabel}</span>)}
                         </td>
                       ) : (
                         <>
-                          <td className="px-3 py-2 text-center bg-indigo-50/40 border-l border-slate-200">{timeCell(d.plan?.in, 'text-indigo-700')}</td>
-                          <td className="px-3 py-2 text-center bg-indigo-50/40">{timeCell(d.plan?.out, 'text-indigo-700')}</td>
+                          {/* กดช่องไหนก็ได้ = เปิดหน้าต่างแก้ตารางงานของวันนั้น (PlanEditModal) */}
+                          <td className="px-3 py-2 text-center bg-indigo-50/40 border-l border-slate-200">{planButton(d, timeCell(d.plan?.in, 'text-indigo-700'))}</td>
+                          <td className="px-3 py-2 text-center bg-indigo-50/40">{planButton(d, timeCell(d.plan?.out, 'text-indigo-700'))}</td>
                           {/* ระยะเบรคที่อนุญาตของวันนั้น — ตัวเดียวกับที่ใช้คิด "เบรคสาย" ตอนไม่ได้ลงช่วงเวลาไว้ */}
-                          <td className="px-3 py-2 text-center bg-indigo-50/40 text-xs">{breakPlanCell(d.plan)}</td>
+                          <td className="px-3 py-2 text-center bg-indigo-50/40 text-xs">{planButton(d, breakPlanCell(d.plan))}</td>
                         </>
                       ))}
 
@@ -1118,6 +1162,11 @@ export default function Attendance() {
       )}
 
       {/* ทุกครั้งที่สแกนของวัน/คนที่กดจากช่อง "สแกน" */}
+      {/* แก้ตารางงานที่ลงไว้ของแถวที่กด */}
+      {planEdit && (
+        <PlanEditModal row={planEdit} onClose={() => setPlanEdit(null)} onSaved={onPlanSaved} />
+      )}
+
       {punchView && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" onClick={() => setPunchView(null)}>
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
