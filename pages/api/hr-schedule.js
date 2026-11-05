@@ -66,7 +66,8 @@ function mergeAliasRows(rows, aliasTo) {
   const fromAlias = new Set();   // แถวที่มาจากรหัสพ้อง (ดูจาก branch เดิมก่อนแปลง)
   for (const r0 of rows) {
     const canon = aliasTo[txt(r0.branch).toLowerCase()];
-    const r = canon ? { ...r0, branch: canon } : r0;
+    // storedBranch = รหัสที่เก็บจริงในแถว — ออฟฟิศกดแก้ตารางงานต้องอ้างแถวด้วยค่านี้ ไม่ใช่รหัสที่แปลงแล้ว
+    const r = canon ? { ...r0, branch: canon, storedBranch: r0.branch } : r0;
     if (canon) fromAlias.add(r);
     const code = txt(r.hrCode);
     if (!code) { out.push(r); continue; }
