@@ -44,7 +44,7 @@ function hintOf(message) {
     return 'รัน docs/hr-schedule-lock.sql ของ Narai-branch ใน SSMS ที่เครื่องออฟฟิศครั้งเดียว';
   }
   if (/SCHEDULE_LOCK_KEY/.test(message)) {
-    return 'ตั้ง SCHEDULE_LOCK_KEY บน Vercel ให้ตรงกับ .env ของ office-server แล้ว redeploy';
+    return 'ตั้ง SCHEDULE_LOCK_KEY ใน .env.local ของเว็บ office ให้ตรงกับ .env ของ office-server แล้วรีสตาร์ต service NaraiOfficeWeb';
   }
   return undefined;
 }
