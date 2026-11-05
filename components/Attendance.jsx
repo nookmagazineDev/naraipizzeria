@@ -3,11 +3,12 @@ import * as XLSX from 'xlsx-js-style';
 import {
   Fingerprint, Loader2, Search, CalendarDays, ListOrdered,
   Building2, Download, AlertCircle, RefreshCw, CalendarClock,
-  Pencil, Check, X, CheckCircle
+  Pencil, Check, X, CheckCircle, Lock
 } from 'lucide-react';
 import { hhmm, hoursToHm, assignOvernight, addDays, scanQueryBranch, keepBranchScans, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel, totalLateOf } from '../lib/attendance';
 import { useBranches, useScanBranches } from '../lib/useBranches';
 import { dayWork } from '../lib/payroll';
+import ScheduleLockPanel, { lockFor, thaiDate } from './ScheduleLockPanel';
 
 /*
  * NARAI OFFICE — ดูสแกนหน้า (เข้า-ออกงาน)
@@ -218,6 +219,13 @@ export default function Attendance() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [editMsg, setEditMsg] = useState(null);      // ผลของการกดบันทึกล่าสุด { ok, msg }
   const [punchView, setPunchView] = useState(null);  // แถวรายวันที่กดดูทุกครั้งที่สแกนอยู่ (null = ปิด)
+  // ล็อกตารางงานรายสาขา (ScheduleLockPanel โหลดให้) — ใช้ขึ้นแม่กุญแจหน้าวันที่ที่สาขาแก้ตารางไม่ได้แล้ว
+  // ไม่ได้กันการแก้เวลาสแกนในหน้านี้ ออฟฟิศยังแก้ได้ทุกวัน
+  const [schedLocks, setSchedLocks] = useState([]);
+  const lockOfRow = (d) => {
+    const l = lockFor(schedLocks, d.branch);
+    return l && d.date <= l.lockedUntil ? l : null;
+  };
 
   // รับวันที่/สาขามาเป็นพารามิเตอร์ได้ เพื่อให้ปุ่มช่วงสำเร็จรูปกดแล้วดึงได้เลย
   // (ไม่ต้องรอ state รอบถัดไป)
@@ -685,6 +693,9 @@ export default function Attendance() {
         </div>
       </div>
 
+      {/* ล็อกตารางงานของสาขา (ปิดงวด) — สาขาแก้ตารางของวันที่ถูกล็อกไม่ได้ ออฟฟิศยังแก้ได้ */}
+      <ScheduleLockPanel onChange={setSchedLocks} />
+
       {/* ตัวกรอง */}
       <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm space-y-3">
         {/* ช่วงวันที่สำเร็จรูป — กดแล้วดึงข้อมูลให้เลย */}
@@ -953,7 +964,17 @@ export default function Attendance() {
                       title={statusText(d)}
                       className={`hover:bg-amber-50/40${d.noScan ? ' bg-slate-50/60 text-slate-500' : ''}`}
                     >
-                      <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">{d.date}</td>
+                      <td className="px-3 py-2 font-medium text-slate-800 whitespace-nowrap">
+                        {d.date}
+                        {lockOfRow(d) && (
+                          <span
+                            className="ml-1 inline-block align-[-1px] text-slate-500"
+                            title={`ตารางงานสาขานี้ถูกล็อกถึง ${thaiDate(lockOfRow(d).lockedUntil)} — สาขาแก้ไม่ได้ (ออฟฟิศยังแก้ได้)`}
+                          >
+                            <Lock size={11} />
+                          </span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 font-mono text-xs text-slate-500">{d.empCode}</td>
                       <td className="px-3 py-2 whitespace-nowrap">{d.name || <Dash />}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
