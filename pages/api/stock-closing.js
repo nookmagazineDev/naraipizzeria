@@ -103,7 +103,10 @@ export default async function handler(req, res) {
     });
   }
 
-  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600');
+  // ไม่ให้ตัวกลาง (Cloudflare tunnel/CDN) เก็บคำตอบ — เคยตั้ง public s-maxage + stale-while-revalidate 1 ชม.
+  // พอเปลี่ยนที่มาของข้อมูล หน้าเว็บยังได้คำตอบชุดเก่า (ยอดปิดรอบ 2026-08-01 จาก stock_closing) ค้างอยู่
+  // และวันที่ 1–5 ที่สาขาเพิ่งปิดยอด ออฟฟิศก็จะเห็นช้าไปเป็นชั่วโมง
+  res.setHeader('Cache-Control', 'private, no-store');
   return res.status(200).json({
     status: 'success',
     data,
