@@ -127,14 +127,22 @@ export default function OtherExpense() {
 
   // ── ประวัติที่บันทึกไว้ในชีท: สรุปรายเดือน + กดดูรายละเอียด ──
   // (ต้องประกาศก่อน computed เพราะ computed ใช้ savedMap)
-  const [history, setHistory] = useState({ loading: false, loaded: false, rows: [] });
+  // error/warning: เคยกลืน error ทิ้งแล้วล้างแถวเป็น [] — โหลดไม่ติดทีเดียวหน้าก็ดูเหมือน "ข้อมูลเก่าหายหมด"
+  // ตอนนี้เก็บแถวเดิมไว้ + บอกสาเหตุ และบอกด้วยถ้าข้อมูลมาจาก Google Sheet (ของเก่า) แทน SQL
+  const [history, setHistory] = useState({ loading: false, loaded: false, rows: [], error: '', warning: '' });
   const [expandedMonth, setExpandedMonth] = useState(null);
 
   const loadHistory = () => {
     setHistory(h => ({ ...h, loading: true }));
     apiCall('getExpenses', {})
-      .then(res => setHistory({ loading: false, loaded: true, rows: (res.data || []).filter(r => isIncludedBranch(r.branch)) }))
-      .catch(() => setHistory({ loading: false, loaded: true, rows: [] }));
+      .then(res => setHistory({
+        loading: false, loaded: true, error: '', warning: res.warning || '',
+        rows: (res.data || []).filter(r => isIncludedBranch(r.branch)),
+      }))
+      .catch(err => setHistory(h => ({
+        ...h, loading: false, loaded: true, warning: '',
+        error: err.message || 'โหลดข้อมูลที่บันทึกไว้ไม่สำเร็จ',
+      })));
   };
   useEffect(loadHistory, []);
 
@@ -244,7 +252,8 @@ export default function OtherExpense() {
       }));
       const res = await apiCall('saveOtherExpense', { month, branch, items });
       const nNew = res.data?.appended ?? 0, nUpd = res.data?.updated ?? 0;
-      setToast({ ok: true, msg: nUpd > 0 ? `บันทึกสำเร็จ — เพิ่มใหม่ ${nNew} · อัพเดตทับ ${nUpd} รายการ` : `บันทึกสำเร็จ ${nNew || items.length} รายการ` });
+      const where = res.source === 'sheet' ? ' (ลง Google Sheet ไม่ใช่ SQL)' : '';
+      setToast({ ok: true, msg: (nUpd > 0 ? `บันทึกสำเร็จ — เพิ่มใหม่ ${nNew} · อัพเดตทับ ${nUpd} รายการ` : `บันทึกสำเร็จ ${nNew || items.length} รายการ`) + where });
       loadHistory(); // โหลดใหม่ → ฟอร์มจะแสดงค่าที่บันทึกพร้อมป้าย "บันทึกแล้ว"
     } catch (err) {
       setToast({ ok: false, msg: err.message || 'บันทึกไม่สำเร็จ' });
@@ -415,6 +424,25 @@ export default function OtherExpense() {
         </div>
       </div>
 
+      {/* โหลดประวัติไม่ได้ / กำลังอ่านจากชีทเก่า — ต้องเห็นชัด ไม่งั้นดูเหมือนข้อมูลหาย */}
+      {(history.error || history.warning) && (
+        <div className={`rounded-2xl border p-4 flex items-start gap-3 text-sm ${history.error ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+          <AlertCircle size={18} className="shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold">
+              {history.error
+                ? (history.rows.length ? 'โหลดข้อมูลล่าสุดไม่สำเร็จ — ที่เห็นอยู่คือข้อมูลรอบก่อน' : 'โหลดข้อมูลที่บันทึกไว้ไม่สำเร็จ — ข้อมูลเก่ายังอยู่ในฐาน แค่ดึงมาแสดงไม่ได้')
+                : 'ข้อมูลที่แสดงอาจไม่ใช่ข้อมูลล่าสุด'}
+            </p>
+            <p className="mt-1 break-words whitespace-pre-line text-xs">{history.error || history.warning}</p>
+          </div>
+          <button onClick={loadHistory} disabled={history.loading}
+            className="shrink-0 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold bg-white border border-current rounded-lg hover:opacity-80 disabled:opacity-50">
+            {history.loading && <Loader2 size={12} className="animate-spin" />} โหลดใหม่
+          </button>
+        </div>
+      )}
+
       {/* Table */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="overflow-x-auto">
@@ -543,7 +571,7 @@ export default function OtherExpense() {
                   <Loader2 className="w-4 h-4 animate-spin inline mr-2" />กำลังโหลด…
                 </td></tr>
               ) : monthSummary.length === 0 ? (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400 text-xs">ยังไม่มีข้อมูลที่บันทึก</td></tr>
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-400 text-xs">{history.error ? 'โหลดข้อมูลไม่สำเร็จ — ดูสาเหตุที่กรอบสีแดงด้านบน' : 'ยังไม่มีข้อมูลที่บันทึก'}</td></tr>
               ) : monthSummary.map(s => (
                 <tr key={s.month} onClick={() => setExpandedMonth(expandedMonth === s.month ? null : s.month)}
                   className={`cursor-pointer hover:bg-amber-50/40 ${expandedMonth === s.month ? 'bg-amber-50/60' : ''}`}>

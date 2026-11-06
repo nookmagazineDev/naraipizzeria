@@ -79,17 +79,34 @@ export default async function handler(req, res) {
   try {
     const { json, error } = await callGas(JSON.stringify(payload));
     if (error) return res.status(502).json({ status: 'error', message: gasFailed(error, sqlError) });
+    // ข้อมูลจากชีทเป็นของเก่า (ชีทหยุดรับข้อมูลตั้งแต่ย้ายเข้า SQL) — ต้องบอกหน้าเว็บให้ขึ้นป้ายเตือน
+    // ไม่งั้นคนเห็นแค่ว่า "ข้อมูลไม่อัพเดท / ของเดือนหลัง ๆ หายไป" โดยไม่รู้ว่ากำลังดูชีทอยู่
+    if (json && typeof json === 'object' && json.status === 'success') {
+      return res.status(200).json({ ...json, source: 'sheet', warning: sheetWarning(action, sqlError) });
+    }
     return res.status(200).json(json);
   } catch (err) {
     return res.status(502).json({ status: 'error', message: gasFailed(err.message, sqlError) });
   }
 }
 
+/** ป้ายเตือนเมื่อคำตอบมาจาก Google Sheet แทน SQL */
+function sheetWarning(action, sqlError) {
+  const stale = 'ข้อมูลในชีทหยุดอัปเดตตั้งแต่ย้ายเข้า SQL — รายการที่บันทึกหลังจากนั้นจะไม่ขึ้นที่นี่';
+  if (sqlError) {
+    return `อ่านฐานข้อมูล SQL ไม่ได้ (${sqlError}) จึงแสดงข้อมูลจาก Google Sheet แทน · ${stale} ` +
+      '· ตรวจว่าเครื่องออฟฟิศเปิด service NaraiAPI อยู่ แล้วกดโหลดใหม่';
+  }
+  const verb = READ_ACTIONS[action] ? 'อ่านจาก' : 'บันทึกลง';
+  return `เว็บนี้ยังตั้งค่าให้${verb} Google Sheet อยู่ (SHEETS_SOURCE ไม่ใช่ sql) · ${stale} ` +
+    '· ให้ตั้ง SHEETS_SOURCE=sql ในไฟล์ env ของเว็บ แล้ว build + รีสตาร์ตใหม่ (update-office.bat)';
+}
+
 /** ข้อความ error ที่บอกครบว่าลองทางไหนไปแล้วบ้าง */
 function gasFailed(gasMessage, sqlError) {
   if (!sqlError) {
     return `${gasMessage} — ตอนนี้ยังอ่านจาก Google Sheets อยู่ ` +
-      '(ถ้าย้ายข้อมูลเข้า SQL แล้ว ให้ตั้ง env SHEETS_SOURCE=sql บน Vercel แล้ว Redeploy)';
+      '(ถ้าย้ายข้อมูลเข้า SQL แล้ว ให้ตั้ง SHEETS_SOURCE=sql ในไฟล์ env ของเว็บ แล้ว build + รีสตาร์ตใหม่)';
   }
   return `อ่านจาก SQL ไม่ได้ (${sqlError}) แล้วถอยไปถาม Google Sheets ก็ไม่ได้อีก (${gasMessage})`;
 }
