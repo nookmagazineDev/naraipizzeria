@@ -6,6 +6,27 @@ import toast from 'react-hot-toast';
 
 const normalizeId = id => String(id ?? '').replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
+// ยอดนับล่าสุดของ "เดือนก่อน" จากประวัติการนับ (วันที่รูปแบบ dd/MM/yyyy ...)
+// ใช้แทนยอดยกมาเดือนที่แล้วเมื่อเดือนนั้นยังไม่มีการปิดยอดสิ้นเดือน — กติกาเดียวกับ
+// prevMonthFromHistory ในหน้านับสต๊อกของ Narai-branch (ตัวเลขสองหน้าต้องตรงกัน)
+function prevMonthFromHistory(history) {
+  const now = new Date();
+  let pMonth = now.getMonth(); // 0-based = เดือนก่อนหน้าแบบ 1-based
+  let pYear = now.getFullYear();
+  if (pMonth === 0) { pMonth = 12; pYear -= 1; }
+  const mm = String(pMonth).padStart(2, '0');
+  const yyyy = String(pYear);
+  let best = null;
+  for (const h of history || []) {
+    const m = String(h.date || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (!m) continue;
+    if (m[2].padStart(2, '0') !== mm || m[3] !== yyyy) continue;
+    const key = `${yyyy}-${mm}-${m[1].padStart(2, '0')}`;
+    if (!best || key >= best.key) best = { key, qty: h.remaining, date: key };
+  }
+  return best;
+}
+
 export default function StockList() {
   // NARAI OFFICE: โหมดดูอย่างเดียวทุกสาขา (ไม่มี login)
   const user = { branch: 'all' };
@@ -79,13 +100,18 @@ export default function StockList() {
     }
   }, []);
 
-  // เติมยอดยกมา (Endding) ให้รายการสินค้า — เรียกได้ทั้งตอนรายการมาถึงและตอนยอดปิดรอบมาถึง
+  // เติม "ยอดยกมาเดือนที่แล้ว" ให้รายการสินค้า — เรียกได้ทั้งตอนรายการมาถึงและตอนยอดปิดรอบมาถึง
+  // = ยอดปิดสิ้นเดือนของเดือนก่อน (dbo.stock_month_end) ถ้าเดือนนั้นยังไม่ปิดยอด ใช้ยอดนับล่าสุดของเดือนก่อน
+  // ไม่แตะ previousBalance (= ยอดนับก่อนหน้า จาก getStockItems) — เคยเขียนทับช่องนั้นด้วยยอดปิดรอบ
+  // ทำให้ทั้งช่องยอดยกมาและ "ยอดคงเหลือจากระบบ" ไม่ตรงกับหน้าสาขา
   const mergeEndding = (list, closing) => list.map(item => {
     const endding = closing[normalizeId(item.productId)];
+    const pm = endding ? null : prevMonthFromHistory(item.stockHistory);
     return {
       ...item,
-      previousBalance: endding ? endding.balance : '',
-      previousBalanceDate: endding ? endding.date : '',
+      prevMonthQty: endding ? endding.balance : (pm ? pm.qty : ''),
+      prevMonthDate: endding ? endding.date : (pm ? pm.date : ''),
+      prevMonthFromClosing: !!endding,
     };
   });
 
@@ -100,7 +126,7 @@ export default function StockList() {
     setLoading(!cached);
     setIsLoadingClosing(!closingCacheRef.current[branch]);
 
-    // ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ จากชีท "ปิดรอบสิ้นเดือน"
+    // ยอดยกมาเดือนที่แล้ว = ยอดปิดรอบสิ้นเดือนของเดือนก่อน (dbo.stock_month_end ชุดเดียวกับหน้าสาขา)
     // ยิงคู่ไปกับรายการสินค้า แต่ไม่รอ — ตารางขึ้นก่อน แล้วค่อยเติมยอดยกมาเมื่อมาถึง
     fetch(`/api/stock-closing?branch=${encodeURIComponent(branch)}${fresh ? `&t=${Date.now()}` : ''}`)
       .then(r => r.json())
@@ -108,6 +134,7 @@ export default function StockList() {
       .then(closingRes => {
         if (closingRes.status === 'success') {
           const closing = closingRes.data || {};
+          if (closingRes.warning && branch === branchRef.current) toast.error(closingRes.warning, { duration: 8000 });
           closingCacheRef.current[branch] = closing;
           // ถ้ารายการสินค้าขึ้นไปแล้ว เติมยอดยกมาให้ตารางที่แสดงอยู่เลย
           // ถ้ายังไม่ขึ้น ฝั่งรายการสินค้าจะหยิบ closingCacheRef ไป merge เองตอนมาถึง
@@ -119,7 +146,7 @@ export default function StockList() {
             });
           }
         } else if (branch === branchRef.current) {
-          toast.error('ยอดยกมา (Endding): ' + (closingRes.message || 'ดึงข้อมูลปิดรอบสิ้นเดือนไม่สำเร็จ'));
+          toast.error('ยอดยกมาเดือนที่แล้ว: ' + (closingRes.message || 'ดึงข้อมูลปิดรอบสิ้นเดือนไม่สำเร็จ'));
         }
         if (branch === branchRef.current) setIsLoadingClosing(false);
       });
@@ -617,7 +644,10 @@ export default function StockList() {
                           + 'เติมเต็ม = ยอดเบิก คิดจาก ค่านี้ - คงเหลือ (ของที่ยอดใช้ไม่ผูกกับจำนวนลูกค้า)\n'
                           + 'คลิกที่ตัวเลขเพื่อเทียบกับสาขาอื่น'}
                       >ค่าเฉลี่ย</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60">ยอดยกมา (Endding)</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-teal-600 uppercase w-32 bg-teal-50/60"
+                        title="ยอดปิดรอบสิ้นเดือนของเดือนก่อน (ปิดยอดวันที่ 1–5 นับเป็นของเดือนก่อน) — ถ้าเดือนนั้นยังไม่ปิดยอด ใช้ยอดนับล่าสุดของเดือนก่อน">ยอดยกมาเดือนที่แล้ว</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600 uppercase w-32 bg-purple-50/60"
+                        title="ยอดนับครั้งก่อนหน้าครั้งล่าสุด (ไม่เคยนับ = ยอดยกมาที่บันทึกไว้) — ใช้เป็นฐานของยอดคงเหลือจากระบบ">ยอดนับก่อนหน้า</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-indigo-600 uppercase w-36 bg-indigo-50/60">คงเหลือล่าสุด</th>
                       <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600 uppercase w-36 bg-orange-50/60">ยอดเบิกล่าสุด</th>
                       {isAll && <th className="px-4 py-3 text-center text-xs font-semibold text-emerald-600 uppercase w-32 bg-emerald-50/60">ยอดใช้จากระบบ</th>}
@@ -630,7 +660,7 @@ export default function StockList() {
                   <tbody className="bg-white divide-y divide-gray-100">
                     {sortedAndFilteredItems.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="px-6 py-12 text-center text-gray-400">
+                        <td colSpan={12} className="px-6 py-12 text-center text-gray-400">
                           <AlertCircle className="w-8 h-8 mx-auto mb-2" />
                           ไม่พบรายการสินค้า
                         </td>
@@ -713,16 +743,29 @@ export default function StockList() {
                             })()}
                           </td>
 
-                          {/* ยอดยกมา = ยอดปิดรอบสิ้นเดือน (Endding) ล่าสุดของสาขานี้ */}
+                          {/* ยอดยกมาเดือนที่แล้ว = ยอดปิดสิ้นเดือนของเดือนก่อน (หรือยอดนับล่าสุดของเดือนก่อน) */}
+                          <td className="px-4 py-3 text-center bg-teal-50/30">
+                            <div className="font-semibold text-teal-700 text-sm">
+                              {isLoadingClosing
+                                ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto text-teal-300" />
+                                : (item.prevMonthQty !== '' && item.prevMonthQty !== undefined ? item.prevMonthQty : '-')}
+                            </div>
+                            {!isLoadingClosing && item.prevMonthDate && (
+                              <div className="text-[10px] text-gray-400 mt-0.5"
+                                title={item.prevMonthFromClosing ? 'วันที่ปิดยอดสิ้นเดือน' : 'เดือนก่อนยังไม่ปิดยอด — ใช้ยอดนับล่าสุดของเดือนก่อน'}>
+                                {item.prevMonthFromClosing ? 'ปิดรอบ ' : 'นับ '}{item.prevMonthDate}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* ยอดนับก่อนหน้า (ไม่เคยนับ = ยอดยกมาที่บันทึกไว้) — ฐานของยอดคงเหลือจากระบบ */}
                           <td className="px-4 py-3 text-center bg-purple-50/30">
                             <div className="font-semibold text-purple-700 text-sm">
-                              {isLoadingClosing
-                                ? <Loader2 className="w-3.5 h-3.5 animate-spin mx-auto text-purple-300" />
-                                : (item.previousBalance !== '' && item.previousBalance !== undefined ? item.previousBalance : '-')}
+                              {item.previousBalance !== '' && item.previousBalance !== undefined ? item.previousBalance : '-'}
                             </div>
                             {item.previousBalanceDate && (
-                              <div className="text-[10px] text-gray-400 mt-0.5" title="วันที่ปิดยอดสิ้นเดือน">
-                                ปิดรอบ {String(item.previousBalanceDate || '').split(' ')[0]}
+                              <div className="text-[10px] text-gray-400 mt-0.5">
+                                {String(item.previousBalanceDate || '').split(' ')[0]}
                               </div>
                             )}
                           </td>
