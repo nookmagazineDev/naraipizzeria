@@ -128,13 +128,18 @@ export default function StockList() {
 
     // ยอดยกมาเดือนที่แล้ว = ยอดปิดรอบสิ้นเดือนของเดือนก่อน (dbo.stock_month_end ชุดเดียวกับหน้าสาขา)
     // ยิงคู่ไปกับรายการสินค้า แต่ไม่รอ — ตารางขึ้นก่อน แล้วค่อยเติมยอดยกมาเมื่อมาถึง
-    fetch(`/api/stock-closing?branch=${encodeURIComponent(branch)}${fresh ? `&t=${Date.now()}` : ''}`)
+    // src=me: URL ใหม่ของชุดข้อมูล stock_month_end — คำตอบชุดเก่า (stock_closing) ที่ตัวกลางแคชไว้จะไม่ถูกหยิบมาใช้
+    fetch(`/api/stock-closing?branch=${encodeURIComponent(branch)}&src=me${fresh ? `&t=${Date.now()}` : ''}`)
       .then(r => r.json())
       .catch(() => ({ status: 'error', message: 'เชื่อมต่อไม่สำเร็จ' }))
       .then(closingRes => {
         if (closingRes.status === 'success') {
           const closing = closingRes.data || {};
           if (closingRes.warning && branch === branchRef.current) toast.error(closingRes.warning, { duration: 8000 });
+          // คำตอบที่ไม่มี meta.source = มาจาก API รุ่นเก่า/แคชเก่า (stock_closing ค้างที่ ส.ค.) — ห้ามเอามาแสดงเงียบ ๆ
+          if (closingRes.meta?.source !== 'stock_month_end' && Object.keys(closing).length && branch === branchRef.current) {
+            toast.error('ยอดยกมาเดือนที่แล้วได้ข้อมูลชุดเก่ามา (ไม่ใช่ยอดปิดรอบล่าสุด) — กด Ctrl+F5 แล้วลองใหม่', { duration: 8000 });
+          }
           closingCacheRef.current[branch] = closing;
           // ถ้ารายการสินค้าขึ้นไปแล้ว เติมยอดยกมาให้ตารางที่แสดงอยู่เลย
           // ถ้ายังไม่ขึ้น ฝั่งรายการสินค้าจะหยิบ closingCacheRef ไป merge เองตอนมาถึง
