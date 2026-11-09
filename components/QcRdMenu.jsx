@@ -1714,6 +1714,14 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
     : normCodeKeys(r.newCode).some(k => existing.has(k)));
 
   const pickable = rows.filter(r => !isDup(r));
+
+  // เรียงให้ "เพิ่มได้" ขึ้นก่อน → "ปิดในต้นทาง" → "มีในระบบแล้ว" ไว้ท้าย
+  // (sort เสถียร: ภายในกลุ่มเดียวกันคงลำดับเดิมจากต้นทางไว้ ไม่ได้เรียงใหม่ตามรหัส)
+  const rank = (r) => (isDup(r) ? 2 : !r.active ? 1 : 0);
+  const sortedRows = rows
+    .map((r, i) => ({ r, i, k: rank(r) }))
+    .sort((a, b) => a.k - b.k || a.i - b.i)
+    .map(x => x.r);
   const pickedList = Object.values(picked);
   const allPicked = pickable.length > 0 && pickable.every(r => picked[keyOf(r)]);
 
@@ -1883,7 +1891,7 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
                 </tr>
               </thead>
               <tbody>
-                {rows.map(r => {
+                {sortedRows.map(r => {
                   const dup = isDup(r);
                   const on = Boolean(picked[keyOf(r)]);
                   const willBe = codeFor(r);
