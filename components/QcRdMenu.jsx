@@ -1690,7 +1690,9 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
     let alive = true;
     setLoading(true);
     setError('');
-    const qs = new URLSearchParams({ src: tab, limit: '100' });
+    // ขอเต็มเพดานของ API (500) เพราะเมนูที่มีในระบบแล้วจะถูกกรองออกที่หน้านี้ ถ้าขอแค่ 100
+    // แล้วส่วนใหญ่เป็นของซ้ำ จะเหลือเมนูที่เพิ่มได้น้อยกว่าที่ควร
+    const qs = new URLSearchParams({ src: tab, limit: '500' });
     if (query) qs.set('q', query);
     if (includeInactive) qs.set('includeInactive', '1');
     askMenuSource(qs.toString())
@@ -1713,15 +1715,19 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
     ? Boolean(existingNames?.[String(src.prefix || '').toUpperCase()]?.has(normMenuName(r.name)))
     : normCodeKeys(r.newCode).some(k => existing.has(k)));
 
-  const pickable = rows.filter(r => !isDup(r));
 
-  // เรียงให้ "เพิ่มได้" ขึ้นก่อน → "ปิดในต้นทาง" → "มีในระบบแล้ว" ไว้ท้าย
-  // (sort เสถียร: ภายในกลุ่มเดียวกันคงลำดับเดิมจากต้นทางไว้ ไม่ได้เรียงใหม่ตามรหัส)
-  const rank = (r) => (isDup(r) ? 2 : !r.active ? 1 : 0);
-  const sortedRows = rows
-    .map((r, i) => ({ r, i, k: rank(r) }))
+  // ซ่อนเมนูที่ "มีในระบบแล้ว" ทิ้ง เหลือเฉพาะที่เพิ่มได้ (เรียงตัวที่เปิดใช้ก่อน ตัวที่ปิดในต้นทางตามหลัง)
+  // แล้วตัดที่ 100 แถวแรก — sort เสถียร ภายในกลุ่มคงลำดับเดิมจากต้นทาง
+  const SHOW_MAX = 100;
+  const addable = rows
+    .filter(r => !isDup(r))
+    .map((r, i) => ({ r, i, k: r.active ? 0 : 1 }))
     .sort((a, b) => a.k - b.k || a.i - b.i)
     .map(x => x.r);
+  const sortedRows = addable.slice(0, SHOW_MAX);
+  const hiddenDup = rows.length - addable.length;
+  const moreAvailable = addable.length > SHOW_MAX || Boolean(result?.limited);
+  const pickable = sortedRows;   // 'เลือกทั้งหน้า' เลือกเฉพาะแถวที่มองเห็น
   const pickedList = Object.values(picked);
   const allPicked = pickable.length > 0 && pickable.every(r => picked[keyOf(r)]);
 
@@ -1873,9 +1879,11 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
             <div className="p-10 text-center text-slate-400 text-sm">
               <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />กำลังอ่านทะเบียนเมนู…
             </div>
-          ) : !rows.length ? (
+          ) : !sortedRows.length ? (
             <div className="p-10 text-center text-slate-400 text-sm">
-              {query ? `ไม่เจอเมนูที่ตรงกับ "${query}"` : 'ไม่มีข้อมูลในต้นทางนี้'}
+              {hiddenDup > 0
+                ? `เมนูที่ค้นเจอ ${hiddenDup} รายการมีในระบบแล้วทั้งหมด`
+                : query ? `ไม่เจอเมนูที่ตรงกับ "${query}"` : 'ไม่มีข้อมูลในต้นทางนี้'}
             </div>
           ) : (
             <table className="w-full text-sm">
@@ -1934,9 +1942,11 @@ function MenuSourcePicker({ existing, existingNames, runningBase, groupList, onC
               </tbody>
             </table>
           )}
-          {result?.limited && (
-            <p className="px-4 py-3 text-[11px] text-amber-700 bg-amber-50 border-t border-amber-100">
-              แสดงได้สูงสุด 100 รายการต่อครั้ง — พิมพ์ค้นหาให้แคบลงถ้ายังไม่เจอตัวที่ต้องการ
+          {sortedRows.length > 0 && (hiddenDup > 0 || moreAvailable) && (
+            <p className="px-4 py-3 text-[11px] text-slate-500 bg-slate-50 border-t border-slate-100">
+              {hiddenDup > 0 && `ซ่อนเมนูที่มีในระบบแล้ว ${hiddenDup} รายการ`}
+              {hiddenDup > 0 && moreAvailable && ' · '}
+              {moreAvailable && `แสดงสูงสุด ${SHOW_MAX} รายการที่เพิ่มได้ — พิมพ์ค้นหาให้แคบลงถ้ายังไม่เจอตัวที่ต้องการ`}
             </p>
           )}
         </div>
