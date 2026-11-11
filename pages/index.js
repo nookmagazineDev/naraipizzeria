@@ -47,6 +47,7 @@ import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
 import StockUsagePerHead from '../components/StockUsagePerHead';
 import MonthEndList from '../components/MonthEndList';
+import ScrapReport from '../components/ScrapReport';
 import EmployeeList from '../components/EmployeeList';
 import Attendance from '../components/Attendance';
 import BranchList from '../components/BranchList';
@@ -728,7 +729,7 @@ const FRANCHISE_TITLES = {
 const MENU_ICONS = {
   dashboard: LayoutDashboard, sales: TrendingUp, dailySale: Receipt, details: Layers,
   itemSearch: Search, taxInvoice: FileText, otherExpense: DollarSign, supReport: Truck, memberLookup: Users,
-  stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar,
+  stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar, scrapReport: ArrowRightLeft,
   employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, uniformReport: ShoppingBag, branchList: Building2,
   branchUsers: KeyRound,
   qcrdMenu: FileText, qcrdItems: PackageSearch, qcrdProduction: BarChart3, qcrdOrderWeb: Truck,
@@ -2682,6 +2683,7 @@ export default function App() {
                 {(activeTab === 'stockList' || activeTab === 'stockTotal') && <PackageSearch size={20} className="text-amber-600" />}
                 {activeTab === 'stockUsagePerHead' && <BarChart3 size={20} className="text-amber-600" />}
                 {activeTab === 'monthEnd' && <Calendar size={20} className="text-amber-600" />}
+                {activeTab === 'scrapReport' && <ArrowRightLeft size={20} className="text-amber-600" />}
                 {activeTab === 'employeeList' && <Users size={20} className="text-amber-600" />}
                 {activeTab === 'attendance' && <Fingerprint size={20} className="text-amber-600" />}
                 {activeTab === 'branchList' && <Building2 size={20} className="text-amber-600" />}
@@ -2712,6 +2714,7 @@ export default function App() {
                   : activeTab === 'stockTotal' ? 'ดูยอดรวมทุกสาขา'
                   : activeTab === 'stockUsagePerHead' ? 'รายงานการใช้วัตถุดิบต่อหัว ของสาขา'
                   : activeTab === 'monthEnd' ? 'ดูข้อมูลปิดรอบเดือน'
+                  : activeTab === 'scrapReport' ? 'ข้อมูลเศษ'
                   : activeTab === 'employeeList' ? 'รายชื่อพนักงาน'
                   : activeTab === 'attendance' ? 'ดูสแกนหน้า (เข้า-ออกงาน)'
                   : activeTab === 'branchList' ? 'จัดการสาขา'
@@ -2794,6 +2797,9 @@ export default function App() {
 
             {/* STOCK: ดูข้อมูลปิดรอบเดือน — จากตาราง dbo.stock_month_end ผ่าน /api/stock-month-end */}
             {activeTab === 'monthEnd' && <MonthEndList />}
+
+            {/* STOCK: ข้อมูลเศษ — เทียบ เบิก → เตรียม → เศษ ของแต่ละสาขา ผ่าน /api/scrap-report */}
+            {activeTab === 'scrapReport' && <ScrapReport />}
 
             {/* HR VIEWS (รายชื่อพนักงาน — ดึงจาก Google Sheet ผ่าน GAS) */}
             {activeTab === 'employeeList' && <EmployeeList />}
