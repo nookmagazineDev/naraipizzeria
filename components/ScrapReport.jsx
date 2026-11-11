@@ -57,6 +57,8 @@ export default function ScrapReport() {
 
   const [group, setGroup] = useState(SCRAP_GROUPS[0].code);
   const [measure, setMeasure] = useState('scrap');
+  const [card, setCard] = useState(null);                      // รหัสเศษของการ์ดที่กดเปิดดูข้อมูล
+  const [cardBranch, setCardBranch] = useState('all');         // ตัวกรองสาขาในหน้าต่างของการ์ด
   const [cell, setCell] = useState(null);                      // { branch, date } ของช่องที่กดดูรายการ
 
   const fetchData = async () => {
@@ -287,7 +289,8 @@ export default function ScrapReport() {
               const s = gTot('scrap', gr.code), w = gTot('wd', gr.code), p = gTot('prep', gr.code);
               const on = gr.code === current.code;
               return (
-                <button key={gr.code} onClick={() => setGroup(gr.code)}
+                <button key={gr.code} onClick={() => { setGroup(gr.code); setCardBranch('all'); setCard(gr.code); }}
+                  title="กดเพื่อดูข้อมูลของรหัสนี้ แยกสาขาได้"
                   className={`text-left bg-white border border-slate-200 border-t-4 ${t.border} rounded-xl p-4 transition ${on ? `ring-2 ${t.ring} ${t.bg}` : 'hover:bg-slate-50'}`}>
                   <div className={`text-[11px] font-bold tracking-wide ${t.text}`}>{gr.code}</div>
                   <div className="font-bold text-sm text-slate-800 mb-2">{groupName(gr)}</div>
@@ -309,6 +312,7 @@ export default function ScrapReport() {
                   ) : (
                     <div className="border-t border-slate-200 pt-2 text-[11px] text-slate-400">ยังไม่ได้กำหนดไอเทมต้นทาง / รายการเตรียม</div>
                   )}
+                  <div className={`mt-2 text-[11px] font-bold ${t.text}`}>กดเพื่อดูข้อมูล แยกสาขา →</div>
                 </button>
               );
             })}
@@ -542,6 +546,179 @@ export default function ScrapReport() {
           </div>
         </>
       )}
+
+      {/* ── ข้อมูลของการ์ดที่กด — กรองแยกสาขาได้ ── */}
+      {card && (() => {
+        const gr = SCRAP_GROUPS.find(x => x.code === card) || SCRAP_GROUPS[0];
+        const t = toneOf(gr.code);
+        const mb = cardBranch === 'all' ? shown : shown.filter(b => b === cardBranch);
+        const tot = kind => mb.reduce((a, b) => a + gv(kind, gr.code, b), 0);
+        const itemTot = (kind, item) => mb.reduce((a, b) => a + iv(kind, item, b), 0);
+        const dayTot = (kind, date) => mb.reduce((a, b) => a + dv(kind, gr.code, b, date), 0);
+        const w = tot('wd'), p = tot('prep'), s = tot('scrap');
+        const days = [...(agg.dates[gr.code] || [])].sort().reverse()
+          .filter(date => dayTot('wd', date) || dayTot('prep', date) || dayTot('scrap', date));
+        const chip = on => `px-3 py-1 rounded-full text-xs border ${on ? 'bg-amber-500 border-amber-500 text-white font-bold' : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'}`;
+        const itemRow = (key, pillCls, pill, label, v) => (
+          <tr key={key}>
+            <td className={td}><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${pillCls}`}>{pill}</span></td>
+            <td className={`${td} whitespace-normal`}>{label}</td>
+            <td className={`${num} font-bold`}>{fmtOrDash(v)}</td>
+          </tr>
+        );
+        return (
+          <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center p-4" onClick={() => setCard(null)}>
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[88vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className={`flex items-center justify-between px-4 py-3 border-b border-slate-200 rounded-t-xl ${t.bg}`}>
+                <div>
+                  <div className="font-bold text-slate-800">
+                    <span className={`text-[11px] font-bold rounded px-1.5 py-0.5 mr-1.5 bg-white ${t.text}`}>{gr.code}</span>{groupName(gr)}
+                  </div>
+                  <div className="text-xs text-slate-500">ช่วง {dateLabel(loadedRange.start)} – {dateLabel(loadedRange.end)} · หน่วย กก.</div>
+                </div>
+                <button onClick={() => setCard(null)} className="p-1 rounded hover:bg-white/70"><X size={18} /></button>
+              </div>
+
+              <div className="px-4 py-3 border-b border-slate-200">
+                <div className="text-[11px] font-bold text-slate-500 mb-1.5">สาขา</div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button className={chip(cardBranch === 'all')} onClick={() => setCardBranch('all')}>ทุกสาขา</button>
+                  {shown.map(b => (
+                    <button key={b} className={chip(cardBranch === b)} onClick={() => setCardBranch(b)}>{b}</button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="overflow-auto p-4 space-y-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {hasCompare(gr) && (
+                    <div className="border border-slate-200 rounded-lg p-3">
+                      <div className="text-[11px] text-slate-500">เบิก</div>
+                      <div className="text-lg font-bold text-slate-800">{fmtOrDash(w)}</div>
+                    </div>
+                  )}
+                  {hasCompare(gr) && (
+                    <div className="border border-slate-200 rounded-lg p-3">
+                      <div className="text-[11px] text-slate-500">เตรียม <b className="text-emerald-700">{pct(p, w)}</b> ของเบิก</div>
+                      <div className="text-lg font-bold text-emerald-700">{fmtOrDash(p)}</div>
+                    </div>
+                  )}
+                  <div className="border border-slate-200 rounded-lg p-3">
+                    <div className="text-[11px] text-slate-500">เศษ {hasCompare(gr) && <><b className={t.text}>{pct(s, p)}</b> ของเตรียม</>}</div>
+                    <div className={`text-lg font-bold ${t.text}`}>{fmtOrDash(s)}</div>
+                  </div>
+                  {hasCompare(gr) && (
+                    <div className="border border-slate-200 rounded-lg p-3">
+                      <div className="text-[11px] text-slate-500">ส่วนต่าง (เบิก − เตรียม − เศษ)</div>
+                      <div className="text-lg font-bold text-slate-800">{fmt(w - p - s)}</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* แยกสาขา — เห็นเฉพาะตอนเลือก "ทุกสาขา" กดแถวเพื่อกรองเป็นสาขานั้น */}
+                {cardBranch === 'all' && (
+                  <div>
+                    <div className="font-bold text-sm text-slate-800 mb-1.5">แยกตามสาขา <span className="font-normal text-xs text-slate-500">กดแถวเพื่อดูเฉพาะสาขานั้น</span></div>
+                    <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                      <table className="w-full text-[13px]">
+                        <thead>
+                          <tr>
+                            <th className={`${th} text-left`}>สาขา</th>
+                            <th className={`${th} text-right`}>เบิก</th>
+                            <th className={`${th} text-right`}>เตรียม</th>
+                            <th className={`${th} text-right`}>เศษ</th>
+                            <th className={`${th} text-right`}>% เตรียม/เบิก</th>
+                            <th className={`${th} text-right`}>% เศษ/เตรียม</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {shown.map(b => {
+                            const bw = gv('wd', gr.code, b), bp = gv('prep', gr.code, b), bs = gv('scrap', gr.code, b);
+                            return (
+                              <tr key={b} className="cursor-pointer hover:bg-amber-50" onClick={() => setCardBranch(b)}>
+                                <td className={`${td} font-bold`}>{b}</td>
+                                <td className={num}>{fmtOrDash(bw)}</td>
+                                <td className={`${num} text-emerald-700`}>{fmtOrDash(bp)}</td>
+                                <td className={`${num} font-bold ${t.text}`}>{fmtOrDash(bs)}</td>
+                                <td className={num}>{pct(bp, bw)}</td>
+                                <td className={num}>{pct(bs, bp)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <div className="font-bold text-sm text-slate-800 mb-1.5">รายไอเทม {cardBranch !== 'all' && <span className="font-normal text-xs text-slate-500">สาขา {cardBranch}</span>}</div>
+                  <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                    <table className="w-full text-[13px]">
+                      <thead>
+                        <tr>
+                          <th className={`${th} text-left`}>ประเภท</th>
+                          <th className={`${th} text-left`}>ไอเทม</th>
+                          <th className={`${th} text-right`}>จำนวน (กก.)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {gr.sources.map(nm => itemRow(`w-${nm}`, 'bg-sky-100 text-sky-700', 'เบิก', nm, itemTot('wd', nameKey(nm))))}
+                        {gr.preps.map(pp => itemRow(`p-${pp.code}`, 'bg-emerald-100 text-emerald-700', 'เตรียม', `${pp.code} ${pp.name}`, itemTot('prep', pp.code)))}
+                        {itemRow('s', 'bg-red-100 text-red-700', 'เศษ', `${gr.code} ${groupName(gr)}`, s)}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="font-bold text-sm text-slate-800 mb-1.5">รายวัน {cardBranch !== 'all' && <span className="font-normal text-xs text-slate-500">สาขา {cardBranch}</span>}</div>
+                  {days.length === 0 ? (
+                    <div className="text-center text-sm text-slate-400 py-6 border border-dashed border-slate-300 rounded-lg">ไม่มีรายการในช่วงที่เลือก</div>
+                  ) : (
+                    <div className="overflow-x-auto border border-slate-200 rounded-lg">
+                      <table className="w-full text-[13px]">
+                        <thead>
+                          <tr>
+                            <th className={`${th} text-left`}>วันที่</th>
+                            <th className={`${th} text-right`}>เบิก</th>
+                            <th className={`${th} text-right`}>เตรียม</th>
+                            <th className={`${th} text-right`}>เศษ</th>
+                            <th className={`${th} text-right`}>% เศษ/เตรียม</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {days.map(date => {
+                            const dw = dayTot('wd', date), dp = dayTot('prep', date), ds = dayTot('scrap', date);
+                            return (
+                              <tr key={date} className="hover:bg-slate-50">
+                                <td className={td}>{dateLabel(date)}</td>
+                                <td className={num}>{fmtOrDash(dw)}</td>
+                                <td className={`${num} text-emerald-700`}>{fmtOrDash(dp)}</td>
+                                <td className={`${num} font-bold ${t.text}`}>{fmtOrDash(ds)}</td>
+                                <td className={num}>{pct(ds, dp)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className="font-bold bg-slate-50">
+                            <td className={`${td} border-t-2 border-slate-200`}>รวม {days.length} วัน</td>
+                            <td className={`${num} border-t-2 border-slate-200`}>{fmt(w)}</td>
+                            <td className={`${num} border-t-2 border-slate-200`}>{fmt(p)}</td>
+                            <td className={`${num} border-t-2 border-slate-200`}>{fmt(s)}</td>
+                            <td className={`${num} border-t-2 border-slate-200`}>{pct(s, p)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── รายการของช่องที่กด (สาขา + วัน) ── */}
       {cell && (

@@ -66,7 +66,7 @@ async function fetchPos(outletId, startDate, endDate) {
     if (!YMD.test(date)) return;
     const key = `${date}|${code}`;
     if (!agg[key]) {
-      agg[key] = { date, code, kind: hit.kind, group: hit.group, name: String(r.itemName ?? r.ItemName ?? '').trim(), qty: 0 };
+      agg[key] = { date, code, kind: hit.kind, group: hit.group, name: String(r.nameThai ?? r.NameThai ?? r.itemName ?? r.nameEng ?? '').trim(), qty: 0 };
     }
     agg[key].qty += qty;
   });
