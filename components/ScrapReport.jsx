@@ -153,11 +153,11 @@ export default function ScrapReport() {
     const wb = XLSX.utils.book_new();
     const n = v => Number((Number(v) || 0).toFixed(3));
 
-    const sum = [['รหัสเศษ', 'รายการ', ...shown.map(b => `เศษ ${b}`), 'รวมเศษ', 'ยอดเบิก', 'ยอดเตรียม', '% เตรียม/เบิก', '% เศษ/เบิก', 'ส่วนต่าง (เบิก−เตรียม−เศษ)']];
+    const sum = [['รหัสเศษ', 'รายการ', ...shown.map(b => `เศษ ${b}`), 'รวมเศษ', 'ยอดเบิก', 'ยอดเตรียม', '% เตรียม/เบิก', '% เศษ/เตรียม', 'ส่วนต่าง (เบิก−เตรียม−เศษ)']];
     SCRAP_GROUPS.forEach(gr => {
       const s = gTot('scrap', gr.code), w = gTot('wd', gr.code), p = gTot('prep', gr.code);
       sum.push([gr.code, groupName(gr), ...shown.map(b => n(gv('scrap', gr.code, b))), n(s), n(w), n(p),
-        w > 0 ? n((p / w) * 100) : '', w > 0 ? n((s / w) * 100) : '', hasCompare(gr) ? n(w - p - s) : '']);
+        w > 0 ? n((p / w) * 100) : '', p > 0 ? n((s / p) * 100) : '', hasCompare(gr) ? n(w - p - s) : '']);
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), 'สรุป');
 
@@ -200,11 +200,11 @@ export default function ScrapReport() {
       </tr>
     );
   };
-  const pctRow = (key, label, kind, gr, cls) => (
+  const pctRow = (key, label, kind, base, gr, cls) => (
     <tr key={key} className={cls}>
       <td className={`${td} pl-8`}>{label}</td>
-      {shown.map(b => <td key={b} className={num}>{pct(gv(kind, gr.code, b), gv('wd', gr.code, b))}</td>)}
-      <td className={num}>{pct(gTot(kind, gr.code), gTot('wd', gr.code))}</td>
+      {shown.map(b => <td key={b} className={num}>{pct(gv(kind, gr.code, b), gv(base, gr.code, b))}</td>)}
+      <td className={num}>{pct(gTot(kind, gr.code), gTot(base, gr.code))}</td>
     </tr>
   );
   const secRow = (key, pillCls, pill, text) => (
@@ -300,7 +300,7 @@ export default function ScrapReport() {
                         <span className="mt-2.5 text-slate-400">→</span>
                         <div className="flex-1">เตรียม<b className="block text-[13px] text-emerald-700">{fmtOrDash(p)}</b><b className="text-emerald-700">{pct(p, w)}</b></div>
                         <span className="mt-2.5 text-slate-400">→</span>
-                        <div className="flex-1">เศษ<b className={`block text-[13px] ${t.text}`}>{fmtOrDash(s)}</b><b className={t.text}>{pct(s, w)}</b></div>
+                        <div className="flex-1">เศษ<b className={`block text-[13px] ${t.text}`}>{fmtOrDash(s)}</b><b className={t.text}>{pct(s, p)}</b></div>
                       </div>
                       <div className="flex justify-between text-[11px] text-slate-500 mt-2">
                         <span>ส่วนต่าง (เบิก − เตรียม − เศษ)</span><b className="text-slate-800">{fmt(w - p - s)} กก.</b>
@@ -330,8 +330,8 @@ export default function ScrapReport() {
                     <th className={`${th} text-right`}>รวมเศษ</th>
                     <th className={`${th} text-right`}>ยอดเบิก</th>
                     <th className={`${th} text-right`}>ยอดเตรียม</th>
-                    <th className={`${th} text-right`}>% เตรียม</th>
-                    <th className={`${th} text-right`}>% เศษ</th>
+                    <th className={`${th} text-right`}>% เตรียม/เบิก</th>
+                    <th className={`${th} text-right`}>% เศษ/เตรียม</th>
                     <th className={`${th} text-right`}>ส่วนต่าง</th>
                   </tr>
                 </thead>
@@ -352,7 +352,7 @@ export default function ScrapReport() {
                         <td className={num}>{hasCompare(gr) ? fmtOrDash(w) : '–'}</td>
                         <td className={`${num} font-bold text-emerald-700`}>{hasCompare(gr) ? fmtOrDash(p) : '–'}</td>
                         <td className={`${num} font-bold text-emerald-700`}>{pct(p, w)}</td>
-                        <td className={`${num} font-bold text-amber-700`}>{pct(s, w)}</td>
+                        <td className={`${num} font-bold text-amber-700`}>{pct(s, p)}</td>
                         <td className={num}>{hasCompare(gr) ? fmt(w - p - s) : '–'}</td>
                       </tr>
                     );
@@ -401,7 +401,6 @@ export default function ScrapReport() {
                       <th className={`${th} text-right`}>เตรียม</th>
                       <th className={`${th} text-right`}>เศษ</th>
                       <th className={`${th} text-right`}>% เตรียม/เบิก</th>
-                      <th className={`${th} text-right`}>% เศษ/เบิก</th>
                       <th className={`${th} text-right`}>% เศษ/เตรียม</th>
                     </tr>
                   </thead>
@@ -417,7 +416,6 @@ export default function ScrapReport() {
                           <td className={`${num} text-emerald-700`}>{fmtOrDash(p)}</td>
                           <td className={`${num} ${tone.text}`}>{fmtOrDash(s)}</td>
                           <td className={num}>{pct(p, w)}</td>
-                          <td className={num}>{pct(s, w)}</td>
                           <td className={num}>{pct(s, p)}</td>
                         </tr>
                       );
@@ -430,7 +428,6 @@ export default function ScrapReport() {
                       <td className={`${num} border-t-2 border-slate-200`}>{fmt(gTot('prep', current.code))}</td>
                       <td className={`${num} border-t-2 border-slate-200`}>{fmt(gTot('scrap', current.code))}</td>
                       <td className={`${num} border-t-2 border-slate-200`}>{pct(gTot('prep', current.code), gTot('wd', current.code))}</td>
-                      <td className={`${num} border-t-2 border-slate-200`}>{pct(gTot('scrap', current.code), gTot('wd', current.code))}</td>
                       <td className={`${num} border-t-2 border-slate-200`}>{pct(gTot('scrap', current.code), gTot('prep', current.code))}</td>
                     </tr>
                   </tfoot>
@@ -532,8 +529,8 @@ export default function ScrapReport() {
                           <>
                             {cmpRow(`${gr.code}-df`, 'ส่วนต่าง (เบิก − เตรียม − เศษ)',
                               b => gv('wd', gr.code, b) - gv('prep', gr.code, b) - gv('scrap', gr.code, b), '', fmt)}
-                            {pctRow(`${gr.code}-pp`, '% เตรียม/ยอดเบิก', 'prep', gr, 'font-bold text-emerald-700 bg-emerald-50')}
-                            {pctRow(`${gr.code}-ps`, '% เศษ/ยอดเบิก', 'scrap', gr, 'font-bold text-amber-700 bg-amber-50')}
+                            {pctRow(`${gr.code}-pp`, '% เตรียม/ยอดเบิก', 'prep', 'wd', gr, 'font-bold text-emerald-700 bg-emerald-50')}
+                            {pctRow(`${gr.code}-ps`, '% เศษ/ยอดเตรียม', 'scrap', 'prep', gr, 'font-bold text-amber-700 bg-amber-50')}
                           </>
                         )}
                       </Fragment>
