@@ -97,16 +97,12 @@ export default async function handler(req, res) {
   }
 
   try {
-    if (usingSql()) {
-      try {
-        return res.status(200).json({ status: 'success', data: await recipeFromSql() });
-      } catch (err) {
-        console.error(`Recipe API: อ่าน SQL ไม่ได้ (${sqlRoute()}) — ถอยไปอ่านชีท:`, err.message);
-      }
-    }
-    return res.status(200).json({ status: 'success', data: await recipeFromSheet() });
+    // โหมด sql อ่านฐานไม่ได้ = error ไม่ถอยไปชีท RcpDtls (หยุดอัปเดตแล้ว)
+    const data = usingSql() ? await recipeFromSql() : await recipeFromSheet();
+    return res.status(200).json({ status: 'success', data });
   } catch (error) {
     console.error('Recipe API error:', error.message);
-    return res.status(500).json({ status: 'error', message: error.message });
+    const message = usingSql() ? `อ่านสูตร BOM จาก SQL ไม่ได้ (${sqlRoute()}): ${error.message}` : error.message;
+    return res.status(500).json({ status: 'error', message });
   }
 }

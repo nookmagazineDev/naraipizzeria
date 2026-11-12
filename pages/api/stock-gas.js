@@ -1,4 +1,6 @@
-// Proxy ไป Google Apps Script ของสต๊อก (getBranches / getStockItems / getStockTotal / saveStock ฯลฯ)
+// หลังบ้านของเมนูสต๊อก (POST) — action อ่าน getBranches / getStockItems / getStockTotal /
+// getScheduleEmployees อ่าน SQL (lib/stockReaders.js ตัวเดียวกับ /api/stock-read) ไม่ส่งต่อไป Apps Script
+// ส่วน action อื่นที่ยังไม่มีใน SQL ค่อยส่งต่อไป Apps Script ของสต๊อกเหมือนเดิม
 //
 // ยกเว้นพนักงาน (getEmployees / saveEmployee) ที่ย้ายไปอ่าน-เขียน narai_hr.dbo.hr_employee
 // บน SQL Server แล้ว — ตารางเดียวกับที่ตารางงาน/รายงานเงินเดือนใช้ (ดู HR_EMPLOYEE_TABLE ใน
@@ -14,6 +16,7 @@
 // เปิด GET /api/stock-gas จากเบราว์เซอร์ = health check ดูว่า deployment ยังตอบอยู่ไหม
 import { diagnoseGas } from '../../lib/gasDiagnose';
 import { usingStockSql, readEmployees, saveEmployee, sqlRoute } from '../../lib/sheetsSource';
+import { STOCK_SQL_READERS, stockSqlError } from '../../lib/stockReaders';
 import { HR_EMPLOYEE_TABLE } from '../../lib/sheetsSql.mjs';
 
 const EMPLOYEE_ACTIONS = new Set(['getEmployees', 'saveEmployee']);
@@ -130,6 +133,19 @@ export default async function handler(req, res) {
         ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })()
         : (req.body || {});
       return handleEmployee(action, payload, res);
+    }
+    // action อ่านของสต๊อกที่มีใน SQL แล้ว — อ่านฐานเดียวกับ /api/stock-read ไม่ส่งต่อไป Apps Script
+    // (ชีทหยุดอัปเดตแล้ว) อ่านไม่ได้ตอบ error ตรง ๆ ไม่ถอยไปชีท
+    if (usingStockSql() && STOCK_SQL_READERS[action]) {
+      const payload = typeof req.body === 'string'
+        ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })()
+        : (req.body || {});
+      try {
+        return res.status(200).json({ status: 'success', source: 'sql', data: await STOCK_SQL_READERS[action](payload) });
+      } catch (err) {
+        console.error(`stock-gas ${action}: อ่าน SQL ไม่ได้:`, err.message);
+        return res.status(502).json({ status: 'error', source: 'sql', message: stockSqlError(err) });
+      }
     }
     if (usingStockSql() && STOCK_WRITE_ACTIONS.has(action)) {
       return res.status(409).json({

@@ -1,10 +1,8 @@
 // QC/RD — อ่านเมนู / สูตร BOM / วัตถุดิบ / หมวดหมู่เมนู
 //
-// อ่านจากชีทต้นทุนเมนู 1v8WRT… ผ่าน lib/qcrdSheet.js (ตัวเดียวกับที่ /api/usage-bom ใช้)
-// ส่วน "เขียน" ใช้ /api/qcrd-save → Apps Script เขียนกลับลงชีทเล่มเดียวกัน อ่านกับเขียนอยู่ที่เดียว
-//
-// ทาง SQL (ตาราง qcrd_* / stock_item ในฐาน InventoryNarai) ปิดไว้แล้ว — usingSql() คืน false เสมอ
-// โค้ดฝั่ง SQL ข้างล่างจึงไม่ถูกเรียก เก็บไว้เผื่อเปิดใช้อีกรอบ (ดู lib/qcrdSource.js)
+// ค่าเริ่มต้นอ่านจาก SQL (ตาราง qcrd_* / stock_item ในฐาน InventoryNarai) และ /api/qcrd-save
+// เขียนลงฐานเดียวกัน — อ่านกับเขียนอยู่ที่เดียว (ดู lib/qcrdSource.js)
+// อ่านชีทต้นทุนเมนู 1v8WRT… ก็ต่อเมื่อตั้ง QCRD_SOURCE=sheet ไว้ตั้งใจเท่านั้น
 import { fetchQcrdSheet as fetchSheet, TRUTHY } from '../../lib/qcrdSheet';
 import { usingSql, fetchQcrdSql, sqlRoute } from '../../lib/qcrdSource';
 
@@ -133,13 +131,11 @@ export default async function handler(req, res) {
   // แคชเฉพาะตอนได้ข้อมูลจริง จะได้ไม่ค้าง error ไว้ให้คนถัดไป (ตั้งเป็น no-store ไว้ก่อน)
   res.setHeader('Cache-Control', 'no-store');
 
-  // โหมด SQL: ลองต่อฐานก่อน (ต่อตรง → host API) ไม่ได้ทั้งคู่ค่อยถอยไปอ่านชีท
-  //
-  // ⚠️ สถานะนี้อันตราย — ที่เห็นบนจอมาจากชีท แต่ปุ่มบันทึกจะเขียนลง SQL
-  //    ซึ่งเป็นที่มาของอาการ "บันทึกสำเร็จแต่ข้อมูลไม่เปลี่ยน" ที่เคยทำให้ต้องถอยกลับไปใช้ชีททั้งระบบ
-  //    จึงติดธง degraded กลับไปด้วย ให้หน้าเว็บล็อกปุ่มบันทึกไว้ (ดู components/QcRdMenu.jsx)
-  let warning = '';
-  let degraded = false;
+  // โหมด SQL: ต่อฐาน (ต่อตรง → host API) ไม่ได้ทั้งคู่ = ตอบ error ไม่ถอยไปอ่านชีท
+  // เคยถอยไปชีทพร้อมธง degraded แต่ชีทหยุดอัปเดตแล้ว ข้อมูลที่เห็นจึงเป็นของเก่าที่ดูเหมือนปกติ
+  // แถมทำให้ "เห็นชีทแต่บันทึกลง SQL" ซึ่งเป็นต้นเหตุของอาการบันทึกสำเร็จแต่ข้อมูลไม่เปลี่ยน
+  const warning = '';
+  const degraded = false;
   if (usingSql() && ['menu', 'bom', 'item', 'menugroup'].includes(sheet)) {
     try {
       const data = await readFromSql(sheet, codes.length ? codes : null);
@@ -147,9 +143,10 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', source: 'sql', via: sqlRoute(), data });
     } catch (err) {
       console.error('QC/RD SQL error:', err.message);
-      degraded = true;
-      warning = `อ่านจาก SQL ไม่ได้ (${err.message}) — แสดงข้อมูลจากชีทแทน ` +
-        'ข้อมูลที่เห็นอาจไม่ตรงกับของจริง จึงล็อกการบันทึกไว้ชั่วคราว';
+      return res.status(502).json({
+        status: 'error', source: 'sql', via: sqlRoute(),
+        message: `อ่านข้อมูล QC/RD จาก SQL ไม่ได้ (${err.message}) — ตรวจว่าเครื่องออฟฟิศต่อฐานได้ แล้วกดโหลดใหม่`,
+      });
     }
   }
 

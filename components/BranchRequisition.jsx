@@ -4,8 +4,8 @@ import * as XLSX from 'xlsx-js-style';
 import { isIncludedBranch } from '../lib/excludedBranches';
 
 /*
- * จัดซื้อ — เบิกของสาขา: อ่านชีท "ใบเบิก" + "data" ผ่าน /api/branch-requisition
- * API ส่งแถวดิบ (logs) มา — หน้านี้กรองตามเดือนที่เลือกแล้วค่อย pivot (แถว=ไอเทม, คอลัมน์=สาขา, ช่อง=จำนวนรวม)
+ * จัดซื้อ — เบิกของสาขา: ใบเบิกที่สาขากดในหน้านับสต๊อก (dbo.stock_request บน SQL) ผ่าน /api/branch-requisition
+ * ดึงทีละเดือน — API ส่งแถวดิบ (logs) ของเดือนนั้นมา แล้วหน้านี้ pivot (แถว=ไอเทม, คอลัมน์=สาขา, ช่อง=จำนวนรวม)
  */
 
 const fmtNum = v => (v === null || v === undefined || v === 0 || isNaN(v)) ? '' : Number(v).toLocaleString('th-TH', { maximumFractionDigits: 2 });
@@ -19,12 +19,11 @@ const HEAD_STYLE = {
 const THAI_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
   'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 
-// timestamp ในชีทใบเบิก: "DD/MM/YYYY HH:MM:SS" — ดึงคีย์เดือน "YYYY-MM" ไว้กรอง/จัดกลุ่ม
-const monthKeyOf = timestamp => {
-  const [datePart] = String(timestamp || '').split(' ');
+// timestamp จาก API: "DD/MM/YYYY HH:mm" — เรียงเป็น YYYYMMDDHHmm ก่อนเทียบว่าอันไหนล่าสุด
+const sortableTime = timestamp => {
+  const [datePart, timePart = ''] = String(timestamp || '').split(' ');
   const [d, m, y] = (datePart || '').split('/');
-  if (!d || !m || !y) return '';
-  return `${y}-${m.padStart(2, '0')}`;
+  return d && m && y ? `${y}${m.padStart(2, '0')}${d.padStart(2, '0')}${timePart}` : '';
 };
 const monthLabel = key => {
   const [y, m] = key.split('-');
@@ -55,37 +54,42 @@ export default function BranchRequisition() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
-  const [monthFilter, setMonthFilter] = useState(''); // '' = ทุกเดือน, ไม่งั้น 'YYYY-MM'
+  // เดือนนี้ตามเวลาไทย — 'YYYY-MM'
+  const [monthFilter, setMonthFilter] = useState(() => new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 7));
+  const [months, setMonths] = useState([]);
+  const [warning, setWarning] = useState('');
 
-  const load = () => {
+  // ดึงทีละเดือนจาก SQL — เปลี่ยนเดือนแล้วโหลดใหม่ (ไม่ได้โหลดทุกเดือนมาเก็บไว้เหมือนตอนอ่านชีท)
+  useEffect(() => {
+    let alive = true;
     setLoading(true);
-    fetch('/api/branch-requisition')
+    fetch(`/api/branch-requisition?month=${encodeURIComponent(monthFilter)}`)
       .then(r => r.json())
       .then(res => {
+        if (!alive) return;
         if (res.status === 'success') {
           // ตัดสาขาที่ไม่นับรวม (lib/excludedBranches.js) — ไม่ขึ้นเป็นคอลัมน์/ตัวกรอง และไม่รวมในยอด
           setBranches((res.data?.branches || []).filter(b => isIncludedBranch(b)));
           setLogs((res.data?.logs || []).filter(r => isIncludedBranch(r.branch)));
           setItemInfo(res.data?.itemInfo || {});
+          setMonths(res.data?.months || []);
+          setWarning(res.data?.warning || '');
           setError('');
-        } else setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
+        } else {
+          setLogs([]); setBranches([]); setWarning('');
+          setError(res.message || 'โหลดข้อมูลไม่สำเร็จ');
+        }
       })
-      .catch(err => setError(err.message))
-      .finally(() => setLoading(false));
-  };
-  useEffect(load, []);
+      .catch(err => { if (alive) { setLogs([]); setBranches([]); setWarning(''); setError(err.message); } })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [monthFilter]);
 
-  // เดือนที่มีข้อมูลจริงในชีทใบเบิก เรียงล่าสุดก่อน
-  const months = useMemo(() => {
-    const set = new Set(logs.map(r => monthKeyOf(r.timestamp)).filter(Boolean));
-    return [...set].sort().reverse();
-  }, [logs]);
+  const emptyInfo = { code: '', oldCode: '', unit: '', image: '', price: null, supplier: '' };
 
-  const emptyInfo = { code: '', oldCode: '', unit: '', image: '', price: null, remainNew: '', remainOld: '', supplier: '' };
-
-  // pivot ไอเทม × สาขา จาก log ที่กรองเดือนแล้ว — คำนวณสดทุกครั้งที่เปลี่ยนตัวกรองเดือน
+  // pivot ไอเทม × สาขา จาก log ของเดือนที่โหลดมา
   const items = useMemo(() => {
-    const rows = monthFilter ? logs.filter(r => monthKeyOf(r.timestamp) === monthFilter) : logs;
+    const rows = logs;
     const map = {};
     rows.forEach(r => {
       if (!map[r.itemName]) {
@@ -100,10 +104,10 @@ export default function BranchRequisition() {
       const it = map[r.itemName];
       it.total += r.qty;
       it.qtyByBranch[r.branch] = (it.qtyByBranch[r.branch] || 0) + r.qty;
-      if (r.timestamp > it.lastRequested) it.lastRequested = r.timestamp;
+      if (sortableTime(r.timestamp) > sortableTime(it.lastRequested)) it.lastRequested = r.timestamp;
     });
     return Object.values(map).sort((a, b) => a.itemName.localeCompare(b.itemName, 'th'));
-  }, [logs, itemInfo, monthFilter]);
+  }, [logs, itemInfo]);
 
   const visibleBranches = useMemo(
     () => branchFilter ? branches.filter(b => b === branchFilter) : branches,
@@ -132,15 +136,15 @@ export default function BranchRequisition() {
   const exportExcel = () => {
     if (!filtered.length) return;
     const wb = XLSX.utils.book_new();
-    const head = ['รหัส', 'ชื่อ', 'หน่วย', 'ราคา', 'คงเหลือใหม่', 'คงเหลือเก่า', 'ซัพ', ...visibleBranches, 'รวม'];
+    const head = ['รหัส', 'ชื่อ', 'หน่วย', 'ราคา', 'ซัพ', ...visibleBranches, 'รวม'];
     const aoa = [head];
     filtered.forEach(x => aoa.push([
-      x.code, x.itemName, x.unit, x.price ?? '', x.remainNew, x.remainOld, x.supplier,
+      x.code, x.itemName, x.unit, x.price ?? '', x.supplier,
       ...visibleBranches.map(b => x.qtyByBranch[b] || 0),
       branchFilter ? (x.qtyByBranch[branchFilter] || 0) : x.total,
     ]));
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws['!cols'] = [{ wch: 12 }, { wch: 34 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
+    ws['!cols'] = [{ wch: 12 }, { wch: 34 }, { wch: 8 }, { wch: 10 }, { wch: 10 },
       ...visibleBranches.map(() => ({ wch: 8 })), { wch: 10 }];
     for (let cIdx = 0; cIdx < head.length; cIdx++) {
       const cell = ws[XLSX.utils.encode_cell({ r: 0, c: cIdx })];
@@ -162,7 +166,7 @@ export default function BranchRequisition() {
               <p className="text-sm text-slate-500 mt-0.5">
                 {filtered.length.toLocaleString()} รายการ · จำนวนเบิกรวม {fmtNum(grandTotal) || 0}
                 {branchFilter && <span className="ml-1.5 text-cyan-600 font-semibold">· เฉพาะสาขา {branchFilter}</span>}
-                {monthFilter && <span className="ml-1.5 text-cyan-600 font-semibold">· เดือน{monthLabel(monthFilter)}</span>}
+                <span className="ml-1.5 text-cyan-600 font-semibold">· เดือน{monthLabel(monthFilter)}</span>
               </p>
             </div>
           </div>
@@ -185,9 +189,9 @@ export default function BranchRequisition() {
           </select>
           <div className="flex items-center gap-2 bg-cyan-50/60 border border-cyan-100 rounded-xl px-3 py-1.5">
             <Calendar size={14} className="text-cyan-600 flex-shrink-0" />
-            <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)}
+            <select value={monthFilter} onChange={e => setMonthFilter(e.target.value)} disabled={loading}
               className="border-0 bg-transparent text-xs font-semibold text-cyan-700 focus:outline-none">
-              <option value="">ทุกเดือน</option>
+              {!months.includes(monthFilter) && <option value={monthFilter}>{monthLabel(monthFilter)}</option>}
               {months.map(mk => <option key={mk} value={mk}>{monthLabel(mk)}</option>)}
             </select>
           </div>
@@ -196,6 +200,11 @@ export default function BranchRequisition() {
         {error && (
           <div className="m-4 p-3 bg-rose-50 border border-rose-100 rounded-xl text-sm text-rose-700 flex items-center gap-2">
             <AlertCircle size={16} /><span>{error}</span>
+          </div>
+        )}
+        {!error && warning && (
+          <div className="m-4 p-3 bg-amber-50 border border-amber-100 rounded-xl text-sm text-amber-700 flex items-center gap-2">
+            <AlertCircle size={16} /><span>{warning}</span>
           </div>
         )}
 
@@ -208,8 +217,6 @@ export default function BranchRequisition() {
                 <th className="px-4 py-3 text-left bg-slate-50">ชื่อ</th>
                 <th className="px-3 py-3 text-center bg-slate-50">หน่วย</th>
                 <th className="px-3 py-3 text-right bg-slate-50">ราคา</th>
-                <th className="px-3 py-3 text-right bg-slate-50">คงเหลือใหม่</th>
-                <th className="px-3 py-3 text-right bg-slate-50">คงเหลือเก่า</th>
                 <th className="px-3 py-3 text-left bg-slate-50">ซัพ</th>
                 {visibleBranches.map(b => (
                   <th key={b} className="px-3 py-3 text-center whitespace-nowrap bg-slate-50">{b}</th>
@@ -219,11 +226,11 @@ export default function BranchRequisition() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
-                <tr><td colSpan={9 + visibleBranches.length} className="px-4 py-10 text-center text-slate-400">
+                <tr><td colSpan={7 + visibleBranches.length} className="px-4 py-10 text-center text-slate-400">
                   <Loader2 className="w-5 h-5 animate-spin inline mr-2" />กำลังโหลดข้อมูล…
                 </td></tr>
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={9 + visibleBranches.length} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
+                <tr><td colSpan={7 + visibleBranches.length} className="px-4 py-10 text-center text-slate-400">ไม่พบรายการ</td></tr>
               ) : filtered.map(x => (
                 <tr key={x.itemName} className="hover:bg-cyan-50/50 transition-colors">
                   <td className="px-3 py-2"><ItemImage src={x.image} alt={x.itemName} /></td>
@@ -231,8 +238,6 @@ export default function BranchRequisition() {
                   <td className="px-4 py-2 text-slate-800 font-medium">{x.itemName}</td>
                   <td className="px-3 py-2 text-center text-slate-500 whitespace-nowrap">{x.unit || '—'}</td>
                   <td className="px-3 py-2 text-right font-mono text-slate-600">{fmtMoney(x.price)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-500">{x.remainNew || '—'}</td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-400">{x.remainOld || '—'}</td>
                   <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{x.supplier || '—'}</td>
                   {visibleBranches.map(b => (
                     <td key={b} className="px-3 py-2 text-center font-mono">
@@ -250,7 +255,7 @@ export default function BranchRequisition() {
             {!loading && filtered.length > 0 && (
               <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                 <tr className="text-xs font-bold text-slate-600">
-                  <td colSpan={8} className="px-4 py-2.5 text-right">รวมทั้งหมด</td>
+                  <td colSpan={6} className="px-4 py-2.5 text-right">รวมทั้งหมด</td>
                   {visibleBranches.map(b => (
                     <td key={b} className="px-3 py-2.5 text-center font-mono">{fmtNum(branchTotals[b]) || '—'}</td>
                   ))}
@@ -263,7 +268,7 @@ export default function BranchRequisition() {
         {!loading && (
           <div className="px-4 py-3 border-t border-slate-100 text-xs text-slate-400 flex items-center gap-2">
             <Info size={13} />
-            ข้อมูลไอเทม (รหัส/หน่วย/รูป/ราคา/คงเหลือ/ซัพ) จากชีท data · จำนวนเบิกต่อสาขา รวมจากชีทใบเบิกทุกแถว
+            จำนวนเบิก/รหัส/หน่วย/ราคา จากใบเบิกในฐานข้อมูล (หน้านับสต๊อกของสาขา) · รูปและซัพจากทะเบียนไอเทมในชีท data
           </div>
         )}
       </div>
