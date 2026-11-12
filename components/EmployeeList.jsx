@@ -129,13 +129,25 @@ export default function EmployeeList() {
 
   const handleDocSave = async (form) => {
     const emp = docTarget?.employee;
+    const newName = String(form.fullName || '').trim();
+    if (!newName) { hotToast.error('กรอกชื่อ - นามสกุล'); return false; }
     try {
+      // แก้ชื่อของพนักงานในระบบ = เขียน hr_employee ด้วยคำสั่งเดียวกับปุ่ม "แก้ไข" ท้ายแถว
+      // ทำก่อนบันทึกเอกสาร ถ้าชื่อไม่ผ่านจะได้ไม่เหลือเอกสารที่ชื่อไม่ตรงกับรายชื่อ
+      if (emp && newName !== String(emp.fullName || '').trim()) {
+        const r = await apiCall('saveEmployee', { hrCode: emp.hrCode, fullName: newName });
+        const wrote = Array.isArray(r.data?.updated) ? r.data.updated.length : Number(r.data?.updated) || 0;
+        if (!wrote) throw new Error('แก้ชื่อไม่สำเร็จ — ชื่อไม่ถูกบันทึกลงฐานข้อมูล');
+        const renamed = { ...emp, fullName: newName };
+        setEmployees(list => list.map(e => (hrKey(e.hrCode) === hrKey(emp.hrCode) ? { ...e, fullName: newName } : e)));
+        setDocTarget(t => (t ? { ...t, employee: renamed } : t));
+      }
       const res = await docsApi({
         ...form,
         action: 'save',
         docId: docTarget?.doc?.docId || 0,
         hrCode: emp?.hrCode || docTarget?.doc?.hrCode || '',
-        fullName: emp?.fullName || form.fullName,
+        fullName: newName,
         branch: emp ? emp.branch : form.branch,
       });
       const saved = res.data?.doc;
@@ -640,6 +652,7 @@ export default function EmployeeList() {
           employee={docTarget.employee}
           doc={docTarget.doc}
           onSave={handleDocSave}
+          nameEditable
           onClose={() => setDocTarget(null)}
           linkCandidates={docTarget.employee ? [] : linkCandidatesFor(docTarget.doc)}
           onLink={handleDocLink}
