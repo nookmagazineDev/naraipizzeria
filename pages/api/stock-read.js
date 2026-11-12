@@ -3,12 +3,11 @@
 // ⚠️ ยอดนับสต๊อก/ใบเบิกย้ายไปอยู่บน SQL Server (InventoryNarai) แล้ว — หน้าสาขา
 //    (narai-branch.vercel.app/stock/list) ทั้งอ่านและเขียนที่นั่นตั้งแต่กลางปี ชีทที่ Apps Script
 //    อ่านอยู่จึงไม่มียอดนับใหม่เข้าอีกเลย ถ้าอ่านชีทจะเห็นข้อมูลค้างอยู่เดือนสิงหา
-//    getStockItems / getStockTotal จึงอ่าน SQL ก่อน (ตรรกะเดียวกับฝั่งสาขา ดู lib/stockCountSql.mjs)
-//    อ่านไม่ได้ค่อยถอยไปชีทพร้อมแนบ warning ให้หน้าเว็บขึ้นเตือนว่าเลขที่เห็นเป็นของเก่า
+//    ทุก action ในรายการข้างล่างจึงอ่าน SQL (ตัวอ่านอยู่ที่ lib/stockReaders.js) อ่านไม่ได้ตอบ error
+//    ไม่ถอยไปชีท — Apps Script ข้างล่างใช้เฉพาะตอนตั้ง STOCK_SOURCE=sheet ไว้ตั้งใจ
 //
-// อ่านข้อมูลส่วนที่เหลือจาก Google Apps Script
-// (/api/stock-gas เป็น POST — CDN แคชไม่ได้ ทุกครั้งจึงต้องรอ Apps Script ใหม่ทุกรอบ)
-// ใช้เฉพาะ action ที่เป็นการอ่านอย่างเดียว — การเขียน (saveStock ฯลฯ) ยังใช้ /api/stock-gas เหมือนเดิม
+// (/api/stock-gas เป็น POST — CDN แคชไม่ได้ เส้นนี้เป็น GET จึงแคชได้)
+// ใช้เฉพาะ action ที่เป็นการอ่านอย่างเดียว
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwIOFT32mCznuUzCpLZnyBrYrjkdYRskUdVEVXEkP2CeMNd2qzT7dAqd7Vfsz2ZKbF2Fw/exec';
 
 // action -> { params: พารามิเตอร์ที่ส่งต่อได้, sMaxAge: วินาทีที่ CDN ถือไว้ก่อน revalidate }
@@ -20,16 +19,11 @@ const READ_ACTIONS = {
   getScheduleEmployees: { params: ['branch'], sMaxAge: 300 },
 };
 
-import { usingStockSql, readStockItems, readStockTotal } from '../../lib/sheetsSource';
+import { usingStockSql } from '../../lib/sheetsSource';
+import { STOCK_SQL_READERS as SQL_READERS, stockSqlError } from '../../lib/stockReaders';
 
 // อ่านทั้งชีทของสาขาผ่าน tunnel ใช้เวลาเกินค่าเริ่มต้น 10 วินาทีของ Vercel ได้
 export const config = { maxDuration: 60 };
-
-// action ที่มีตัวอ่านจาก SQL แล้ว — ที่เหลือยังวิ่งไป Apps Script เหมือนเดิม
-const SQL_READERS = {
-  getStockItems: query => readStockItems(String(query.branch || '').toLowerCase().trim()),
-  getStockTotal: query => readStockTotal(String(query.endDate || '').trim()),
-};
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -51,8 +45,9 @@ export default async function handler(req, res) {
     if (req.query[name] !== undefined) payload[name] = req.query[name];
   });
 
-  // ── ทางหลัก: อ่านจากฐานเดียวกับที่สาขาบันทึกยอดนับลงไป ──
-  let sqlWarning = '';
+  // ── อ่านจากฐานเดียวกับที่สาขาบันทึกลงไป — อ่านไม่ได้ตอบ error ไม่ถอยไปอ่านชีทเก่า ──
+  // (เคยถอยไปชีทพร้อมป้ายเตือน แต่ตัวเลขในชีทค้างตั้งแต่สาขาเลิกใช้ ดูปกติจนคนเชื่อ)
+  const sqlWarning = '';
   const readFromSql = usingStockSql() ? SQL_READERS[action] : null;
   if (readFromSql) {
     try {
@@ -60,11 +55,12 @@ export default async function handler(req, res) {
       res.setHeader('Cache-Control', `public, s-maxage=${spec.sMaxAge}, stale-while-revalidate=3600`);
       return res.status(200).json({ status: 'success', data, source: 'sql' });
     } catch (err) {
-      // ถอยไปอ่านชีทได้ แต่ห้ามเงียบ — ตัวเลขในชีทเป็นของเก่าที่สาขาเลิกใช้แล้ว
-      console.error(`stock-read ${action}: อ่าน SQL ไม่ได้ ถอยไปอ่านชีท:`, err.message);
-      sqlWarning =
-        `อ่านยอดนับจากฐานข้อมูลไม่ได้ (${err.message}) — ตัวเลขที่เห็นตอนนี้มาจากชีทเก่า ` +
-        'ที่สาขาเลิกใช้แล้ว อย่าเพิ่งยึดเป็นหลัก';
+      console.error(`stock-read ${action}: อ่าน SQL ไม่ได้:`, err.message);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(502).json({
+        status: 'error', source: 'sql',
+        message: stockSqlError(err),
+      });
     }
   }
 

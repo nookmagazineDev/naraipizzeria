@@ -10,7 +10,10 @@
 
 // ค่าใช้จ่ายอื่นๆ / แพลนสั่งของ ย้ายเข้า SQL แล้ว (SHEETS_SOURCE=sql) ส่วนพนักงานยังอยู่ที่ชีท
 // เครื่องมือของ AI ต้องอ่านที่เดียวกับหน้าเว็บ ไม่งั้น AI จะตอบจากข้อมูลคนละที่กับที่หน้าเว็บแสดง
-import { usingSql as usingSheetsSql, readExpenses, readPlan, readEmployees, readStockRequests } from '../../lib/sheetsSource';
+import {
+  usingSql as usingSheetsSql, readExpenses, readPlan, readEmployees, readStockRequests, readStockTotal,
+} from '../../lib/sheetsSource';
+import { readPlanLive, bangkokToday, shiftDays, isISODate } from '../../lib/planLive';
 // QC/RD ก็เหมือนกัน — พอเปิด QCRD_SOURCE=sql หน้า QC/RD อ่านจาก dbo.qcrd_* แล้ว
 // ถ้า AI ยังอ่านชีทอยู่ AI จะตอบด้วยเมนู/วัตถุดิบที่หน้าเว็บลบหรือแก้ไปแล้ว
 import { usingSql as usingQcrdSql, fetchQcrdSql } from '../../lib/qcrdSource';
@@ -22,7 +25,6 @@ import { QCRD_ROW_MAPPERS } from '../../lib/qcrdRows.mjs';
 const STORE_API = process.env.STORE_API_BASE || 'https://api.khanoykorshabu.com';
 // GAS ค่าใช้จ่าย/พนักงาน (ตัวเดียวกับ proxy) — ส่วนชีท Google อยู่ในทะเบียน SHEETS ด้านล่าง
 const EXPENSE_GAS = process.env.EXPENSE_GAS_URL || 'https://script.google.com/macros/s/AKfycbwcRP65mAO0jWusYr1OfcgxpW8GU7yv0t85VcnQ3ShTjEROaXCF2d3MNo_VffNho6Y/exec';
-const HR_GAS = 'https://script.google.com/macros/s/AKfycbwIOFT32mCznuUzCpLZnyBrYrjkdYRskUdVEVXEkP2CeMNd2qzT7dAqd7Vfsz2ZKbF2Fw/exec';
 const GEMINI_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash';
 // ลำดับ fallback เมื่อโมเดลหลักโควตาเต็ม (429) — เริ่มใหม่ทั้งบทสนทนากับโมเดลถัดไป
@@ -667,7 +669,8 @@ const TOOL_HANDLERS = {
   // สารบัญชีท: มีชีทอะไร แท็บอะไรบ้าง — ใช้ก่อน read_sheet เมื่อไม่มีเครื่องมือเฉพาะรองรับ
   async list_sheets() {
     return {
-      sheets: Object.entries(SHEETS).map(([key, s]) => ({
+      // ชีทที่ข้อมูลย้ายไป SQL แล้ว (sqlTool) ไม่ขึ้นในสารบัญ — ให้ใช้เครื่องมือเฉพาะที่อ่าน SQL แทน
+      sheets: Object.entries(SHEETS).filter(([, s]) => !(s.sqlTool && usingSheetsSql())).map(([key, s]) => ({
         sheet: key, title: s.title, tabs: Object.keys(s.tabs), about: s.about,
         // บอกที่มาจริงของรอบนี้ — โหมด SQL อ่านจาก dbo.qcrd_* ผ่านชื่อแท็บเดิม
         source: key === 'qcrd' && usingQcrdSql() ? 'SQL Server (dbo.qcrd_*) — ชื่อแท็บเดิมใช้อ้างได้ตามปกติ' : 'Google Sheet',
@@ -679,6 +682,10 @@ const TOOL_HANDLERS = {
   // อ่านแท็บใดก็ได้ในทะเบียนแบบดิบ — ตัวช่วยครอบจักรวาลสำหรับคำถามที่เครื่องมือเฉพาะไม่ครอบคลุม
   async read_sheet({ sheet, tab, search, limit = 50 }) {
     if (!sheet || !tab) throw new Error('ต้องระบุ sheet และ tab (ดูรายการที่มีจาก list_sheets)');
+    const moved = SHEETS[sheet]?.sqlTool;
+    if (moved && usingSheetsSql()) {
+      throw new Error(`ชีท "${sheet}" ย้ายไปอยู่บน SQL แล้ว ข้อมูลในชีทเป็นของเก่า — ใช้ ${moved} แทน`);
+    }
     const rows = await fetchTab(sheet, tab);
     if (!rows.length) return { sheet, tab, totalRows: 0, rows: [] };
     // จำกัด 24 คอลัมน์แรก กัน token บวมจากชีทที่มีคอลัมน์สูตรพ่วงท้ายเยอะ
@@ -691,7 +698,7 @@ const TOOL_HANDLERS = {
       sheet, tab, headers, totalRows: body.length,
       rows: body.slice(0, cap).map(r => Object.fromEntries(headers.map((h, i) => [h, txt(r[i])]))),
       truncated: body.length > cap ? `แสดง ${cap} จาก ${body.length} แถว — ใส่ search เพื่อกรองให้แคบลง` : undefined,
-      note: 'แถวแรกถูกใช้เป็นหัวคอลัมน์ — แท็บ "ใบเบิก" ไม่มีหัวคอลัมน์จริง ให้ใช้ get_branch_requisition แทน',
+      note: 'แถวแรกถูกใช้เป็นหัวคอลัมน์',
     };
   },
 
@@ -799,9 +806,10 @@ const TOOL_HANDLERS = {
     };
   },
 
-  // ยอดคงเหลือสต๊อกล่าสุดต่อสาขา (จาก Apps Script สต๊อก)
+  // ยอดคงเหลือสต๊อกล่าสุดต่อสาขา — dbo.stock_count/stock_balance บน SQL (ตัวเดียวกับหน้า "ดูยอดรวมทุกสาขา")
+  // เดิมถาม Apps Script ซึ่งอ่านชีทนับสต๊อกที่หยุดอัปเดตตั้งแต่สาขาย้ายไปนับบน SQL
   async get_stock_counts({ branch, search, limit = 50 }) {
-    const list = await gasPost(HR_GAS, { action: 'getStockTotal', endDate: '' });
+    const list = await readStockTotal('');
     const kw = txt(search).toLowerCase();
     const bq = txt(branch).toUpperCase();
     let items = (list || []).map(it => {
@@ -829,7 +837,8 @@ const TOOL_HANDLERS = {
     };
   },
 
-  // ประวัติการสั่งของแต่ละสาขา (dbo.stock_plan — เดิมคือชีท stock/plan)
+  // ประวัติการสั่งของแต่ละสาขา — ใบสั่งสดจาก POS myfbdata.orderd (ทางเดียวกับหน้าแพลนสินค้า)
+  // ต่อ POS ไม่ได้ค่อยใช้สำเนา dbo.stock_plan (ชีท stock/plan เฉพาะตอนตั้ง SHEETS_SOURCE=sheet)
   async get_purchase_plan({ branch, start_date, end_date, search, group_by, limit = 50 }) {
     // ทั้งสองทางเก็บวันที่สั่งเป็น DD/MM/YYYY — แปลงเป็น YYYY-MM-DD ก่อนเทียบช่วง
     const toYMD = s => {
@@ -851,7 +860,18 @@ const TOOL_HANDLERS = {
         qty: r[c.qty], unit: r[c.unit], unitPrice: r[c.unitPrice], total: r[c.total], type: r[c.type],
       }));
     };
-    const raw = await pickSource(() => readPlan(), fromSheet);
+    // ทางหลักเหมือนหน้าแพลนสินค้า (/api/plan): ใบสั่งสดจาก POS myfbdata.orderd — ต้องมีช่วงวันที่เสมอ
+    // (ตารางใหญ่ ไม่มี index ตามวันที่) ไม่ระบุ = 30 วันล่าสุด · ต่อ POS ไม่ได้ค่อยใช้สำเนาใน SQL
+    const to = isISODate(end_date) ? end_date : bangkokToday();
+    const from = isISODate(start_date) ? start_date : shiftDays(to, -29);
+    let raw;
+    let planNote = '';
+    try {
+      raw = await readPlanLive(from <= to ? { from, to } : { from: to, to: from });
+    } catch (posErr) {
+      raw = await pickSource(() => readPlan(), fromSheet);
+      planNote = `ต่อฐานใบสั่งของ POS ไม่ได้ (${posErr.message}) — ใช้สำเนาซึ่งอาจไม่ใช่ข้อมูลล่าสุด บอกผู้ใช้ด้วย`;
+    }
     let list = raw.filter(r => txt(r.itemCode)).map(r => ({
       orderDate: toYMD(r.orderDate),
       branch: txt(r.branch).toUpperCase(),
@@ -880,14 +900,19 @@ const TOOL_HANDLERS = {
       });
       const out = Object.values(g).map(x => ({ ...x, qty: r2(x.qty), total: r2(x.total) }))
         .sort((a, b) => b.total - a.total);
-      return { groupedBy: group_by, rows: out.slice(0, 100), grandTotal, totalRows: list.length };
+      return {
+        period: { from, to }, groupedBy: group_by, rows: out.slice(0, 100), grandTotal, totalRows: list.length,
+        warning: planNote || undefined,
+      };
     }
 
     const cap = rowCap(limit);
     return {
+      period: { from, to },
       totalRows: list.length, grandTotal,
       rows: list.slice(0, cap),
       truncated: list.length > cap ? `แสดง ${cap} จาก ${list.length} แถว — ใช้ group_by หรือใส่ตัวกรองเพิ่ม` : undefined,
+      warning: planNote || undefined,
       note: 'total = มูลค่ารวมของแถวนั้น · ใช้ group_by="branch" หรือ "item" เพื่อดูภาพรวมแทนรายแถว',
     };
   },
@@ -992,12 +1017,16 @@ const SHEETS = {
   stock: {
     id: '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ',
     title: 'สต๊อก / แพลนสั่งของ',
+    // ย้ายไป SQL/POS แล้ว — โหมด sql ไม่ให้ AI อ่านชีทนี้ (เหลือไว้ให้ get_purchase_plan ใช้ตอน SHEETS_SOURCE=sheet)
+    sqlTool: 'get_purchase_plan',
     tabs: { plan: '571271047' },
     about: 'plan = ประวัติการสั่งของแต่ละสาขา (วันที่สั่ง สาขา สินค้า จำนวน มูลค่า)',
   },
   requisition: {
     id: '12Wb7tMXfT548XvK1H0Cp6uOysjS8ksmMFzQZ-Rpay2k',
     title: 'ใบเบิกของสาขา (จัดซื้อ)',
+    // ใบเบิกย้ายไป SQL (dbo.stock_request) แล้ว — โหมด sql ไม่ให้ AI อ่านชีทนี้
+    sqlTool: 'get_branch_requisition',
     tabs: { 'ใบเบิก': null, data: null },
     about: 'ข้อมูลเก่า หยุดอัปเดตแล้ว — ใบเบิกปัจจุบันอยู่บน SQL ให้ใช้ get_branch_requisition · ' +
       'ใบเบิก = log เก่าที่สาขากดเบิก (ไม่มีหัวคอลัมน์ เรียงตายตัว: เวลา, สาขา, ชื่อสินค้า, จำนวน) · data = ข้อมูลไอเทม (รหัส หน่วย ราคา ซัพพลายเออร์)',
@@ -1045,9 +1074,8 @@ async function fetchTab(sheetKey, tabName) {
   const hit = sheetCache[key];
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.rows;
 
-  // QC/RD ย้ายเข้า SQL แล้ว -> อ่านจากฐาน ไม่ใช่ชีท
-  // ฐานล่มค่อยถอยไปอ่านชีท: เครื่องมือของ AI อ่านอย่างเดียว การถอยจึงได้แค่ข้อมูลเก่า
-  // ไม่ทำให้ข้อมูลสองที่เพี้ยนแบบฝั่งเขียน (หลักเดียวกับ pickSource() ของ SHEETS_SOURCE)
+  // QC/RD ย้ายเข้า SQL แล้ว -> อ่านจากฐาน ไม่ใช่ชีท (ฐานล่ม = error ไม่ถอยไปชีทที่หยุดอัปเดต
+  // หลักเดียวกับ pickSource()) — อ่านชีทต้นทุนเมนูเฉพาะตอนตั้ง QCRD_SOURCE=sheet ไว้ตั้งใจ
   const sqlTab = sheetKey === 'qcrd' && usingQcrdSql() ? QCRD_ROW_MAPPERS[tabName] : null;
   if (sqlTab) {
     try {
@@ -1055,7 +1083,7 @@ async function fetchTab(sheetKey, tabName) {
       sheetCache[key] = { rows, at: Date.now() };
       return rows;
     } catch (err) {
-      console.error(`ai-chat: อ่าน QC/RD (${tabName}) จาก SQL ไม่ได้ — ถอยไปอ่านชีท:`, err.message);
+      throw new Error(`อ่าน QC/RD (${tabName}) จาก SQL ไม่ได้: ${err.message}`);
     }
   }
 
@@ -1088,12 +1116,13 @@ async function fetchCostMap() {
   return map;
 }
 
-// อ่านจาก SQL ก่อนเมื่อเปิด SHEETS_SOURCE=sql — ฐานล่มค่อยถอยไปอ่านชีท/GAS
-// (เครื่องมือของ AI เป็นแบบอ่านอย่างเดียว การถอยจึงแค่ทำให้ข้อมูลเก่าลง ไม่ทำให้ข้อมูลสองที่เพี้ยน)
+// โหมด SHEETS_SOURCE=sql (ค่าเริ่มต้น) อ่าน SQL อย่างเดียว — ฐานล่มให้ error ขึ้นไปถึง AI ไม่ถอยไปชีท
+// (ชีทหยุดอัปเดตแล้ว AI จะตอบตัวเลขเก่าอย่างมั่นใจ ซึ่งแย่กว่าบอกผู้ใช้ว่าดึงข้อมูลไม่ได้)
+// อ่านชีท/GAS เฉพาะตอนตั้ง SHEETS_SOURCE=sheet ไว้ตั้งใจ
 async function pickSource(fromSql, fromSheet) {
   if (usingSheetsSql()) {
     try { return await fromSql(); }
-    catch (err) { console.error('ai-chat: อ่าน SQL ไม่ได้ — ถอยไปอ่านชีท:', err.message); }
+    catch (err) { throw new Error(`อ่านฐานข้อมูล SQL ไม่ได้: ${err.message}`); }
   }
   return fromSheet();
 }
@@ -1347,7 +1376,8 @@ const TOOL_DECLARATIONS = [
   },
   {
     name: 'get_purchase_plan',
-    description: 'ประวัติการสั่งของ (แพลนสินค้า) ของแต่ละสาขาจากชีท plan: วันที่สั่ง สินค้า จำนวน มูลค่า — ใช้เมื่อถาม "สาขาไหนสั่งของเท่าไหร่" "สั่งอะไรบ่อย" "ยอดสั่งซื้อเดือนนี้"',
+    description: 'ประวัติการสั่งของ (แพลนสินค้า) ของแต่ละสาขาจากใบสั่งในระบบ POS: วันที่สั่ง สินค้า จำนวน มูลค่า — ' +
+      'ใช้เมื่อถาม "สาขาไหนสั่งของเท่าไหร่" "สั่งอะไรบ่อย" "ยอดสั่งซื้อเดือนนี้" (ไม่ระบุวัน = 30 วันล่าสุด)',
     parameters: {
       type: 'OBJECT',
       properties: {

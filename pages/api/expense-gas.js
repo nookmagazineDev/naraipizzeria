@@ -45,8 +45,8 @@ export default async function handler(req, res) {
   const payload = typeof req.body === 'string' ? (() => { try { return JSON.parse(req.body); } catch { return {}; } })() : (req.body || {});
   const action = String(payload.action || '').trim();
 
-  // เก็บสาเหตุจริงจากฝั่ง SQL ไว้แนบท้าย error ของ Apps Script (ดูเหตุผลใน stock-gas.js)
-  let sqlError = '';
+  // ถึงบรรทัด Apps Script ข้างล่างได้เฉพาะโหมด SHEETS_SOURCE=sheet — ไม่มีสาเหตุจากฝั่ง SQL ให้แนบ
+  const sqlError = '';
 
   if (usingSql()) {
     try {
@@ -58,18 +58,16 @@ export default async function handler(req, res) {
       }
       return res.status(400).json({ status: 'error', message: `unknown action: ${action || '(ไม่ระบุ)'}` });
     } catch (err) {
-      sqlError = err.message;
       console.error(`expense-gas: ทำงานกับ SQL ไม่ได้ (${sqlRoute()}):`, err.message);
-      if (!READ_ACTIONS[action]) {
-        // การเขียนห้ามถอยไปชีท — บอกไปตรง ๆ ว่าบันทึกไม่สำเร็จ ดีกว่าเขียนคนละที่กับที่หน้าเว็บอ่าน
-        return res.status(502).json({
-          status: 'error',
-          message:
-            `บันทึกลง SQL ไม่สำเร็จ (${err.message}) — ยังไม่ได้บันทึกอะไรลงไป ` +
-            'ตรวจว่าเครื่องออฟฟิศเปิด host-server อยู่ไหม (ทางสำรองตอนต่อ SQL ตรงไม่ติด) แล้วลองใหม่อีกครั้ง',
-        });
-      }
-      // ฝั่งอ่านถอยไปถาม Apps Script ต่อได้ หน้าเว็บจะได้ไม่ค้าง
+      // ทั้งอ่านและเขียนไม่ถอยไปชีท — ชีทหยุดรับข้อมูลตั้งแต่ย้ายเข้า SQL
+      // เขียน: ถอยไปคือเขียนคนละที่กับที่หน้าเว็บอ่าน · อ่าน: ได้ข้อมูลเก่าที่ดูเหมือนรายการหลัง ๆ หายไป
+      const what = READ_ACTIONS[action] ? 'อ่านข้อมูลจาก SQL ไม่ได้' : 'บันทึกลง SQL ไม่สำเร็จ — ยังไม่ได้บันทึกอะไรลงไป';
+      return res.status(502).json({
+        status: 'error',
+        message:
+          `${what} (${err.message}) · ` +
+          'ตรวจว่าเครื่องออฟฟิศต่อฐานได้ / เปิด host-server อยู่ไหม (ทางสำรองตอนต่อ SQL ตรงไม่ติด) แล้วลองใหม่อีกครั้ง',
+      });
     }
   }
 

@@ -68,16 +68,10 @@ async function groupsFromSql() {
 
 export default async function handler(req, res) {
   try {
-    if (usingSql()) {
-      try {
-        return res.status(200).json(await groupsFromSql());
-      } catch (err) {
-        console.error(`Menu group API: อ่าน SQL ไม่ได้ (${sqlRoute()}) — ถอยไปอ่านชีท:`, err.message);
-      }
-    }
-    res.status(200).json(await groupsFromSheet());
+    // โหมด sql อ่านฐานไม่ได้ = error ไม่ถอยไปชีท (ชีทหยุดอัปเดตแล้ว)
+    res.status(200).json(usingSql() ? await groupsFromSql() : await groupsFromSheet());
   } catch (err) {
     console.error('Menu group API error:', err.message);
-    res.status(502).json({ error: err.message });
+    res.status(502).json({ error: usingSql() ? `อ่านหมวดเมนูจาก SQL ไม่ได้ (${sqlRoute()}): ${err.message}` : err.message });
   }
 }
