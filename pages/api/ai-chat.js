@@ -10,7 +10,7 @@
 
 // ค่าใช้จ่ายอื่นๆ / แพลนสั่งของ ย้ายเข้า SQL แล้ว (SHEETS_SOURCE=sql) ส่วนพนักงานยังอยู่ที่ชีท
 // เครื่องมือของ AI ต้องอ่านที่เดียวกับหน้าเว็บ ไม่งั้น AI จะตอบจากข้อมูลคนละที่กับที่หน้าเว็บแสดง
-import { usingSql as usingSheetsSql, readExpenses, readPlan, readEmployees } from '../../lib/sheetsSource';
+import { usingSql as usingSheetsSql, readExpenses, readPlan, readEmployees, readStockRequests } from '../../lib/sheetsSource';
 // QC/RD ก็เหมือนกัน — พอเปิด QCRD_SOURCE=sql หน้า QC/RD อ่านจาก dbo.qcrd_* แล้ว
 // ถ้า AI ยังอ่านชีทอยู่ AI จะตอบด้วยเมนู/วัตถุดิบที่หน้าเว็บลบหรือแก้ไปแล้ว
 import { usingSql as usingQcrdSql, fetchQcrdSql } from '../../lib/qcrdSource';
@@ -892,52 +892,60 @@ const TOOL_HANDLERS = {
     };
   },
 
-  // ใบเบิกของสาขา (ชีท requisition/ใบเบิก + ข้อมูลไอเทมจากแท็บ data)
-  async get_branch_requisition({ branch, month, search, group_by, limit = 50 }) {
-    const [reqRows, dataRows] = await Promise.all([
-      fetchTab('requisition', 'ใบเบิก'),
-      fetchTab('requisition', 'data'),
-    ]);
-    const col = colFinder(dataRows[0]);
-    const c = { code: col('รหัสอุปกรณ์ใหม่'), name: col('รายการสินค้า'), unit: col('หน่วย'), price: col('ราคา'), supplier: col('ซัพฯ') };
-    const info = {};
-    dataRows.slice(1).forEach(r => {
-      const n = txt(r[c.name]);
-      if (n) info[n] = { code: txt(r[c.code]), unit: txt(r[c.unit]), price: snum(r[c.price]), supplier: txt(r[c.supplier]) };
-    });
-    // แท็บ "ใบเบิก" ไม่มีหัวคอลัมน์ — เรียงตายตัว: เวลาบันทึก(DD/MM/YYYY HH:MM:SS), สาขา, ชื่อสินค้า, จำนวน
-    let logs = reqRows.filter(r => r.some(x => txt(x))).map(r => {
-      const ts = txt(r[0]);
-      const d = ts.split(' ')[0].split('/');
-      return {
-        date: d.length === 3 ? `${d[2]}-${d[1].padStart(2, '0')}-${d[0].padStart(2, '0')}` : '',
-        branch: txt(r[1]).toUpperCase(), itemName: txt(r[2]), qty: snum(r[3]) || 0,
-      };
-    }).filter(x => x.itemName && x.branch);
-    if (branch) logs = logs.filter(x => x.branch === txt(branch).toUpperCase());
-    if (month) logs = logs.filter(x => x.date.slice(0, 7) === txt(month));
-    const kw = txt(search).toLowerCase();
-    if (kw) logs = logs.filter(x => x.itemName.toLowerCase().includes(kw));
-    const withInfo = logs.map(x => ({ ...x, ...(info[x.itemName] || {}), value: r2(x.qty * (info[x.itemName]?.price || 0)) }));
+  // ใบเบิกของสาขา — dbo.stock_request บน SQL (ตารางที่หน้านับสต๊อกของ Narai-branch บันทึกลง)
+  // เดิมอ่านแท็บ "ใบเบิก" ในชีท ซึ่งหยุดรับรายการใหม่ตั้งแต่สาขาย้ายไปบันทึกบน SQL
+  // แถมต้องโหลดทั้งแท็บ (ทุกสาขาทุกวันตั้งแต่เริ่มใช้) ก่อนค่อยกรอง — ตอนนี้กรองวัน/สาขาที่ฝั่งฐานเลย
+  async get_branch_requisition({ branch, start_date, end_date, month, search, group_by, limit = 50 }) {
+    let start = txt(start_date);
+    let end = txt(end_date);
+    const ym = txt(month);
+    if (!start && !end && /^\d{4}-\d{2}$/.test(ym)) {
+      const [y, m] = ym.split('-').map(Number);
+      start = `${ym}-01`;
+      end = `${ym}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+    }
+    const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10); // เวลาไทย
+    if (!start && !end) { start = `${today.slice(0, 7)}-01`; end = today; }   // ไม่ระบุ = เดือนนี้
+    if (!start) start = end;
+    if (!end) end = start;
+    if (start > end) [start, end] = [end, start];
 
-    if (group_by === 'branch' || group_by === 'item') {
+    const { rows, truncated } = await readStockRequests({ start, end, branch: txt(branch) });
+    let list = rows;
+    const kw = txt(search).toLowerCase();
+    if (kw) list = list.filter(x => x.itemName.toLowerCase().includes(kw) || x.itemCode.toLowerCase().includes(kw));
+    const withValue = list.map(x => ({ ...x, value: r2(x.qty * x.price) }));
+    const period = { start, end };
+    const capNote = truncated ? 'ชนเพดานแถวของฐาน — ช่วงวันที่กว้างเกินไป ยอดอาจไม่ครบ ให้แบ่งช่วงถาม' : undefined;
+
+    if (group_by === 'branch' || group_by === 'item' || group_by === 'doc') {
       const g = {};
-      withInfo.forEach(x => {
-        const k = group_by === 'branch' ? x.branch : x.itemName;
-        if (!g[k]) g[k] = group_by === 'branch' ? { branch: k, times: 0, qty: 0, value: 0 } : { itemName: k, unit: x.unit || '', times: 0, qty: 0, value: 0 };
-        g[k].times++; g[k].qty += x.qty; g[k].value += x.value;
+      withValue.forEach(x => {
+        const k = group_by === 'branch' ? x.branch : group_by === 'doc' ? x.docNo : x.itemName;
+        if (!g[k]) {
+          g[k] = group_by === 'branch' ? { branch: k, times: 0, qty: 0, value: 0 }
+            : group_by === 'doc' ? { docNo: k, branch: x.branch, savedAt: x.savedAt, requester: x.requester, items: 0, qty: 0, value: 0 }
+            : { itemName: k, itemCode: x.itemCode, unit: x.unit, times: 0, qty: 0, value: 0 };
+        }
+        if (group_by === 'doc') g[k].items++; else g[k].times++;
+        g[k].qty += x.qty; g[k].value += x.value;
       });
-      const out = Object.values(g).map(x => ({ ...x, qty: r2(x.qty), value: r2(x.value) })).sort((a, b) => b.qty - a.qty);
-      return { groupedBy: group_by, rows: out.slice(0, 100), totalRows: withInfo.length };
+      const out = Object.values(g).map(x => ({ ...x, qty: r2(x.qty), value: r2(x.value) }))
+        .sort((a, b) => (group_by === 'doc' ? String(a.savedAt).localeCompare(String(b.savedAt)) : b.qty - a.qty));
+      return { period, groupedBy: group_by, rows: out.slice(0, 100), totalRows: withValue.length, warning: capNote };
     }
 
     const cap = rowCap(limit);
     return {
-      totalRows: withInfo.length,
-      branches: [...new Set(logs.map(x => x.branch))].sort(),
-      rows: withInfo.slice(0, cap),
-      truncated: withInfo.length > cap ? `แสดง ${cap} จาก ${withInfo.length} แถว — ใช้ group_by หรือใส่ month/branch` : undefined,
-      note: 'value = จำนวน × ราคาต่อหน่วยจากแท็บ data (ไอเทมที่ไม่มีราคาในชีทคิดเป็น 0)',
+      period,
+      totalRows: withValue.length,
+      totalValue: r2(withValue.reduce((sum, x) => sum + x.value, 0)),
+      branches: [...new Set(withValue.map(x => x.branch))].sort(),
+      rows: withValue.slice(0, cap),
+      truncated: withValue.length > cap ? `แสดง ${cap} จาก ${withValue.length} แถว — ใช้ group_by หรือใส่ตัวกรองเพิ่ม` : undefined,
+      warning: capNote,
+      note: 'ที่มา: dbo.stock_request (ใบเบิกที่สาขากดในหน้านับสต๊อก) · date/savedAt = วันเวลาที่สาขากดบันทึก · ' +
+        'requestDate = วันที่ต้องการของ · value = จำนวน × ราคาต่อหน่วยจากทะเบียนสินค้า (ไม่มีราคา = 0)',
     };
   },
 
@@ -991,7 +999,8 @@ const SHEETS = {
     id: '12Wb7tMXfT548XvK1H0Cp6uOysjS8ksmMFzQZ-Rpay2k',
     title: 'ใบเบิกของสาขา (จัดซื้อ)',
     tabs: { 'ใบเบิก': null, data: null },
-    about: 'ใบเบิก = log ทุกครั้งที่สาขากดเบิก (ไม่มีหัวคอลัมน์ เรียงตายตัว: เวลา, สาขา, ชื่อสินค้า, จำนวน) · data = ข้อมูลไอเทม (รหัส หน่วย ราคา ซัพพลายเออร์)',
+    about: 'ข้อมูลเก่า หยุดอัปเดตแล้ว — ใบเบิกปัจจุบันอยู่บน SQL ให้ใช้ get_branch_requisition · ' +
+      'ใบเบิก = log เก่าที่สาขากดเบิก (ไม่มีหัวคอลัมน์ เรียงตายตัว: เวลา, สาขา, ชื่อสินค้า, จำนวน) · data = ข้อมูลไอเทม (รหัส หน่วย ราคา ซัพพลายเออร์)',
   },
   extraOrders: {
     id: '1gijgBrK56bsjR7-R5NVWiTGTcxM57wjuYR3FUpl3EDQ',
@@ -1353,14 +1362,17 @@ const TOOL_DECLARATIONS = [
   },
   {
     name: 'get_branch_requisition',
-    description: 'ใบเบิกของสาขา (จัดซื้อ): สาขาไหนเบิกอะไร เท่าไหร่ เมื่อไหร่ พร้อมมูลค่า — ใช้เมื่อถามถึงการเบิกของ/อุปกรณ์',
+    description: 'ใบเบิกของสาขา (สาขากดเบิกในหน้านับสต๊อก): สาขาไหนเบิกอะไร เท่าไหร่ วันไหน เลขที่ใบเบิก ผู้ขอ และมูลค่า — ' +
+      'ใช้เมื่อถามถึงการเบิกของ/อุปกรณ์/ใบเบิก กรองได้ถึงรายวัน (ไม่ระบุวัน = เดือนนี้)',
     parameters: {
       type: 'OBJECT',
       properties: {
         branch: { type: 'STRING', description: 'รหัสสาขา (ไม่ระบุ = ทุกสาขา)' },
-        month: { type: 'STRING', description: 'เดือน YYYY-MM' },
-        search: { type: 'STRING', description: 'ชื่อสินค้า' },
-        group_by: { type: 'STRING', description: '"branch" หรือ "item" = สรุปรวมแทนรายแถว' },
+        start_date: { type: 'STRING', description: 'วันแรก YYYY-MM-DD (ถามวันเดียวให้ใส่ start_date = end_date)' },
+        end_date: { type: 'STRING', description: 'วันสุดท้าย YYYY-MM-DD' },
+        month: { type: 'STRING', description: 'เดือน YYYY-MM — ใช้แทน start_date/end_date เมื่อถามทั้งเดือน' },
+        search: { type: 'STRING', description: 'ชื่อหรือรหัสสินค้า' },
+        group_by: { type: 'STRING', description: '"branch" / "item" / "doc" (รายใบเบิก) = สรุปรวมแทนรายแถว' },
         limit: { type: 'NUMBER', description: 'จำนวนแถวสูงสุด (default 50) — ใส่ 0 = เอาทั้งหมด (เพดาน 5000 แถว)' },
       },
     },
@@ -1454,8 +1466,10 @@ export default async function handler(req, res) {
       `สาขาที่มี: ${Object.values(OUTLETS).join(', ')} ` +
       `เมื่อแสดงตัวเลขเงินให้ใส่ comma และหน่วยบาท ถ้าเหมาะสมให้จัดเป็นตาราง markdown\n\n` +
       `แหล่งข้อมูล: (1) ยอดขายจริงจากฐานข้อมูล POS (2) Google Sheet ของทีม — ต้นทุนเมนู/สูตร BOM/วัตถุดิบ, ` +
-      `สต๊อกคงเหลือ, แพลนสั่งของ, ใบเบิกสาขา, ค่าใช้จ่าย, พนักงาน ` +
+      `สต๊อกคงเหลือ, แพลนสั่งของ, ค่าใช้จ่าย, พนักงาน ` +
       `(3) เครื่องสแกนนิ้ว ZKBio Time — เวลาสแกนเข้า-ออกงาน (get_attendance, get_zk_employees) ` +
+      `(4) ใบเบิกของสาขาบน SQL (get_branch_requisition) — ถามใบเบิก/การเบิกของ ให้ใช้ตัวนี้เสมอ ห้ามอ่านชีทใบเบิก (ข้อมูลเก่า) ` +
+      `วันที่ที่ผู้ใช้พิมพ์แบบตัวเลข เช่น 8/11/2026 ให้อ่านแบบไทยเป็น วัน/เดือน/ปี (= 2026-11-08) ไม่ใช่แบบอเมริกัน ` +
       `ถ้าเครื่องมือสแกนนิ้วตอบ error แปลว่าฝั่งเซิร์ฟเวอร์ร้านยังไม่ได้ตั้งค่าเชื่อม ZKBio ให้บอกผู้ใช้ตามข้อความ error ` +
       `ถ้าคำถามเกี่ยวกับข้อมูลในชีทที่ไม่มีเครื่องมือเฉพาะ ให้เรียก list_sheets ดูสารบัญก่อน แล้วใช้ read_sheet อ่านแท็บที่ต้องการ ` +
       `ช่วงวันที่: เครื่องมือยอดขาย/ต้นทุน/ลูกค้า ถามยาวได้ถึง 366 วันในครั้งเดียว (เช่น ทั้งปี หรือ ม.ค.–มิ.ย.) ` +
