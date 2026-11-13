@@ -553,7 +553,7 @@ export default function EmployeeList() {
   const foreignCount = employees.filter(emp => emp.status !== 'ลาออก' && isForeign(docOf(emp))).length;
 
   return (
-    <div className="max-w-7xl mx-auto">
+    <div className="w-full">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         {/* Header */}
         <div className="p-6 md:p-8 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex flex-col md:flex-row md:items-center justify-between gap-4">
