@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { apiCall } from '../lib/stockApi';
-import { Users, Loader2, Search, Gift, Image as ImageIcon, AlertCircle, Pencil, X, CheckCircle, Upload } from 'lucide-react';
+import { Users, Loader2, Search, Gift, Image as ImageIcon, AlertCircle, Pencil, X, CheckCircle, Upload, ArrowLeftRight, Lock, FileSpreadsheet, Paperclip } from 'lucide-react';
+import EmployeeMovements from './EmployeeMovements';
+import { parseEmployeeWorkbook } from '../lib/employeeSheetImport';
 import hotToast from 'react-hot-toast';
 import { NatBadge, DocStatusBadge, DocAlertPanel, EmployeeDocModal } from './EmployeeDocs';
 import { docIssues, isForeign, parseForeignSheet } from '../lib/employeeDocs';
@@ -16,6 +18,22 @@ async function docsApi(body) {
   }
   return j;
 }
+
+/** ลิงก์ไฟล์ — ไฟล์ที่เก็บบนเครื่องออฟฟิศเป็น 'file:<path>' เปิดผ่าน /api/employee-file ส่วนลิงก์ Drive เดิมใช้ตรง ๆ */
+const fileHref = (v) => {
+  const s = String(v ?? '').trim();
+  return s.startsWith('file:') ? `/api/employee-file?path=${encodeURIComponent(s.slice(5))}` : s;
+};
+
+/** ช่องข้อมูลส่วนตัว (เห็นเฉพาะออฟฟิศ) — key ตรงกับ saveEmployeeProfile ของ office-server */
+const PROFILE_FIELDS = [
+  { key: 'phone', label: 'เบอร์โทร' },
+  { key: 'lineId', label: 'ID LINE' },
+  { key: 'idCard', label: 'เลขประจำตัวประชาชน' },
+  { key: 'birthday', label: 'วันเกิด', type: 'date' },
+  { key: 'address', label: 'ที่อยู่', wide: true },
+];
+const emptyProfile = () => ({ phone: '', lineId: '', idCard: '', birthday: '', address: '' });
 
 /** รหัสสาขาในช่องสาขาของพนักงาน — 'SUM, IPR' -> ['sum', 'ipr'] */
 const branchCodesOf = (v) => String(v ?? '').toLowerCase().split(/[,/|;+&\s]+/).filter(Boolean);
@@ -112,6 +130,120 @@ export default function EmployeeList() {
   const [docTarget, setDocTarget] = useState(null); // { employee | null, doc | null }
   const [importingDocs, setImportingDocs] = useState(false);
 
+  /* ================== ข้อมูลส่วนตัว (เห็นและแก้ได้เฉพาะออฟฟิศ) + พนักงานเข้า-ออก ==================
+     ข้อมูลส่วนตัวอยู่ที่ dbo.hr_employee_profile (/api/employee-hr) สาขาไม่ได้รับข้อมูลชุดนี้เลย */
+  const [profiles, setProfiles] = useState(() => new Map());
+  const [profileDraft, setProfileDraft] = useState(emptyProfile);
+  const [showMovements, setShowMovements] = useState(false);
+  const [importingSheet, setImportingSheet] = useState(false);
+
+  const loadProfiles = async () => {
+    try {
+      const r = await fetch('/api/employee-hr?view=profiles', { cache: 'no-store' });
+      const j = await r.json().catch(() => null);
+      if (j?.status === 'success') setProfiles(new Map((j.data || []).map(p => [String(p.hrCode).trim().toLowerCase(), p])));
+    } catch (err) {
+      console.warn('โหลดข้อมูลส่วนตัวพนักงานไม่สำเร็จ:', err?.message || err);
+    }
+  };
+  useEffect(() => { loadProfiles(); }, []);
+  const profileOf = (emp) => (emp?.hrCode ? profiles.get(String(emp.hrCode).trim().toLowerCase()) || null : null);
+  const draftFrom = (p) => ({ ...emptyProfile(), ...Object.fromEntries(PROFILE_FIELDS.map(f => [f.key, p?.[f.key] || ''])) });
+
+  /** เปิดกล่องข้อมูลพนักงาน — เตรียมค่าข้อมูลส่วนตัวของคนนั้นไว้ให้ช่องแก้ไข */
+  const openPerson = (employee, doc) => {
+    setProfileDraft(draftFrom(profileOf(employee)));
+    setDocTarget({ employee, doc });
+  };
+
+  /** ส่วนข้อมูลส่วนตัวในกล่องข้อมูลพนักงาน (renderExtra ของ EmployeeDocModal) */
+  const renderProfile = (editing) => {
+    const emp = docTarget?.employee;
+    if (!emp) return null;
+    const p = profileOf(emp);
+    const inputCls = 'block w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500';
+    return (
+      <section>
+        <h4 className="text-xs font-bold text-gray-500 tracking-wide mb-2 flex items-center gap-2">
+          ข้อมูลส่วนตัว
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px]"><Lock className="w-3 h-3" /> เห็นเฉพาะออฟฟิศ</span>
+        </h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2.5 bg-amber-50/60 border border-amber-200 rounded-xl px-4 py-3">
+          {PROFILE_FIELDS.map(f => (
+            <div key={f.key} className={f.wide ? 'md:col-span-2' : ''}>
+              <label className="block text-xs font-semibold text-amber-800 mb-0.5">{f.label}</label>
+              {editing ? (
+                f.wide
+                  ? <textarea rows={2} value={profileDraft[f.key]} onChange={e => setProfileDraft(d => ({ ...d, [f.key]: e.target.value }))} className={inputCls} />
+                  : <input type={f.type || 'text'} value={profileDraft[f.key]} onChange={e => setProfileDraft(d => ({ ...d, [f.key]: e.target.value }))} className={inputCls} />
+              ) : (
+                <p className="text-sm font-semibold text-slate-800 break-words">
+                  {f.type === 'date' ? (p?.[f.key] ? formatDate(p[f.key]) : '-') : (p?.[f.key] || '-')}
+                </p>
+              )}
+            </div>
+          ))}
+          {(p?.documents || (p?.attachments || []).length > 0) && (
+            <div className="md:col-span-2 text-sm text-slate-600 border-t border-amber-200 pt-2">
+              <span className="text-xs font-semibold text-amber-800">เอกสารที่ยื่นตอนรับเข้า: </span>{p.documents || '-'}
+              {(p.attachments || []).map((a, i) => (
+                <a key={i} href={fileHref(a.path || a.url)} target="_blank" rel="noopener noreferrer"
+                  className="ml-2 inline-flex items-center gap-1 text-purple-700 hover:underline"><Paperclip className="w-3 h-3" />{a.name || `ไฟล์ ${i + 1}`}</a>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  };
+
+  /** นำเข้าครั้งเดียวตอนย้ายมา SQL: ไฟล์ .xlsx ที่ดาวน์โหลดจากสเปรดชีตพนักงาน (แท็บ DATA / พนักงานเข้า / พนักงานออก) */
+  const handleSheetImport = async (file) => {
+    if (!file) return;
+    setImportingSheet(true);
+    const toastId = hotToast.loading('กำลังอ่านไฟล์...');
+    try {
+      const XLSX = await import('xlsx');
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: false });
+      const { employees: emps, movements, found, missing } = parseEmployeeWorkbook(XLSX, wb);
+      if (found.length === 0) throw new Error('ไม่พบแท็บ DATA / พนักงานเข้า / พนักงานออก ในไฟล์นี้');
+      const ins = movements.filter(m => m.kind === 'in').length;
+      const outs = movements.length - ins;
+      if (!window.confirm(
+        `พบข้อมูล: รายชื่อพนักงาน ${emps.length} คน · ประวัติเข้า ${ins} แถว · ประวัติออก ${outs} แถว`
+        + (missing.length ? `\n(ไม่พบแท็บ: ${missing.join(', ')})` : '')
+        + '\n\nนำเข้าเลยไหม? รายชื่อ/ข้อมูลส่วนตัวจะอัปเดตตามไฟล์ (ช่องว่างไม่ทับของเดิม) และประวัติที่เคยนำเข้าจะถูกแทนที่ทั้งชุด'
+      )) { hotToast.dismiss(toastId); return; }
+
+      const send = async (body) => {
+        const r = await fetch('/api/employee-hr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'import', ...body }) });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || j.status !== 'success') throw new Error([j?.message || `HTTP ${r.status}`, j?.hint].filter(Boolean).join(' — '));
+        return j.data || {};
+      };
+      const CHUNK = 400;
+      for (let i = 0; i < emps.length; i += CHUNK) {
+        hotToast.loading(`กำลังนำเข้ารายชื่อ ${Math.min(i + CHUNK, emps.length)}/${emps.length}...`, { id: toastId });
+        await send({ kind: 'employees', rows: emps.slice(i, i + CHUNK) });
+      }
+      let skipped = 0;
+      if (found.includes('พนักงานเข้า') || found.includes('พนักงานออก')) {
+        for (let i = 0; i === 0 || i < movements.length; i += CHUNK) {
+          hotToast.loading(`กำลังนำเข้าประวัติ ${Math.min(i + CHUNK, movements.length)}/${movements.length}...`, { id: toastId });
+          const d = await send({ kind: 'movements', rows: movements.slice(i, i + CHUNK), reset: i === 0 });
+          skipped += Number(d.skipped) || 0;
+        }
+      }
+      hotToast.success(`นำเข้าแล้ว: รายชื่อ ${emps.length} คน · ประวัติ ${movements.length - skipped} แถว`
+        + (skipped ? ` (ข้าม ${skipped} แถวที่ไม่มีวันที่)` : ''), { id: toastId, duration: 9000 });
+      await Promise.all([fetchEmployees(), loadProfiles()]);
+    } catch (err) {
+      hotToast.error(err?.message || 'นำเข้าไม่สำเร็จ', { id: toastId });
+    } finally {
+      setImportingSheet(false);
+    }
+  };
+
   // เอกสารเป็นข้อมูลเสริมของหน้า โหลดไม่ได้รายชื่อพนักงานยังต้องใช้งานได้ตามปกติ (แค่ไม่มีป้าย/แจ้งเตือน)
   const loadDocs = async () => {
     try {
@@ -151,6 +283,22 @@ export default function EmployeeList() {
         branch: emp ? emp.branch : form.branch,
       });
       const saved = res.data?.doc;
+      // ข้อมูลส่วนตัว (เบอร์โทร/ที่อยู่ ...) — บันทึกเฉพาะเมื่อมีการเปลี่ยน
+      if (emp) {
+        const before = draftFrom(profileOf(emp));
+        if (PROFILE_FIELDS.some(f => String(profileDraft[f.key] || '').trim() !== String(before[f.key] || '').trim())) {
+          const r = await fetch('/api/employee-hr', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'saveProfile', hrCode: emp.hrCode, ...profileDraft }),
+          });
+          const j = await r.json().catch(() => null);
+          if (!r.ok || !j || j.status !== 'success') {
+            throw new Error(`บันทึกข้อมูลอื่นแล้ว แต่ข้อมูลส่วนตัวไม่สำเร็จ: ${[j?.message || `HTTP ${r.status}`, j?.hint].filter(Boolean).join(' — ')}`);
+          }
+          const prof = j.data?.profile;
+          if (prof) setProfiles(m => new Map(m).set(String(prof.hrCode).trim().toLowerCase(), prof));
+        }
+      }
       hotToast.success(res.message || 'บันทึกแล้ว');
       if (saved) {
         setDocs(list => [...list.filter(d => d.docId !== saved.docId), saved]);
@@ -173,7 +321,7 @@ export default function EmployeeList() {
       hotToast.success(res.message || 'ผูกกับพนักงานแล้ว');
       const linked = { ...doc, hrCode };
       setDocs(list => list.map(d => (d.docId === doc.docId ? linked : d)));
-      setDocTarget({ employee: employees.find(e => hrKey(e.hrCode) === hrKey(hrCode)) || null, doc: linked });
+      openPerson(employees.find(e => hrKey(e.hrCode) === hrKey(hrCode)) || null, linked);
       return true;
     } catch (err) {
       hotToast.error(err?.message || 'ผูกไม่สำเร็จ');
@@ -442,7 +590,7 @@ export default function EmployeeList() {
         <DocAlertPanel
           entries={docAlertEntries}
           showBranch
-          onOpen={(entry) => setDocTarget({ employee: entry.employee, doc: entry.doc })}
+          onOpen={(entry) => openPerson(entry.employee, entry.doc)}
         />
 
         {/* Anniversary box */}
@@ -499,6 +647,21 @@ export default function EmployeeList() {
               disabled={importingDocs}
               onChange={(e) => { handleDocImport(e.target.files[0]); e.target.value = ''; }}
             />
+          </label>
+          <button
+            onClick={() => setShowMovements(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold bg-teal-600 text-white hover:bg-teal-700 shadow-sm"
+          >
+            <ArrowLeftRight className="w-4 h-4" /> พนักงานเข้า-ออก
+          </button>
+          <label
+            title="นำเข้าครั้งเดียวตอนย้ายมา SQL: ไฟล์ .xlsx ที่ดาวน์โหลดจากสเปรดชีตพนักงาน (แท็บ DATA / พนักงานเข้า / พนักงานออก)"
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border transition-colors shadow-sm ${importingSheet ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-wait' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 cursor-pointer'}`}
+          >
+            {importingSheet ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+            นำเข้าชีทพนักงาน
+            <input type="file" accept=".xlsx,.xls" className="hidden" disabled={importingSheet}
+              onChange={(e) => { handleSheetImport(e.target.files[0]); e.target.value = ''; }} />
           </label>
           <div className="inline-flex border border-slate-200 rounded-xl overflow-hidden md:ml-auto">
             {[['', 'ทั้งหมด'], ['thai', 'คนไทย'], ['foreign', `ต่างชาติ${foreignCount ? ` ${foreignCount}` : ''}`], ['alert', 'เอกสารใกล้หมดอายุ']].map(([value, label]) => (
@@ -597,7 +760,7 @@ export default function EmployeeList() {
                       {/* กดที่ชื่อ = เปิดกล่องข้อมูลพนักงาน (สัญชาติ + เอกสาร + วันหมดอายุ) */}
                       <button
                         type="button"
-                        onClick={() => setDocTarget({ employee: emp, doc: docOf(emp) })}
+                        onClick={() => openPerson(emp, docOf(emp))}
                         title="ดูข้อมูลพนักงาน"
                         className="text-slate-900 underline decoration-purple-300 underline-offset-4 hover:text-purple-700 text-left"
                       >{emp.fullName || '-'}</button>
@@ -623,7 +786,7 @@ export default function EmployeeList() {
                     <td className="px-2 py-2 whitespace-nowrap text-sm font-mono text-slate-900">{emp.loga || '-'}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-center">
                       {emp.photoUrl ? (
-                        <a href={emp.photoUrl} target="_blank" rel="noopener noreferrer"
+                        <a href={fileHref(emp.photoUrl)} target="_blank" rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-600 hover:text-emerald-800" title="ดูรูป">
                           <ImageIcon className="w-3.5 h-3.5" /> ดูรูป
                         </a>
@@ -645,6 +808,13 @@ export default function EmployeeList() {
         </div>
       </div>
 
+      {showMovements && (
+        <EmployeeMovements
+          branches={[...new Set(employees.flatMap(e => branchCodesOf(e.branch)))].sort()}
+          onClose={() => setShowMovements(false)}
+        />
+      )}
+
       {/* กล่องข้อมูลพนักงาน — เปิดจากการกดที่ชื่อ หรือกดรายการในกล่องแจ้งเตือนเอกสาร */}
       {docTarget && (
         <EmployeeDocModal
@@ -653,6 +823,8 @@ export default function EmployeeList() {
           doc={docTarget.doc}
           onSave={handleDocSave}
           nameEditable
+          renderExtra={renderProfile}
+          onCancelEdit={() => setProfileDraft(draftFrom(profileOf(docTarget.employee)))}
           onClose={() => setDocTarget(null)}
           linkCandidates={docTarget.employee ? [] : linkCandidatesFor(docTarget.doc)}
           onLink={handleDocLink}
