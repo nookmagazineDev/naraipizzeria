@@ -47,6 +47,7 @@ const EDIT_FIELDS = [
   { key: 'type', label: 'ประเภท', type: 'text' },
   { key: 'position', label: 'ตำแหน่ง', type: 'text' },
   { key: 'startDate', label: 'วันเริ่มทำงาน', type: 'text', hint: 'เช่น 31/03/2545 (พ.ศ.) หรือ 2002-03-31' },
+  { key: 'dailyWage', label: 'ค่าแรงต่อวัน (บาท)', type: 'text', hint: 'ใช้คิดค่าแรงในหน้าลงตารางงานของสาขา · 0 = ยังไม่ได้ตั้ง' },
   { key: 'loga', label: 'เลขที่ LOGA', type: 'text' },
   { key: 'newCode', label: 'รหัสใหม่', type: 'text' },
   { key: 'photoUrl', label: 'ลิงก์รูป', type: 'text' },
@@ -401,6 +402,7 @@ export default function EmployeeList() {
       const db = parseThaiDate(b);
       if (da && db) return da.getTime() === db.getTime();
     }
+    if (key === 'dailyWage') return Number(String(a ?? '').replace(/,/g, '') || 0) === Number(String(b ?? '').replace(/,/g, '') || 0);
     // สาขาเก็บตัวพิมพ์เล็กในฐาน แต่แสดงตัวพิมพ์ใหญ่ — เทียบแบบไม่สนตัวพิมพ์
     if (key === 'branch') return String(a ?? '').trim().toUpperCase() === String(b ?? '').trim().toUpperCase();
     return String(a ?? '').trim() === String(b ?? '').trim();
@@ -726,6 +728,7 @@ export default function EmployeeList() {
                 <th className="px-2 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">วันเริ่มทำงาน</th>
                 <th className="px-2 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">ระยะเวลาทำงาน</th>
                 <th className="px-2 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">เอกสาร</th>
+                <th className="px-2 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">ค่าแรง/วัน</th>
                 <th className="px-2 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">เลขที่ LOGA</th>
                 <th className="px-2 py-2 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">รูป</th>
                 <th className="px-2 py-2 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">แก้ไข</th>
@@ -734,7 +737,7 @@ export default function EmployeeList() {
             <tbody className="bg-white divide-y divide-slate-200">
               {loading ? (
                 <tr>
-                  <td colSpan={14} className="px-6 py-12 text-center">
+                  <td colSpan={15} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-slate-500">
                       <Loader2 className="w-8 h-8 animate-spin text-purple-500 mb-2" />
                       <p>กำลังโหลดข้อมูล...</p>
@@ -743,7 +746,7 @@ export default function EmployeeList() {
                 </tr>
               ) : filteredEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={14} className="px-6 py-12 text-center">
+                  <td colSpan={15} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-slate-500">
                       <Users className="w-12 h-12 text-slate-300 mb-3" />
                       <p className="text-lg font-medium text-slate-900">ไม่พบข้อมูลพนักงาน</p>
@@ -782,6 +785,10 @@ export default function EmployeeList() {
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-slate-900 font-medium">{calculateDuration(emp.startDate)}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm">
                       {emp.status === 'ลาออก' ? <span className="text-xs text-slate-300">—</span> : <DocStatusBadge doc={docOf(emp)} />}
+                    </td>
+                    <td className={`px-2 py-2 whitespace-nowrap text-sm text-right tabular-nums ${Number(emp.dailyWage) > 0 ? 'text-slate-900' : emp.status === 'ลาออก' ? 'text-slate-300' : 'text-rose-600 font-semibold'}`}
+                      title={Number(emp.dailyWage) > 0 ? '' : 'ยังไม่ได้ตั้งค่าแรง — หน้าลงตารางงานจะคิดค่าแรงคนนี้เป็น 0'}>
+                      {Number(emp.dailyWage) > 0 ? Number(emp.dailyWage).toLocaleString('th-TH') : (emp.status === 'ลาออก' ? '-' : 'ยังไม่ตั้ง')}
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm font-mono text-slate-900">{emp.loga || '-'}</td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm text-center">
