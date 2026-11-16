@@ -46,9 +46,11 @@ foreach ($file in $envFiles) {
 $sensitive = $web.Keys | Where-Object { $web[$_] -eq '[SENSITIVE]' } | Sort-Object
 foreach ($k in $sensitive) { Line Red "  ผิด    $k = [SENSITIVE] (ค่าหลอกจาก Vercel ไม่ใช่ค่าจริง)" }
 
-foreach ($k in 'QCRD_SOURCE', 'SHEETS_SOURCE') {
-  if ($web[$k] -eq 'sql') { Line Green "  ผ่าน   $k = sql" }
-  else { Line Red "  ผิด    $k ต้องเป็น sql (ตอนนี้ '$($web[$k])' = อ่าน/เขียน Google Sheet ซึ่งหยุดอัปเดตแล้ว)" }
+# ค่าเริ่มต้นในโค้ดเป็น sql แล้ว (พ.ย. 2026) — ไม่ตั้งก็ผ่าน ผิดเฉพาะตั้งเป็น sheet ไว้
+foreach ($k in 'QCRD_SOURCE', 'SHEETS_SOURCE', 'STOCK_SOURCE') {
+  if ("$($web[$k])".ToLower() -eq 'sheet') { Line Red "  ผิด    $k = sheet (อ่าน/เขียน Google Sheet ซึ่งหยุดอัปเดตแล้ว) — ลบบรรทัดนี้ออกหรือตั้งเป็น sql" }
+  elseif ($web[$k]) { Line Green "  ผ่าน   $k = $($web[$k])" }
+  else { Line Green "  ผ่าน   $k ไม่ได้ตั้ง (= sql ค่าเริ่มต้น)" }
 }
 if ($web['AUTH_API_KEY']) { Line Yellow '  เตือน  มี AUTH_API_KEY — ต้องตรงกับฝั่ง NaraiAPI ไม่งั้นหน้าจัดการผู้ใช้พัง (ลบออกได้ จะใช้ QCRD_WRITE_KEY แทน)' }
 if (-not $web['BRANCH_FEED_KEY']) { Line Yellow '  เตือน  ไม่มี BRANCH_FEED_KEY — /api/branch-feed ปิดอยู่ (narai-storefct ดึงทะเบียนสาขาไม่ได้)' }

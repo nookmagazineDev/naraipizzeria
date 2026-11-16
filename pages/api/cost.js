@@ -64,16 +64,10 @@ async function costFromSql() {
 
 export default async function handler(req, res) {
   try {
-    if (usingSql()) {
-      try {
-        return res.status(200).json(await costFromSql());
-      } catch (err) {
-        console.error(`Cost API: อ่าน SQL ไม่ได้ (${sqlRoute()}) — ถอยไปอ่านชีท:`, err.message);
-      }
-    }
-    res.status(200).json(await costFromSheet());
+    // โหมด sql อ่านฐานไม่ได้ = error ไม่ถอยไปชีท (ชีทหยุดอัปเดตแล้ว ต้นทุนเก่าทำให้กำไรต่อบิลผิดเงียบ ๆ)
+    res.status(200).json(usingSql() ? await costFromSql() : await costFromSheet());
   } catch (err) {
     console.error('Cost API error:', err.message);
-    res.status(502).json({ error: err.message });
+    res.status(502).json({ error: usingSql() ? `อ่านต้นทุนเมนูจาก SQL ไม่ได้ (${sqlRoute()}): ${err.message}` : err.message });
   }
 }

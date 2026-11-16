@@ -193,6 +193,11 @@ function mountSheets(app) {
   app.get('/sheets/stock-total', (req, res) =>
     send(res, getStockCount().then(c => c.readStockTotal(str(req.query.endDate))), 'readStockTotal'));
 
+  // ใบเบิกของสาขาตามช่วงวันที่บันทึก — เครื่องมือใบเบิกของ AI NARAI (ชีทใบเบิกหยุดรับข้อมูลแล้ว)
+  app.get('/sheets/stock-request', (req, res) => send(res, getStockCount().then(c => c.readStockRequests({
+    start: str(req.query.start), end: str(req.query.end), branch: str(req.query.branch),
+  })), 'readStockRequests'));
+
   // ทะเบียนสาขา — dropdown เลือกสาขาทุกหน้าและตารางแมป outletID ฝั่ง API กินข้อมูลชุดนี้
   app.get('/sheets/branch', (req, res) =>
     send(res, getBranches().then(c => c.readBranches()), 'readBranches'));

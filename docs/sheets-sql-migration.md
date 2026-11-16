@@ -253,14 +253,39 @@ Apps Script ของสต๊อก/พนักงานถูกวางโ�
   แล้วแนบ `warning` **ไม่ใช่** ตอบ error ทิ้งหน้าให้ว่าง
 * รหัสสินค้าเก็บแบบตัด 0 นำหน้าออกเสมอ (`normItemCode`) เพราะฝั่ง POS เขียนมาไม่เหมือนกันทุกแถว
 
-## 7) ชีทที่ยัง **ไม่ได้** ย้ายในรอบนี้
+## 7) เลิกอ่าน Google Sheet ในทุกที่ที่ข้อมูลอยู่บน SQL แล้ว (พ.ย. 2026)
 
-| ชีท | ใช้ที่หน้าไหน |
-|---|---|
-| `12Wb7t…` ใบเบิก + data | จัดซื้อ > เบิกของสาขา (`/api/branch-requisition`) |
-| `1gijgB…` orders + PaymentSummary | ออเดอร์เพิ่มเติม (`/api/extra-orders`) |
-| `1Tjvt…` UsageHistory | ยอดใช้จากระบบ (`/api/usage`) — ชีทนี้หยุดอัปเดตแล้ว |
-| ชีทสต๊อก แท็บนับสต๊อก/เบิก ผ่าน Apps Script | นับสต๊อก (`getStockItems`, `saveStock` ฯลฯ) |
+> แทนที่ข้อ 3, 5 และ "ล่มแล้วเป็นยังไง" ข้างบนในส่วนที่ขัดกัน
+
+**สวิตช์เปลี่ยนค่าเริ่มต้นเป็น `sql`** — `QCRD_SOURCE`, `SHEETS_SOURCE` (และ `STOCK_SOURCE` ที่เป็น sql อยู่แล้ว)
+ไม่ตั้ง env = อ่าน/เขียน SQL · จะใช้ชีทต้องตั้ง `=sheet` ไว้ตั้งใจเท่านั้น
+
+**เลิกถอยไปอ่านชีทเมื่อ SQL ล่ม** — เดิมฝั่งอ่านถอยไปชีทพร้อม `warning` แต่ชีทหยุดอัปเดตหมดแล้ว
+ตัวเลขที่ได้จึงเป็นของเก่าที่ดูปกติ (คนเชื่อ) ตอนนี้ตอบ error พร้อมสาเหตุแทนทุกเส้น
+
+| หน้า / เครื่องมือ | อ่านจาก | ที่ไฟล์ |
+|---|---|---|
+| จัดซื้อ > เบิกของสาขา | `dbo.stock_request` (ทีละเดือน) — เหลืออ่านชีท `data` เฉพาะ **รูป/ซัพ** ของไอเทม (ไม่มีใน SQL) | `pages/api/branch-requisition.js` |
+| AI `get_branch_requisition` | `dbo.stock_request` (กรองรายวันได้) | `pages/api/ai-chat.js` |
+| AI `get_stock_counts` | `readStockTotal` (SQL) แทน Apps Script | `pages/api/ai-chat.js` |
+| AI `get_purchase_plan` | ใบสั่งสด POS `myfbdata.orderd` → สำเนา `dbo.stock_plan` (ทางเดียวกับหน้าแพลน) | `pages/api/ai-chat.js` |
+| AI `list_sheets` / `read_sheet` | ไม่ขึ้น/ไม่อ่านชีทที่ย้ายแล้ว (แพลน, ใบเบิก) — บอกให้ใช้เครื่องมือ SQL | `pages/api/ai-chat.js` |
+| สต๊อก `getBranches` / `getScheduleEmployees` | `dbo.hr_branch` / `narai_hr.dbo.hr_employee` แทน Apps Script | `lib/stockReaders.js` |
+| สต๊อก `getStockItems` / `getStockTotal` | SQL อย่างเดียว (เลิกถอยไปชีท) | `lib/stockReaders.js` |
+| ต้นทุนเมนู / หมวดเมนู / สูตร / QC/RD / ยอดใช้จาก BOM | `dbo.qcrd_*` อย่างเดียว | `pages/api/{cost,menugroup,recipe,qcrd,usage-bom}.js` |
+| ค่าใช้จ่ายอื่นๆ | `dbo.expense_*` อย่างเดียว (ทั้งอ่านและเขียน) | `pages/api/expense-gas.js` |
+| แพลนสินค้า | POS → `dbo.stock_plan` (เลิกถอยต่อไปชีท `plan`) | `pages/api/plan.js` |
+
+### ชีทที่ยังอ่านอยู่ — เพราะข้อมูลยังไม่มีใน SQL
+
+| ชีท | ใช้ที่หน้าไหน | หมายเหตุ |
+|---|---|---|
+| `12Wb7t…` แท็บ `data` | เบิกของสาขา — รูป/ซัพของไอเทม | ทะเบียนไอเทม ไม่ใช่ข้อมูลการเบิก อ่านไม่ได้หน้ายังขึ้นรายการเบิกครบ |
+| `1YXOaA…` ต้นทุนจากsup | รายงานจากซัพหน้าสาขา (`/api/sup-cost`) | Narai-branch ยังเขียนลงชีทนี้ |
+| `1gijgB…` orders + PaymentSummary | ออเดอร์เพิ่มเติม (`/api/extra-orders`) | |
+| `1gijgB…` ทะเบียนข้าวกล่อง | QC/RD > เพิ่มเมนูจากต้นทางอื่น (`lib/bentoMenuSheet.js`) | |
+| `1Tjvt…` UsageHistory | ยอดใช้จากระบบ (`/api/usage`) | ชีทหยุดอัปเดตแล้ว แต่ไม่มีตารางแทน — ยอดใช้ปัจจุบันดู `/api/usage-bom` |
+| ตัวย้ายข้อมูล (`/api/*-migrate`, `scripts/migrate-*`) | — | อ่านชีทโดยหน้าที่ (คัดลอกชีท → SQL) |
 
 ## 8) ไฟล์ที่เกี่ยวข้อง
 

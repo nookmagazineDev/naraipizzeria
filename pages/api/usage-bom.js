@@ -58,15 +58,12 @@ function bomMapFromSql(data) {
 
 async function fetchBom() {
   if (bomCache.map && Date.now() - bomCache.at < 10 * 60 * 1000) return bomCache;
-  // โหมด SQL: อ่านสูตรจากฐาน InventoryNarai — ล้มเมื่อไหร่ค่อยถอยไปอ่านชีทเหมือนเดิม
+  // โหมด SQL: อ่านสูตรจากฐาน InventoryNarai — อ่านไม่ได้ให้ error ขึ้นไป ไม่ถอยไปอ่านชีท
+  // (ชีทหยุดอัปเดตแล้ว คิดยอดใช้จากสูตรเก่าจะได้ตัวเลขที่ดูปกติแต่ผิด)
   if (usingSql()) {
-    try {
-      const { map, names, stats } = bomMapFromSql(await fetchQcrdSql('bom'));
-      bomCache = { map, names, stats, at: Date.now() };
-      return bomCache;
-    } catch (err) {
-      console.error('usage-bom SQL error:', err.message);
-    }
+    const { map, names, stats } = bomMapFromSql(await fetchQcrdSql('bom'));
+    bomCache = { map, names, stats, at: Date.now() };
+    return bomCache;
   }
   const rows = await fetchQcrdSheet('BOM');
   const map = {};

@@ -5,7 +5,7 @@
 //   ก่อนหน้านี้หน้านี้อ่าน "สำเนา" (ชีท plan / dbo.stock_plan) ซึ่งต้องมีคนรันคัดลอกเอง
 //   ของที่สาขาเพิ่งสั่งจึงไม่ขึ้นจนกว่าจะมีคนรัน — เป็นที่มาของอาการ "ไม่มีข้อมูลวันล่าสุด"
 //
-// ทางถอย (ตามลำดับ): dbo.stock_plan -> ชีท plan  พร้อมแนบ warning บอกว่าข้อมูลอาจไม่สด
+// ทางถอย: dbo.stock_plan พร้อมแนบ warning บอกว่าข้อมูลอาจไม่สด (ชีท plan เฉพาะตอนตั้ง SHEETS_SOURCE=sheet)
 //
 // ⚠️ orderd ไม่มี index ตามวันที่ ต้องจำกัดช่วงเสมอ — ดูเหตุผลใน lib/planLive.js
 //    GET /api/plan?from=YYYY-MM-DD&to=YYYY-MM-DD   (ไม่ส่งมา = 30 วันล่าสุด)
@@ -26,14 +26,16 @@ function resolveRange(query) {
   return from <= to ? { from, to } : { from: to, to: from };
 }
 
-/** ทางถอยเดิม: SQL Server -> ชีท (ไม่มีช่วงวันที่ ตัวสำเนาเล็กพอที่จะดึงทั้งก้อน) */
+/**
+ * ทางถอยเมื่อต่อ POS ไม่ได้: สำเนาใน SQL Server (ไม่มีช่วงวันที่ ตัวสำเนาเล็กพอที่จะดึงทั้งก้อน)
+ * ไม่ถอยต่อไปชีท plan แล้ว — ชีทหยุดอัปเดต อ่านชีทก็ต่อเมื่อตั้ง SHEETS_SOURCE=sheet ไว้ตั้งใจ
+ */
 async function readFallback() {
   if (usingSql()) {
     try {
       return { data: await readPlan(), source: 'sql' };
     } catch (err) {
-      console.error(`Plan API: อ่าน SQL ไม่ได้ (${sqlRoute()}) — ถอยไปอ่านชีท:`, err.message);
-      return { data: await fetchPlanRows(), source: 'sheet', sqlError: err.message };
+      throw new Error(`อ่านสำเนาใน SQL Server ไม่ได้ (${sqlRoute()}): ${err.message}`);
     }
   }
   return { data: await fetchPlanRows(), source: 'sheet' };
@@ -49,13 +51,12 @@ export default async function handler(req, res) {
     console.error('Plan API: อ่านใบสั่งจาก POS ไม่ได้ — ถอยไปอ่านสำเนา:', posErr.message);
 
     try {
-      const { data, source, sqlError } = await readFallback();
+      const { data, source } = await readFallback();
       return res.status(200).json({
         status: 'success', source, range, data,
         warning:
           `ต่อฐานใบสั่งของ POS ไม่ได้ (${posErr.message}) — ข้อมูลชุดนี้มาจาก` +
-          `${source === 'sql' ? 'สำเนาใน SQL Server' : 'สำเนาในชีท'} ซึ่งอาจไม่ใช่ข้อมูลล่าสุด` +
-          (sqlError ? ` (อ่าน SQL Server ไม่ได้ด้วย: ${sqlError})` : ''),
+          `${source === 'sql' ? 'สำเนาใน SQL Server' : 'สำเนาในชีท'} ซึ่งอาจไม่ใช่ข้อมูลล่าสุด`,
       });
     } catch (err) {
       console.error('Plan API error:', err.message);
