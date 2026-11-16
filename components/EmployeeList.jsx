@@ -135,11 +135,7 @@ export default function EmployeeList() {
   const [typeFilter, setTypeFilter] = useState('');
   const [branchFilter, setBranchFilter] = useState('');
   const [editEmp, setEditEmp] = useState(null);   // { ...ค่าที่กำลังแก้, _orig }
-  const [savingEmp, setSavingEmp] = useState(false);
   const [toast, setToast] = useState(null);       // { ok, msg } — โชว์ที่หัวหน้า (เห็นตอนฟอร์มปิดแล้ว)
-  // ข้อความในฟอร์มแก้ไข — ต้องมีแยกจาก toast เพราะ modal เป็น fixed z-50 คลุมทั้งจอ
-  // เวลาบันทึกไม่ผ่าน ฟอร์มจะไม่ปิด ข้อความที่หัวหน้าจึงถูกบัง คนกดเลยเห็นแค่ "กดแล้วไม่มีอะไรเกิดขึ้น"
-  const [formMsg, setFormMsg] = useState(null);   // { ok, msg }
 
   /* ================== สัญชาติ + เอกสารพนักงานต่างชาติ ==================
      ข้อมูลอยู่ที่ dbo.employee_doc ตารางเดียวกับเว็บสาขา (ผ่าน /api/employee-docs -> office-server)
@@ -217,6 +213,120 @@ export default function EmployeeList() {
     }
   };
 
+  /** ข้อมูลพนักงาน (รหัส/สาขา/สถานะ/ประเภท/ตำแหน่ง/วันเริ่มงาน/ค่าแรง/LOGA ...) ในกล่องข้อมูลพนักงาน
+      โหมดดู = สรุปสั้น ๆ · โหมดแก้ไข = ฟอร์มเต็ม (ชื่ออยู่ช่องบนสุดของกล่องอยู่แล้ว จึงไม่ซ้ำที่นี่)
+      ค่าที่กำลังแก้อยู่ใน editEmp แล้วบันทึกพร้อมกันตอนกด "บันทึก" ของกล่อง (handleDocSave) */
+  const renderEmployeeForm = (editing) => {
+    const emp = docTarget?.employee;
+    if (!emp) return null;
+    if (!editing || !editEmp) {
+      const items = [
+        ['สถานะ', emp.status || 'ทำงาน'],
+        ['วันเริ่มทำงาน', formatDate(emp.startDate)],
+        ['ค่าแรงต่อวัน', Number(emp.dailyWage) > 0 ? `${Number(emp.dailyWage).toLocaleString('th-TH')} บาท` : 'ยังไม่ตั้ง'],
+        ['เลขที่ LOGA', emp.loga || '-'],
+      ];
+      return (
+        <section>
+          <h4 className="text-xs font-bold text-gray-500 tracking-wide mb-2">ข้อมูลพนักงาน</h4>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {items.map(([k, v]) => (
+              <div key={k} className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                <p className="text-[11px] font-semibold text-slate-400">{k}</p>
+                <p className={`text-sm font-semibold ${v === 'ยังไม่ตั้ง' ? 'text-rose-600' : 'text-slate-800'}`}>{v}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      );
+    }
+    return (
+      <section>
+        <h4 className="text-xs font-bold text-gray-500 tracking-wide mb-2">ข้อมูลพนักงาน</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50/70 border border-slate-200 rounded-xl p-4">
+              {(() => {
+                const nc = String(editEmp._newCode || '').trim();
+                const changedCode = nc !== String(editEmp.hrCode || '').trim();
+                const dup = changedCode && codeTaken(nc, editEmp.hrCode);
+                const bad = changedCode && !/^[A-Za-z0-9-]{3,30}$/.test(nc);
+                const owner = dup ? employees.find(e => String(e.hrCode || '').trim().toLowerCase() === nc.toLowerCase()) : null;
+                return (
+                  <div className="sm:col-span-2">
+                    <label className="text-xs font-bold text-slate-500">รหัสพนักงาน</label>
+                    <input value={editEmp._newCode} onChange={e => setField('_newCode', e.target.value.trim())}
+                      className={`mt-1 block w-full sm:w-64 border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 ${dup || bad ? 'border-rose-400 focus:ring-rose-400 bg-rose-50' : 'border-slate-200 focus:ring-purple-500'}`} />
+                    {dup && (
+                      <p className="mt-1 text-xs font-semibold text-rose-600 flex items-center gap-1">
+                        <AlertCircle size={13} /> รหัส {nc} มีอยู่แล้ว ({owner?.fullName || '-'}{owner?.status === 'ลาออก' ? ' · ลาออกแล้ว' : ''}) — ใช้ซ้ำไม่ได้
+                      </p>
+                    )}
+                    {bad && !dup && <p className="mt-1 text-xs font-semibold text-rose-600">ใช้ได้เฉพาะตัวอักษรอังกฤษ ตัวเลข และ - ยาว 3-30 ตัว</p>}
+                    {changedCode && !dup && !bad && (
+                      <div className="mt-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-900 space-y-0.5">
+                        <p className="font-bold">⚠️ เปลี่ยนรหัส {editEmp.hrCode} → {nc}</p>
+                        <p>ระบบเปลี่ยนรหัสให้ในตารางงาน ค่าแรง ข้อมูลส่วนตัว เอกสาร ประวัติ และยูนิฟอร์มของคนนี้ทั้งหมด</p>
+                        <p>แต่ <b>เครื่องสแกนหน้า (ZKBio) ต้องเปลี่ยนรหัสเองให้ตรงกัน</b> ไม่งั้นสแกนใหม่จะไม่ผูกกับคนนี้</p>
+                        <p>เวลาสแกนก่อนวันนี้ยังอยู่ใต้รหัสเดิม — หน้าดูสแกนหน้า/การคิดสายของวันก่อน ๆ อาจไม่เจอเวลาสแกนของคนนี้</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {EDIT_FIELDS.filter(f => f.key !== 'fullName').map(f => (
+                <div key={f.key}>
+                  <label className="text-xs font-bold text-slate-500">{f.label}</label>
+                  {f.type === 'branch' ? (
+                    <select value={String(editEmp.branch || '').toUpperCase()} onChange={e => setField('branch', e.target.value)}
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                      {[...new Set([String(editEmp._orig.branch || '').toUpperCase(), ...registry.map(b => String(b.code).toUpperCase())])].filter(Boolean).map(code => {
+                        const b = registry.find(x => String(x.code).toUpperCase() === code);
+                        const cur = code === String(editEmp._orig.branch || '').toUpperCase();
+                        return <option key={code} value={code}>{code}{b?.name ? ` — ${b.name}` : ''}{cur ? ' (สาขาปัจจุบัน)' : ''}</option>;
+                      })}
+                    </select>
+                  ) : f.type === 'select' ? (
+                    <select value={editEmp[f.key]} onChange={e => setField(f.key, e.target.value)}
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                      {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  ) : (
+                    <input value={editEmp[f.key]} onChange={e => setField(f.key, e.target.value)}
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
+                  )}
+                  {f.hint && <p className="text-[10px] text-slate-400 mt-0.5">{f.hint}</p>}
+                  {f.type === 'branch' && pendingMoves.get(String(editEmp.hrCode).trim().toLowerCase()) && (
+                    <p className="text-[11px] text-amber-700 mt-1">มีรายการรอย้ายไป {pendingMoves.get(String(editEmp.hrCode).trim().toLowerCase()).toBranch.toUpperCase()} อยู่แล้ว — ยกเลิกได้ที่ประวัติสาขาด้านล่าง</p>
+                  )}
+                </div>
+              ))}
+              {!sameValue('branch', editEmp.branch, editEmp._orig.branch) && (
+                <div className="sm:col-span-2 bg-cyan-50 border border-cyan-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <p className="sm:col-span-2 text-sm font-bold text-cyan-800">
+                    ⇄ ย้ายสาขา {String(editEmp._orig.branch || '-').toUpperCase()} → {String(editEmp.branch || '').toUpperCase()}
+                  </p>
+                  <div>
+                    <label className="text-xs font-bold text-slate-500">วันที่มีผล</label>
+                    <input type="date" value={editEmp._moveDate} onChange={e => setField('_moveDate', e.target.value)}
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-slate-500">เหตุผล</label>
+                    <input value={editEmp._moveReason} onChange={e => setField('_moveReason', e.target.value)} placeholder="เช่น ขอย้ายใกล้บ้าน"
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                  </div>
+                  <p className="sm:col-span-2 text-xs text-cyan-800">
+                    {editEmp._moveDate > todayYmd()
+                      ? `ยังอยู่สาขาเดิมจนถึงวันที่มีผล — ระบบย้ายให้เองวันที่ ${thShort(editEmp._moveDate)}`
+                      : 'ย้ายทันทีเมื่อกดบันทึก'}
+                    {' · '}ตารางงานเก่าอยู่ที่สาขาเดิม · เก็บประวัติการย้ายให้อัตโนมัติ
+                  </p>
+                </div>
+              )}
+        </div>
+      </section>
+    );
+  };
+
   /** ส่วนประวัติสาขาในกล่องข้อมูลพนักงาน */
   const renderBranchHistory = () => {
     const emp = docTarget?.employee;
@@ -269,9 +379,11 @@ export default function EmployeeList() {
   const draftFrom = (p) => ({ ...emptyProfile(), ...Object.fromEntries(PROFILE_FIELDS.map(f => [f.key, p?.[f.key] || ''])) });
 
   /** เปิดกล่องข้อมูลพนักงาน — เตรียมค่าข้อมูลส่วนตัวของคนนั้นไว้ให้ช่องแก้ไข */
-  const openPerson = (employee, doc) => {
+  /** เปิดกล่องข้อมูลพนักงาน — edit = เปิดมาในโหมดแก้ไขเลย (ปุ่ม "แก้ไข" ท้ายแถว) */
+  const openPerson = (employee, doc, edit = false) => {
     setProfileDraft(draftFrom(profileOf(employee)));
-    setDocTarget({ employee, doc });
+    setEditEmp(employee ? buildEdit(employee) : null);
+    setDocTarget({ employee, doc, edit });
     loadPersonMoves(employee?.hrCode);
   };
 
@@ -383,21 +495,14 @@ export default function EmployeeList() {
     const newName = String(form.fullName || '').trim();
     if (!newName) { hotToast.error('กรอกชื่อ - นามสกุล'); return false; }
     try {
-      // แก้ชื่อของพนักงานในระบบ = เขียน hr_employee ด้วยคำสั่งเดียวกับปุ่ม "แก้ไข" ท้ายแถว
-      // ทำก่อนบันทึกเอกสาร ถ้าชื่อไม่ผ่านจะได้ไม่เหลือเอกสารที่ชื่อไม่ตรงกับรายชื่อ
-      if (emp && newName !== String(emp.fullName || '').trim()) {
-        const r = await apiCall('saveEmployee', { hrCode: emp.hrCode, fullName: newName });
-        const wrote = Array.isArray(r.data?.updated) ? r.data.updated.length : Number(r.data?.updated) || 0;
-        if (!wrote) throw new Error('แก้ชื่อไม่สำเร็จ — ชื่อไม่ถูกบันทึกลงฐานข้อมูล');
-        const renamed = { ...emp, fullName: newName };
-        setEmployees(list => list.map(e => (hrKey(e.hrCode) === hrKey(emp.hrCode) ? { ...e, fullName: newName } : e)));
-        setDocTarget(t => (t ? { ...t, employee: renamed } : t));
-      }
+      // ข้อมูลพนักงาน (รหัส/ชื่อ/สาขา/ตำแหน่ง/ค่าแรง ...) ก่อน — รหัสอาจเปลี่ยน ส่วนที่เหลือต้องใช้รหัสใหม่
+      const core = emp && editEmp ? await saveEmployeeCore(newName) : null;
+      const code = core?.code || emp?.hrCode || '';
       const res = await docsApi({
         ...form,
         action: 'save',
         docId: docTarget?.doc?.docId || 0,
-        hrCode: emp?.hrCode || docTarget?.doc?.hrCode || '',
+        hrCode: code || docTarget?.doc?.hrCode || '',
         fullName: newName,
         branch: emp ? emp.branch : form.branch,
       });
@@ -408,7 +513,7 @@ export default function EmployeeList() {
         if (PROFILE_FIELDS.some(f => String(profileDraft[f.key] || '').trim() !== String(before[f.key] || '').trim())) {
           const r = await fetch('/api/employee-hr', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'saveProfile', hrCode: emp.hrCode, ...profileDraft }),
+            body: JSON.stringify({ action: 'saveProfile', hrCode: code, ...profileDraft }),
           });
           const j = await r.json().catch(() => null);
           if (!r.ok || !j || j.status !== 'success') {
@@ -418,13 +523,14 @@ export default function EmployeeList() {
           if (prof) setProfiles(m => new Map(m).set(String(prof.hrCode).trim().toLowerCase(), prof));
         }
       }
-      hotToast.success(res.message || 'บันทึกแล้ว');
-      if (saved) {
-        setDocs(list => [...list.filter(d => d.docId !== saved.docId), saved]);
-        setDocTarget(t => (t ? { ...t, doc: saved } : t));
-      } else {
-        loadDocs();
-      }
+      hotToast.success([core?.msg, res.message || 'บันทึกแล้ว'].filter(Boolean).join(' · '), { duration: core?.msg ? 8000 : 4000 });
+      if (saved) setDocs(list => [...list.filter(d => d.docId !== saved.docId), saved]);
+      else loadDocs();
+      // แถวพนักงานล่าสุด (รหัส/สาขา/ชื่ออาจเปลี่ยน) — ให้กล่องแสดงค่าใหม่ และเตรียมฟอร์มรอบหน้าจากค่าใหม่
+      const fresh = core?.changed ? await fetchEmployees() : null;
+      const freshEmp = (fresh || []).find(e => hrKey(e.hrCode) === hrKey(code)) || (emp ? { ...emp, fullName: newName } : null);
+      setDocTarget(t => (t ? { ...t, employee: freshEmp || t.employee, doc: saved || t.doc, edit: false } : t));
+      if (freshEmp) { setEditEmp(buildEdit(freshEmp)); loadPersonMoves(freshEmp.hrCode); }
       return true;
     } catch (err) {
       hotToast.error(err?.message || 'บันทึกไม่สำเร็จ');
@@ -501,13 +607,13 @@ export default function EmployeeList() {
     return `${dd}/${mm}/${d.getFullYear() + 543}`; // แสดงเป็น พ.ศ. d/m/yyyy
   };
 
-  const openEdit = (emp) => {
+  /** ค่าตั้งต้นของฟอร์มข้อมูลพนักงานจากแถวพนักงาน (_orig ไว้เทียบว่าช่องไหนถูกแก้) */
+  const buildEdit = (emp) => {
     const base = {};
     EDIT_FIELDS.forEach(f => {
       base[f.key] = f.key === 'startDate' ? startDateForInput(emp[f.key]) : (emp[f.key] ?? '');
     });
-    setFormMsg(null);
-    setEditEmp({ hrCode: emp.hrCode, _newCode: emp.hrCode, ...base, _orig: { ...base }, _moveDate: todayYmd(), _moveReason: '' });
+    return { hrCode: emp.hrCode, _newCode: emp.hrCode, ...base, _orig: { ...base }, _moveDate: todayYmd(), _moveReason: '' };
   };
 
   const setField = (key, val) => setEditEmp(m => ({ ...m, [key]: val }));
@@ -533,16 +639,20 @@ export default function EmployeeList() {
       && String(e.hrCode || '').trim().toLowerCase() !== String(self || '').trim().toLowerCase());
   };
 
-  const saveEmployee = async () => {
-    setSavingEmp(true);
-    setToast(null);
-    setFormMsg(null);
-    try {
+  /**
+   * บันทึกข้อมูลพนักงานจาก editEmp — เรียกจาก handleDocSave ตอนกด "บันทึก" ของกล่องข้อมูลพนักงาน
+   * ลำดับ: เปลี่ยนรหัส -> ช่องอื่น (saveEmployee) -> ย้ายสาขา · พลาดตรงไหนโยน Error ให้ผู้เรียกแจ้งผู้ใช้
+   * @returns {{ code: string, msg: string, changed: boolean }}
+   */
+  const saveEmployeeCore = async (newName) => {
+    {
       // ส่งเฉพาะฟิลด์ที่เปลี่ยน (กันเขียนทับค่าเดิมโดยไม่ตั้งใจ)
       const changed = {};
       EDIT_FIELDS.forEach(f => {
-        if (String(editEmp[f.key] ?? '') !== String(editEmp._orig[f.key] ?? '')) changed[f.key] = editEmp[f.key];
+        if (f.key !== 'fullName' && String(editEmp[f.key] ?? '') !== String(editEmp._orig[f.key] ?? '')) changed[f.key] = editEmp[f.key];
       });
+      // ชื่อมาจากช่องชื่อบนสุดของกล่อง
+      if (newName && newName !== String(editEmp._orig.fullName ?? '').trim()) changed.fullName = newName;
       // สาขาไม่เขียนตรง — ไปเป็นรายการย้ายสาขาที่มีวันที่มีผลแทน (ย้ายทันทีถ้าเป็นวันนี้/ย้อนหลัง)
       const moveTo = changed.branch !== undefined && !sameValue('branch', changed.branch, editEmp._orig.branch) ? changed.branch : '';
       delete changed.branch;
@@ -551,7 +661,8 @@ export default function EmployeeList() {
       const newCode = String(editEmp._newCode || '').trim();
       const codeChanged = newCode !== String(editEmp.hrCode || '').trim();
       if (codeChanged && codeTaken(newCode, editEmp.hrCode)) throw new Error(`รหัส ${newCode} มีอยู่แล้ว — ใช้ซ้ำไม่ได้`);
-      if (Object.keys(changed).length === 0 && !moveTo && !codeChanged) { setFormMsg({ ok: false, msg: 'ไม่มีการเปลี่ยนแปลง' }); setSavingEmp(false); return; }
+      if (codeChanged && !/^[A-Za-z0-9-]{3,30}$/.test(newCode)) throw new Error('รหัสพนักงานใช้ได้เฉพาะตัวอักษรอังกฤษ ตัวเลข และ - ยาว 3-30 ตัว');
+      if (Object.keys(changed).length === 0 && !moveTo && !codeChanged) return { code: editEmp.hrCode, msg: '', changed: false };
 
       let code = editEmp.hrCode;
       let codeMsg = '';
@@ -560,7 +671,7 @@ export default function EmployeeList() {
         code = newCode;
         codeMsg = j.data?.message || `เปลี่ยนรหัสเป็น ${newCode} แล้ว`;
         // ฟอร์มยังเปิดอยู่ถ้าช่องอื่นบันทึกพลาด — ให้ใช้รหัสใหม่ต่อ ไม่ไปเปลี่ยนซ้ำ
-        setEditEmp(m => (m ? { ...m, hrCode: newCode, _newCode: newCode } : m));
+        setEditEmp(m => (m ? { ...m, hrCode: newCode, _newCode: newCode, _orig: { ...m._orig } } : m));
         await Promise.all([loadProfiles(), loadPendingMoves(), loadDocs()]);
       }
 
@@ -595,7 +706,6 @@ export default function EmployeeList() {
       }
       }
 
-      if (codeChanged && !wrote && !moveTo) await fetchEmployees();
       let moveMsg = '';
       if (moveTo) {
         try {
@@ -607,18 +717,13 @@ export default function EmployeeList() {
         await Promise.all([fetchEmployees(), loadPendingMoves()]);
       }
 
-      setToast({
-        ok: skipped.length === 0,
-        msg: [codeMsg, wrote ? `บันทึก ${code} แล้ว ${wrote} ช่อง` : '', moveMsg].filter(Boolean).join(' · ')
+      if (wrote || codeChanged) await fetchEmployees();
+      return {
+        code,
+        changed: true,
+        msg: [codeMsg, wrote ? `บันทึกข้อมูลพนักงาน ${wrote} ช่อง` : '', moveMsg].filter(Boolean).join(' · ')
           + (skipped.length ? ` · ตารางไม่มีคอลัมน์: ${skipped.map(k => LABEL_OF[k] || k).join(', ')}` : ''),
-      });
-      setEditEmp(null);   // ปิดฟอร์มเฉพาะตอนที่ยืนยันแล้วว่าข้อมูลเปลี่ยนจริง
-    } catch (err) {
-      const msg = err.message || 'บันทึกไม่สำเร็จ';
-      setFormMsg({ ok: false, msg });   // ในฟอร์ม — ฟอร์มยังเปิดอยู่ ต้องเห็นตรงนี้
-      setToast({ ok: false, msg });     // ที่หัวหน้าด้วย เผื่อผู้ใช้ปิดฟอร์มไปแล้ว
-    } finally {
-      setSavingEmp(false);
+      };
     }
   };
 
@@ -971,7 +1076,7 @@ export default function EmployeeList() {
                       )}
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap text-center">
-                      <button onClick={() => openEdit(emp)}
+                      <button onClick={() => openPerson(emp, docOf(emp), true)}
                         className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200 transition-colors">
                         <Pencil size={12} /> แก้ไข
                       </button>
@@ -994,13 +1099,17 @@ export default function EmployeeList() {
       {/* กล่องข้อมูลพนักงาน — เปิดจากการกดที่ชื่อ หรือกดรายการในกล่องแจ้งเตือนเอกสาร */}
       {docTarget && (
         <EmployeeDocModal
-          key={`${docTarget.employee?.hrCode || ''}-${docTarget.doc?.docId || 0}`}
+          key={`${docTarget.employee?.hrCode || ''}-${docTarget.doc?.docId || 0}-${docTarget.edit ? 'e' : 'v'}`}
           employee={docTarget.employee}
           doc={docTarget.doc}
           onSave={handleDocSave}
           nameEditable
-          renderExtra={(editing) => <>{renderBranchHistory()}{renderProfile(editing)}</>}
-          onCancelEdit={() => setProfileDraft(draftFrom(profileOf(docTarget.employee)))}
+          initialEditing={!!docTarget.edit}
+          renderExtra={(editing) => <>{renderEmployeeForm(editing)}{renderBranchHistory()}{renderProfile(editing)}</>}
+          onCancelEdit={() => {
+            setProfileDraft(draftFrom(profileOf(docTarget.employee)));
+            if (docTarget.employee) setEditEmp(buildEdit(docTarget.employee));
+          }}
           onClose={() => setDocTarget(null)}
           linkCandidates={docTarget.employee ? [] : linkCandidatesFor(docTarget.doc)}
           onLink={handleDocLink}
@@ -1008,118 +1117,6 @@ export default function EmployeeList() {
         />
       )}
 
-      {/* Modal แก้ไขข้อมูลพนักงาน */}
-      {editEmp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => !savingEmp && setEditEmp(null)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-slate-800">✏️ แก้ไขข้อมูลพนักงาน <span className="font-mono text-sm text-slate-400 ml-1">รหัส {editEmp.hrCode}</span></h3>
-              <button onClick={() => setEditEmp(null)} className="text-slate-400 hover:text-slate-700"><X size={20} /></button>
-            </div>
-
-            <div className="p-5 overflow-auto grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {(() => {
-                const nc = String(editEmp._newCode || '').trim();
-                const changedCode = nc !== String(editEmp.hrCode || '').trim();
-                const dup = changedCode && codeTaken(nc, editEmp.hrCode);
-                const bad = changedCode && !/^[A-Za-z0-9-]{3,30}$/.test(nc);
-                const owner = dup ? employees.find(e => String(e.hrCode || '').trim().toLowerCase() === nc.toLowerCase()) : null;
-                return (
-                  <div className="sm:col-span-2">
-                    <label className="text-xs font-bold text-slate-500">รหัสพนักงาน</label>
-                    <input value={editEmp._newCode} onChange={e => setField('_newCode', e.target.value.trim())}
-                      className={`mt-1 block w-full sm:w-64 border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 ${dup || bad ? 'border-rose-400 focus:ring-rose-400 bg-rose-50' : 'border-slate-200 focus:ring-purple-500'}`} />
-                    {dup && (
-                      <p className="mt-1 text-xs font-semibold text-rose-600 flex items-center gap-1">
-                        <AlertCircle size={13} /> รหัส {nc} มีอยู่แล้ว ({owner?.fullName || '-'}{owner?.status === 'ลาออก' ? ' · ลาออกแล้ว' : ''}) — ใช้ซ้ำไม่ได้
-                      </p>
-                    )}
-                    {bad && !dup && <p className="mt-1 text-xs font-semibold text-rose-600">ใช้ได้เฉพาะตัวอักษรอังกฤษ ตัวเลข และ - ยาว 3-30 ตัว</p>}
-                    {changedCode && !dup && !bad && (
-                      <div className="mt-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-900 space-y-0.5">
-                        <p className="font-bold">⚠️ เปลี่ยนรหัส {editEmp.hrCode} → {nc}</p>
-                        <p>ระบบเปลี่ยนรหัสให้ในตารางงาน ค่าแรง ข้อมูลส่วนตัว เอกสาร ประวัติ และยูนิฟอร์มของคนนี้ทั้งหมด</p>
-                        <p>แต่ <b>เครื่องสแกนหน้า (ZKBio) ต้องเปลี่ยนรหัสเองให้ตรงกัน</b> ไม่งั้นสแกนใหม่จะไม่ผูกกับคนนี้</p>
-                        <p>เวลาสแกนก่อนวันนี้ยังอยู่ใต้รหัสเดิม — หน้าดูสแกนหน้า/การคิดสายของวันก่อน ๆ อาจไม่เจอเวลาสแกนของคนนี้</p>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-              {EDIT_FIELDS.map(f => (
-                <div key={f.key} className={f.key === 'fullName' ? 'sm:col-span-2' : ''}>
-                  <label className="text-xs font-bold text-slate-500">{f.label}</label>
-                  {f.type === 'branch' ? (
-                    <select value={String(editEmp.branch || '').toUpperCase()} onChange={e => setField('branch', e.target.value)}
-                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500">
-                      {[...new Set([String(editEmp._orig.branch || '').toUpperCase(), ...registry.map(b => String(b.code).toUpperCase())])].filter(Boolean).map(code => {
-                        const b = registry.find(x => String(x.code).toUpperCase() === code);
-                        const cur = code === String(editEmp._orig.branch || '').toUpperCase();
-                        return <option key={code} value={code}>{code}{b?.name ? ` — ${b.name}` : ''}{cur ? ' (สาขาปัจจุบัน)' : ''}</option>;
-                      })}
-                    </select>
-                  ) : f.type === 'select' ? (
-                    <select value={editEmp[f.key]} onChange={e => setField(f.key, e.target.value)}
-                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500">
-                      {f.options.map(o => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  ) : (
-                    <input value={editEmp[f.key]} onChange={e => setField(f.key, e.target.value)}
-                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                  )}
-                  {f.hint && <p className="text-[10px] text-slate-400 mt-0.5">{f.hint}</p>}
-                  {f.type === 'branch' && pendingMoves.get(String(editEmp.hrCode).trim().toLowerCase()) && (
-                    <p className="text-[11px] text-amber-700 mt-1">มีรายการรอย้ายไป {pendingMoves.get(String(editEmp.hrCode).trim().toLowerCase()).toBranch.toUpperCase()} อยู่แล้ว — ยกเลิกได้ที่ประวัติสาขา (กดที่ชื่อพนักงาน)</p>
-                  )}
-                </div>
-              ))}
-              {!sameValue('branch', editEmp.branch, editEmp._orig.branch) && (
-                <div className="sm:col-span-2 bg-cyan-50 border border-cyan-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <p className="sm:col-span-2 text-sm font-bold text-cyan-800">
-                    ⇄ ย้ายสาขา {String(editEmp._orig.branch || '-').toUpperCase()} → {String(editEmp.branch || '').toUpperCase()}
-                  </p>
-                  <div>
-                    <label className="text-xs font-bold text-slate-500">วันที่มีผล</label>
-                    <input type="date" value={editEmp._moveDate} onChange={e => setField('_moveDate', e.target.value)}
-                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500" />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-slate-500">เหตุผล</label>
-                    <input value={editEmp._moveReason} onChange={e => setField('_moveReason', e.target.value)} placeholder="เช่น ขอย้ายใกล้บ้าน"
-                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500" />
-                  </div>
-                  <p className="sm:col-span-2 text-xs text-cyan-800">
-                    {editEmp._moveDate > todayYmd()
-                      ? `ยังอยู่สาขาเดิมจนถึงวันที่มีผล — ระบบย้ายให้เองวันที่ ${thShort(editEmp._moveDate)}`
-                      : 'ย้ายทันทีเมื่อกดบันทึก'}
-                    {' · '}ตารางงานเก่าอยู่ที่สาขาเดิม · เก็บประวัติการย้ายให้อัตโนมัติ
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-3">
-              {formMsg && (
-                <span className={`flex-1 inline-flex items-start gap-1.5 text-xs font-semibold ${formMsg.ok ? 'text-emerald-600' : 'text-rose-600'}`}>
-                  {formMsg.ok
-                    ? <CheckCircle size={14} className="flex-shrink-0 mt-px" />
-                    : <AlertCircle size={14} className="flex-shrink-0 mt-px" />}
-                  <span>{formMsg.msg}</span>
-                </span>
-              )}
-              <button onClick={() => setEditEmp(null)} disabled={savingEmp}
-                className="px-4 py-2 text-sm font-semibold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50">ยกเลิก</button>
-              <button onClick={saveEmployee}
-                disabled={savingEmp || (String(editEmp._newCode || '').trim() !== String(editEmp.hrCode || '').trim()
-                  && (codeTaken(editEmp._newCode, editEmp.hrCode) || !/^[A-Za-z0-9-]{3,30}$/.test(String(editEmp._newCode || '').trim())))}
-                className="inline-flex items-center gap-2 px-5 py-2 text-sm font-semibold text-white bg-purple-500 hover:bg-purple-600 disabled:bg-slate-200 disabled:text-slate-400 rounded-xl">
-                {savingEmp ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle size={15} />}
-                {savingEmp ? 'กำลังบันทึก…' : 'บันทึก'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
