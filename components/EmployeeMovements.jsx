@@ -5,6 +5,7 @@ import { ArrowLeftRight, Eye, Loader2, Search, X, Download, AlertCircle } from '
  * พนักงานเข้า-ออก — กล่องดูอย่างเดียวจากหน้า HR → รายชื่อพนักงาน
  * ข้อมูล: /api/employee-hr?view=movements → office-server getEmployeeMovements (ตาราง hr_employee_movement)
  * ทุกครั้งที่สาขาเพิ่มพนักงาน/แจ้งลาออกจะเกิดแถวใหม่ + ประวัติเก่าที่นำเข้าจากชีท "พนักงานเข้า"/"พนักงานออก"
+ * แท็บย้ายสาขา: /api/employee-hr?view=transfers (ตาราง hr_branch_transfer) — กรองตาม "วันที่มีผล"
  */
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -27,6 +28,7 @@ export default function EmployeeMovements({ branches = [], onClose }) {
   const [branch, setBranch] = useState('');
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState(null);
+  const [moves, setMoves] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [notReady, setNotReady] = useState(false);
@@ -35,12 +37,17 @@ export default function EmployeeMovements({ branches = [], onClose }) {
     setLoading(true);
     setError('');
     try {
-      const qs = new URLSearchParams({ view: 'movements', start: s, end: e, branch: b });
-      const r = await fetch(`/api/employee-hr?${qs}`, { cache: 'no-store' });
-      const j = await r.json().catch(() => null);
-      if (!r.ok || !j || j.status !== 'success') throw new Error([j?.message || `HTTP ${r.status}`, j?.hint].filter(Boolean).join(' — '));
-      setRows(j.data || []);
-      setNotReady(j.ready === false);
+      const get = async (view) => {
+        const qs = new URLSearchParams({ view, start: s, end: e, branch: b });
+        const r = await fetch(`/api/employee-hr?${qs}`, { cache: 'no-store' });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || j.status !== 'success') throw new Error([j?.message || `HTTP ${r.status}`, j?.hint].filter(Boolean).join(' — '));
+        return j;
+      };
+      const [mv, tr] = await Promise.all([get('movements'), get('transfers').catch(() => ({ data: [] }))]);
+      setRows(mv.data || []);
+      setMoves(tr.data || []);
+      setNotReady(mv.ready === false);
     } catch (err) {
       setError(err.message || 'โหลดข้อมูลไม่สำเร็จ');
       setRows([]);
@@ -62,6 +69,7 @@ export default function EmployeeMovements({ branches = [], onClose }) {
     || r.hrCode.toLowerCase().includes(q) || r.fullName.toLowerCase().includes(q)), [rows, q]);
   const ins = filtered.filter((r) => r.kind === 'in');
   const outs = filtered.filter((r) => r.kind === 'out');
+  const movesShown = moves.filter((r) => !q || r.hrCode.toLowerCase().includes(q) || r.fullName.toLowerCase().includes(q));
   const shown = tab === 'in' ? ins : outs;
 
   const topReason = useMemo(() => {
@@ -85,6 +93,11 @@ export default function EmployeeMovements({ branches = [], onClose }) {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, inSheet, 'พนักงานเข้า');
     XLSX.utils.book_append_sheet(wb, outSheet, 'พนักงานออก');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(movesShown.map((r) => ({
+      'วันที่มีผล': r.effectiveDate, 'รหัส HR': r.hrCode, 'ชื่อ - นามสกุล': r.fullName, 'จากสาขา': r.fromBranch.toUpperCase(),
+      'ไปสาขา': r.toBranch.toUpperCase(), 'สถานะ': r.status === 'pending' ? 'รอย้าย' : 'ย้ายแล้ว', 'เหตุผล': r.reason,
+      'ผู้บันทึก': r.requestedBy, 'บันทึกเมื่อ': r.requestedAt,
+    }))), 'ย้ายสาขา');
     XLSX.writeFile(wb, `พนักงานเข้า-ออก_${start}_${end}${branch ? `_${branch.toUpperCase()}` : ''}.xlsx`);
   };
 
@@ -98,7 +111,7 @@ export default function EmployeeMovements({ branches = [], onClose }) {
           <div className="min-w-0">
             <h3 className="text-lg font-bold text-slate-800">พนักงานเข้า-ออก</h3>
             <p className="text-sm text-slate-500 flex items-center gap-2">
-              ประวัติการรับเข้าและแจ้งลาออกจากทุกสาขา
+              ประวัติการรับเข้า แจ้งลาออก และย้ายสาขา
               <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-600 rounded-md px-2 py-0.5 text-xs font-semibold"><Eye className="w-3 h-3" /> ดูอย่างเดียว</span>
             </p>
           </div>
@@ -108,10 +121,11 @@ export default function EmployeeMovements({ branches = [], onClose }) {
         <div className="px-6 pt-4 flex flex-wrap items-center gap-2">
           <button onClick={() => setTab('in')} className={`px-4 py-2 rounded-xl text-sm font-bold ${tab === 'in' ? 'bg-teal-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>พนักงานเข้า {rows ? ins.length : ''}</button>
           <button onClick={() => setTab('out')} className={`px-4 py-2 rounded-xl text-sm font-bold ${tab === 'out' ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>พนักงานออก {rows ? outs.length : ''}</button>
+          <button onClick={() => setTab('move')} className={`px-4 py-2 rounded-xl text-sm font-bold ${tab === 'move' ? 'bg-cyan-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>ย้ายสาขา {rows ? movesShown.length : ''}</button>
         </div>
 
         <div className="px-6 py-3 flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-slate-500">ช่วงวันที่บันทึก</span>
+          <span className="text-slate-500">{tab === 'move' ? 'ช่วงวันที่มีผล' : 'ช่วงวันที่บันทึก'}</span>
           <input type="date" value={start} max={end} onChange={(e) => setStart(e.target.value)} className={inputCls} />
           <span className="text-slate-400">ถึง</span>
           <input type="date" value={end} min={start} onChange={(e) => setEnd(e.target.value)} className={inputCls} />
@@ -141,6 +155,39 @@ export default function EmployeeMovements({ branches = [], onClose }) {
             <div className="m-6 p-4 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-sm flex items-start gap-2"><AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />{error}</div>
           ) : notReady ? (
             <div className="py-16 px-6 text-center text-sm text-amber-700">ยังไม่ได้สร้างตารางประวัติ — ให้รัน update-office-server.bat บนเครื่องออฟฟิศก่อน</div>
+          ) : tab === 'move' ? (
+            movesShown.length === 0 ? (
+              <div className="py-16 text-center text-sm text-slate-400">ไม่มีการย้ายสาขาที่มีผลในช่วงวันที่เลือก</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-xs text-slate-500">
+                    {['วันที่มีผล', 'รหัส HR', 'ชื่อ - นามสกุล', 'จากสาขา', '', 'ไปสาขา', 'สถานะ', 'เหตุผล', 'ผู้บันทึก', 'บันทึกเมื่อ']
+                      .map((h, i) => <th key={i} className="px-3 py-2.5 text-left font-semibold sticky top-0 bg-slate-50 border-b border-slate-200 whitespace-nowrap">{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-600">
+                  {movesShown.map((r) => (
+                    <tr key={r.id} className="hover:bg-slate-50">
+                      <td className="px-3 py-2 whitespace-nowrap">{thDate(r.effectiveDate)}</td>
+                      <td className="px-3 py-2 whitespace-nowrap font-semibold text-purple-600">{r.hrCode}</td>
+                      <td className="px-3 py-2 whitespace-nowrap font-semibold text-slate-900">{r.fullName || '-'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap"><span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold">{r.fromBranch.toUpperCase()}</span></td>
+                      <td className="px-1 py-2 text-slate-400">→</td>
+                      <td className="px-3 py-2 whitespace-nowrap"><span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold">{r.toBranch.toUpperCase()}</span></td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {r.status === 'pending'
+                          ? <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-xs font-bold">รอย้าย</span>
+                          : <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">ย้ายแล้ว</span>}
+                      </td>
+                      <td className="px-3 py-2 min-w-[10rem]">{r.reason || '-'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{r.requestedBy || '-'}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">{thDate(r.requestedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
           ) : shown.length === 0 ? (
             <div className="py-16 text-center text-sm text-slate-400">ไม่มี{tab === 'in' ? 'พนักงานเข้า' : 'พนักงานออก'}ในช่วงวันที่เลือก</div>
           ) : (
@@ -184,9 +231,9 @@ export default function EmployeeMovements({ branches = [], onClose }) {
         </div>
 
         <div className="px-6 py-3 border-t border-slate-100 bg-slate-50 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
-          <span>ข้อมูลจาก SQL · รวมประวัติเก่าที่นำเข้าจากชีท "พนักงานเข้า" / "พนักงานออก"</span>
+          <span>{tab === 'move' ? 'ข้อมูลจาก SQL · ตั้งย้ายได้จากปุ่ม "แก้ไข" ท้ายแถว (เลือกสาขา + วันที่มีผล)' : 'ข้อมูลจาก SQL · รวมประวัติเก่าที่นำเข้าจากชีท "พนักงานเข้า" / "พนักงานออก"'}</span>
           <div className="flex gap-2">
-            <button onClick={download} disabled={!rows || filtered.length === 0} className="inline-flex items-center gap-1.5 px-4 py-2 bg-white text-slate-600 border border-slate-200 rounded-xl text-sm font-semibold hover:bg-slate-100 disabled:opacity-50"><Download className="w-4 h-4" /> ดาวน์โหลด Excel</button>
+            <button onClick={download} disabled={!rows || (filtered.length === 0 && movesShown.length === 0)} className="inline-flex items-center gap-1.5 px-4 py-2 bg-white text-slate-600 border border-slate-200 rounded-xl text-sm font-semibold hover:bg-slate-100 disabled:opacity-50"><Download className="w-4 h-4" /> ดาวน์โหลด Excel</button>
             <button onClick={onClose} className="px-4 py-2 bg-white text-slate-600 border border-slate-200 rounded-xl text-sm font-semibold hover:bg-slate-100">ปิด</button>
           </div>
         </div>

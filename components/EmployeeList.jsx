@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { apiCall } from '../lib/stockApi';
 import { Users, Loader2, Search, Gift, Image as ImageIcon, AlertCircle, Pencil, X, CheckCircle, Upload, ArrowLeftRight, Lock, FileSpreadsheet, Paperclip } from 'lucide-react';
 import EmployeeMovements from './EmployeeMovements';
+import { useBranches } from '../lib/useBranches';
 import { parseEmployeeWorkbook } from '../lib/employeeSheetImport';
 import hotToast from 'react-hot-toast';
 import { NatBadge, DocStatusBadge, DocAlertPanel, EmployeeDocModal } from './EmployeeDocs';
@@ -25,6 +26,24 @@ const fileHref = (v) => {
   return s.startsWith('file:') ? `/api/employee-file?path=${encodeURIComponent(s.slice(5))}` : s;
 };
 
+const todayYmd = () => { const t = new Date(); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; };
+const thShort = (ymd) => {
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : (ymd || '-');
+};
+const thStamp = (v) => {
+  const m = String(v || '').match(/^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?/);
+  return m ? `${thShort(m[1])}${m[2] ? ` ${m[2]}` : ''}` : (v || '-');
+};
+
+/** เรียก /api/employee-hr แบบ POST — โยน Error พร้อมข้อความจริงเมื่อทำไม่สำเร็จ */
+async function hrPost(body) {
+  const r = await fetch('/api/employee-hr', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j || j.status !== 'success') throw new Error([j?.message || `HTTP ${r.status}`, j?.hint].filter(Boolean).join(' — '));
+  return j;
+}
+
 /** ช่องข้อมูลส่วนตัว (เห็นเฉพาะออฟฟิศ) — key ตรงกับ saveEmployeeProfile ของ office-server */
 const PROFILE_FIELDS = [
   { key: 'phone', label: 'เบอร์โทร' },
@@ -42,7 +61,8 @@ const branchCodesOf = (v) => String(v ?? '').toLowerCase().split(/[,/|;+&\s]+/).
 // LABEL_OF ด้านล่างใช้แปลงชื่อฟิลด์เป็นชื่อไทยตอนรายงานว่าช่องไหนบันทึกไม่ได้
 const EDIT_FIELDS = [
   { key: 'fullName', label: 'ชื่อ - นามสกุล', type: 'text' },
-  { key: 'branch', label: 'สาขา', type: 'text' },
+  // สาขาเปลี่ยนผ่าน "ย้ายสาขา" (เลือกจาก dropdown + วันที่มีผล) ไม่ได้เขียนตรงด้วย saveEmployee — ดู saveEmployee ด้านล่าง
+  { key: 'branch', label: 'สาขา', type: 'branch' },
   { key: 'status', label: 'สถานะ', type: 'select', options: ['ทำงาน', 'ลาออก'] },
   { key: 'type', label: 'ประเภท', type: 'text' },
   { key: 'position', label: 'ตำแหน่ง', type: 'text' },
@@ -148,6 +168,103 @@ export default function EmployeeList() {
     }
   };
   useEffect(() => { loadProfiles(); }, []);
+
+  /* ================== ย้ายสาขา ==================
+     ตั้งย้ายจากฟอร์มแก้ไข (dropdown สาขา + วันที่มีผล) → office-server ย้ายให้เองเมื่อถึงวัน (branch-transfer.js)
+     pendingMoves = รายการรอย้ายของทุกคน ไว้ขึ้นป้าย "รอย้าย" ในตาราง
+     personMoves  = ประวัติสาขาของคนที่เปิดกล่องข้อมูลอยู่ */
+  const { branches: registry } = useBranches();
+  const [pendingMoves, setPendingMoves] = useState(() => new Map());
+  const [personMoves, setPersonMoves] = useState(null);   // { hrCode, data[], joined, loading, error }
+  const [cancellingMove, setCancellingMove] = useState(0);
+
+  const loadPendingMoves = async () => {
+    try {
+      const r = await fetch('/api/employee-hr?view=transfers&pending=1', { cache: 'no-store' });
+      const j = await r.json().catch(() => null);
+      if (j?.status === 'success') setPendingMoves(new Map((j.data || []).map(t => [String(t.hrCode).trim().toLowerCase(), t])));
+    } catch (err) {
+      console.warn('โหลดรายการรอย้ายสาขาไม่สำเร็จ:', err?.message || err);
+    }
+  };
+  useEffect(() => { loadPendingMoves(); }, []);
+  const pendingOf = (emp) => (emp?.hrCode ? pendingMoves.get(String(emp.hrCode).trim().toLowerCase()) || null : null);
+
+  const loadPersonMoves = async (hrCode) => {
+    if (!hrCode) { setPersonMoves(null); return; }
+    setPersonMoves({ hrCode, data: [], joined: null, loading: true, error: '' });
+    try {
+      const r = await fetch(`/api/employee-hr?view=transfers&hrCode=${encodeURIComponent(hrCode)}`, { cache: 'no-store' });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || j?.status !== 'success') throw new Error(j?.message || `HTTP ${r.status}`);
+      setPersonMoves({ hrCode, data: j.data || [], joined: j.joined || null, loading: false, error: '' });
+    } catch (err) {
+      setPersonMoves({ hrCode, data: [], joined: null, loading: false, error: err.message || 'โหลดประวัติสาขาไม่สำเร็จ' });
+    }
+  };
+
+  const cancelMove = async (t) => {
+    if (!window.confirm(`ยกเลิกการย้าย ${t.fullName} ไป ${t.toBranch.toUpperCase()} (มีผล ${thShort(t.effectiveDate)}) ?`)) return;
+    setCancellingMove(t.id);
+    try {
+      const j = await hrPost({ action: 'cancelTransfer', transferId: t.id });
+      hotToast.success(j.data?.message || 'ยกเลิกแล้ว');
+      await Promise.all([loadPendingMoves(), loadPersonMoves(t.hrCode)]);
+    } catch (err) {
+      hotToast.error(err.message || 'ยกเลิกไม่สำเร็จ');
+    } finally {
+      setCancellingMove(0);
+    }
+  };
+
+  /** ส่วนประวัติสาขาในกล่องข้อมูลพนักงาน */
+  const renderBranchHistory = () => {
+    const emp = docTarget?.employee;
+    if (!emp) return null;
+    const pm = personMoves && personMoves.hrCode === emp.hrCode ? personMoves : null;
+    const pill = (code) => <span className="inline-flex px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-xs font-bold">{String(code || '-').toUpperCase()}</span>;
+    return (
+      <section>
+        <h4 className="text-xs font-bold text-gray-500 tracking-wide mb-2">ประวัติสาขา</h4>
+        {!pm || pm.loading ? (
+          <p className="text-sm text-slate-400 flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> กำลังโหลด...</p>
+        ) : pm.error ? (
+          <p className="text-sm text-rose-600">{pm.error}</p>
+        ) : (
+          <ol className="relative border-l-2 border-slate-200 ml-2 space-y-3">
+            {pm.data.filter(t => t.status !== 'cancelled').map(t => (
+              <li key={t.id} className="ml-4">
+                <span className={`absolute -left-[7px] mt-1.5 w-3 h-3 rounded-full ring-2 ring-white ${t.status === 'pending' ? 'bg-amber-400' : 'bg-teal-600'}`} />
+                <div className="flex flex-wrap items-center gap-1.5 text-sm font-semibold text-slate-800">
+                  {pill(t.fromBranch)} <span className="text-slate-400">→</span> {pill(t.toBranch)}
+                  {t.status === 'pending' && <span className="ml-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold">รอย้าย</span>}
+                  {t.status === 'pending' && (
+                    <button onClick={() => cancelMove(t)} disabled={cancellingMove === t.id}
+                      className="ml-1 px-2 py-0.5 rounded-md border border-rose-200 text-rose-600 text-[11px] font-semibold hover:bg-rose-50 disabled:opacity-50">
+                      {cancellingMove === t.id ? 'กำลังยกเลิก…' : 'ยกเลิกการย้าย'}
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {t.status === 'pending' ? 'จะย้าย' : 'มีผล'} {thShort(t.effectiveDate)}
+                  {t.reason ? ` · ${t.reason}` : ''} · บันทึกโดย {t.requestedBy || '-'} เมื่อ {thStamp(t.requestedAt)}
+                </p>
+              </li>
+            ))}
+            <li className="ml-4">
+              <span className="absolute -left-[7px] mt-1.5 w-3 h-3 rounded-full ring-2 ring-white bg-emerald-500" />
+              <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+                เข้าทำงาน{pm.joined?.branch ? <>ที่ {pill(pm.joined.branch)}</> : ''}
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {thShort(pm.joined?.startDate || emp.startDate)}{pm.joined?.recordedBy ? ` · บันทึกโดย ${pm.joined.recordedBy}` : ''}
+              </p>
+            </li>
+          </ol>
+        )}
+      </section>
+    );
+  };
   const profileOf = (emp) => (emp?.hrCode ? profiles.get(String(emp.hrCode).trim().toLowerCase()) || null : null);
   const draftFrom = (p) => ({ ...emptyProfile(), ...Object.fromEntries(PROFILE_FIELDS.map(f => [f.key, p?.[f.key] || ''])) });
 
@@ -155,6 +272,7 @@ export default function EmployeeList() {
   const openPerson = (employee, doc) => {
     setProfileDraft(draftFrom(profileOf(employee)));
     setDocTarget({ employee, doc });
+    loadPersonMoves(employee?.hrCode);
   };
 
   /** ส่วนข้อมูลส่วนตัวในกล่องข้อมูลพนักงาน (renderExtra ของ EmployeeDocModal) */
@@ -389,7 +507,7 @@ export default function EmployeeList() {
       base[f.key] = f.key === 'startDate' ? startDateForInput(emp[f.key]) : (emp[f.key] ?? '');
     });
     setFormMsg(null);
-    setEditEmp({ hrCode: emp.hrCode, ...base, _orig: { ...base } });
+    setEditEmp({ hrCode: emp.hrCode, ...base, _orig: { ...base }, _moveDate: todayYmd(), _moveReason: '' });
   };
 
   const setField = (key, val) => setEditEmp(m => ({ ...m, [key]: val }));
@@ -418,14 +536,22 @@ export default function EmployeeList() {
       EDIT_FIELDS.forEach(f => {
         if (String(editEmp[f.key] ?? '') !== String(editEmp._orig[f.key] ?? '')) changed[f.key] = editEmp[f.key];
       });
-      if (Object.keys(changed).length === 0) { setFormMsg({ ok: false, msg: 'ไม่มีการเปลี่ยนแปลง' }); setSavingEmp(false); return; }
+      // สาขาไม่เขียนตรง — ไปเป็นรายการย้ายสาขาที่มีวันที่มีผลแทน (ย้ายทันทีถ้าเป็นวันนี้/ย้อนหลัง)
+      const moveTo = changed.branch !== undefined && !sameValue('branch', changed.branch, editEmp._orig.branch) ? changed.branch : '';
+      delete changed.branch;
+      if (moveTo && !/^\d{4}-\d{2}-\d{2}$/.test(editEmp._moveDate || '')) throw new Error('ระบุวันที่มีผลของการย้ายสาขา');
+      if (Object.keys(changed).length === 0 && !moveTo) { setFormMsg({ ok: false, msg: 'ไม่มีการเปลี่ยนแปลง' }); setSavingEmp(false); return; }
+
+      let wrote = 0;
+      let skipped = [];
+      if (Object.keys(changed).length > 0) {
       const res = await apiCall('saveEmployee', { hrCode: editEmp.hrCode, ...changed });
 
       // บอกตามที่เขียนลงฐานได้จริง ไม่ใช่ตามจำนวนช่องที่ผู้ใช้แก้
       // ฝั่ง API คืน updated = ช่องที่เขียนได้ · skipped = ช่องที่ตารางไม่มีคอลัมน์รองรับ
       const d = res.data || {};
-      const wrote = Array.isArray(d.updated) ? d.updated.length : (Number(d.updated) ? Object.keys(changed).length : 0);
-      const skipped = Array.isArray(d.skipped) ? d.skipped : [];
+      wrote = Array.isArray(d.updated) ? d.updated.length : (Number(d.updated) ? Object.keys(changed).length : 0);
+      skipped = Array.isArray(d.skipped) ? d.skipped : [];
       if (wrote === 0) {
         throw new Error(skipped.length
           ? `ไม่มีช่องไหนถูกบันทึก — ตารางพนักงานไม่มีคอลัมน์ของ ${skipped.map(k => LABEL_OF[k] || k).join(', ')}`
@@ -445,10 +571,22 @@ export default function EmployeeList() {
             + ' — ลองใหม่อีกครั้ง ถ้ายังเป็นเหมือนเดิมให้แจ้ง IT ตรวจ narai_hr.dbo.hr_employee');
         }
       }
+      }
+
+      let moveMsg = '';
+      if (moveTo) {
+        try {
+          const j = await hrPost({ action: 'transfer', hrCode: editEmp.hrCode, toBranch: moveTo, effectiveDate: editEmp._moveDate, reason: editEmp._moveReason });
+          moveMsg = j.data?.message || 'บันทึกการย้ายสาขาแล้ว';
+        } catch (err) {
+          throw new Error(`${wrote ? `บันทึกช่องอื่นแล้ว ${wrote} ช่อง แต่` : ''}ย้ายสาขาไม่สำเร็จ: ${err.message}`);
+        }
+        await Promise.all([fetchEmployees(), loadPendingMoves()]);
+      }
 
       setToast({
         ok: skipped.length === 0,
-        msg: `บันทึก ${editEmp.hrCode} แล้ว ${wrote} ช่อง`
+        msg: [wrote ? `บันทึก ${editEmp.hrCode} แล้ว ${wrote} ช่อง` : '', moveMsg].filter(Boolean).join(' · ')
           + (skipped.length ? ` · ตารางไม่มีคอลัมน์: ${skipped.map(k => LABEL_OF[k] || k).join(', ')}` : ''),
       });
       setEditEmp(null);   // ปิดฟอร์มเฉพาะตอนที่ยืนยันแล้วว่าข้อมูลเปลี่ยนจริง
@@ -769,7 +907,15 @@ export default function EmployeeList() {
                       >{emp.fullName || '-'}</button>
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm"><NatBadge doc={docOf(emp)} /></td>
-                    <td className="px-2 py-2 whitespace-nowrap text-sm font-medium text-indigo-600">{emp.branch || '-'}</td>
+                    <td className="px-2 py-2 whitespace-nowrap text-sm font-medium text-indigo-600">
+                      {emp.branch || '-'}
+                      {pendingOf(emp) && (
+                        <span title={`ตั้งย้ายไว้ · ${pendingOf(emp).reason || ''}`}
+                          className="ml-1.5 inline-flex px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold align-middle">
+                          รอย้าย → {pendingOf(emp).toBranch.toUpperCase()} {thShort(pendingOf(emp).effectiveDate)}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-2 py-2 whitespace-nowrap text-sm">
                       {emp.status === 'ลาออก' ? (
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-rose-100 text-rose-800">{emp.status}</span>
@@ -830,7 +976,7 @@ export default function EmployeeList() {
           doc={docTarget.doc}
           onSave={handleDocSave}
           nameEditable
-          renderExtra={renderProfile}
+          renderExtra={(editing) => <>{renderBranchHistory()}{renderProfile(editing)}</>}
           onCancelEdit={() => setProfileDraft(draftFrom(profileOf(docTarget.employee)))}
           onClose={() => setDocTarget(null)}
           linkCandidates={docTarget.employee ? [] : linkCandidatesFor(docTarget.doc)}
@@ -852,7 +998,16 @@ export default function EmployeeList() {
               {EDIT_FIELDS.map(f => (
                 <div key={f.key} className={f.key === 'fullName' ? 'sm:col-span-2' : ''}>
                   <label className="text-xs font-bold text-slate-500">{f.label}</label>
-                  {f.type === 'select' ? (
+                  {f.type === 'branch' ? (
+                    <select value={String(editEmp.branch || '').toUpperCase()} onChange={e => setField('branch', e.target.value)}
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500">
+                      {[...new Set([String(editEmp._orig.branch || '').toUpperCase(), ...registry.map(b => String(b.code).toUpperCase())])].filter(Boolean).map(code => {
+                        const b = registry.find(x => String(x.code).toUpperCase() === code);
+                        const cur = code === String(editEmp._orig.branch || '').toUpperCase();
+                        return <option key={code} value={code}>{code}{b?.name ? ` — ${b.name}` : ''}{cur ? ' (สาขาปัจจุบัน)' : ''}</option>;
+                      })}
+                    </select>
+                  ) : f.type === 'select' ? (
                     <select value={editEmp[f.key]} onChange={e => setField(f.key, e.target.value)}
                       className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-purple-500">
                       {f.options.map(o => <option key={o} value={o}>{o}</option>)}
@@ -862,8 +1017,34 @@ export default function EmployeeList() {
                       className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500" />
                   )}
                   {f.hint && <p className="text-[10px] text-slate-400 mt-0.5">{f.hint}</p>}
+                  {f.type === 'branch' && pendingMoves.get(String(editEmp.hrCode).trim().toLowerCase()) && (
+                    <p className="text-[11px] text-amber-700 mt-1">มีรายการรอย้ายไป {pendingMoves.get(String(editEmp.hrCode).trim().toLowerCase()).toBranch.toUpperCase()} อยู่แล้ว — ยกเลิกได้ที่ประวัติสาขา (กดที่ชื่อพนักงาน)</p>
+                  )}
                 </div>
               ))}
+              {!sameValue('branch', editEmp.branch, editEmp._orig.branch) && (
+                <div className="sm:col-span-2 bg-cyan-50 border border-cyan-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <p className="sm:col-span-2 text-sm font-bold text-cyan-800">
+                    ⇄ ย้ายสาขา {String(editEmp._orig.branch || '-').toUpperCase()} → {String(editEmp.branch || '').toUpperCase()}
+                  </p>
+                  <div>
+                    <label className="text-xs font-bold text-slate-500">วันที่มีผล</label>
+                    <input type="date" value={editEmp._moveDate} onChange={e => setField('_moveDate', e.target.value)}
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-slate-500">เหตุผล</label>
+                    <input value={editEmp._moveReason} onChange={e => setField('_moveReason', e.target.value)} placeholder="เช่น ขอย้ายใกล้บ้าน"
+                      className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-cyan-500" />
+                  </div>
+                  <p className="sm:col-span-2 text-xs text-cyan-800">
+                    {editEmp._moveDate > todayYmd()
+                      ? `ยังอยู่สาขาเดิมจนถึงวันที่มีผล — ระบบย้ายให้เองวันที่ ${thShort(editEmp._moveDate)}`
+                      : 'ย้ายทันทีเมื่อกดบันทึก'}
+                    {' · '}ตารางงานเก่าอยู่ที่สาขาเดิม · เก็บประวัติการย้ายให้อัตโนมัติ
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="p-5 border-t border-slate-100 flex items-center justify-end gap-3">

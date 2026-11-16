@@ -4,6 +4,11 @@
 //        → { data:[{ hrCode, phone, address, idCard, birthday, lineId, nationality, documents, attachments[] }] }
 //   GET  /api/employee-hr?view=movements&start=YYYY-MM-DD&end=YYYY-MM-DD[&branch=sum]
 //        → { data:[{ kind:'in'|'out', hrCode, fullName, branch, ..., recordedAt }] }   ดูอย่างเดียว
+//   GET  /api/employee-hr?view=transfers&pending=1        รายการรอย้ายสาขาทั้งหมด
+//   GET  /api/employee-hr?view=transfers&hrCode=...        ประวัติสาขาของคนเดียว (+ วันเข้าทำงาน)
+//   GET  /api/employee-hr?view=transfers&start&end[&branch] ย้ายสาขาตามช่วงวันที่มีผล
+//   POST /api/employee-hr { action:'transfer', hrCode, toBranch, effectiveDate, reason }   ตั้งย้าย (วันนี้ = ย้ายทันที)
+//   POST /api/employee-hr { action:'cancelTransfer', transferId }                         ยกเลิกรายการรอย้าย
 //   POST /api/employee-hr { action:'saveProfile', hrCode, phone, address, idCard, birthday, lineId } → { profile }
 //   POST /api/employee-hr { action:'import', kind:'employees'|'movements', rows:[...], reset? }
 //
@@ -52,10 +57,18 @@ export default async function handler(req, res) {
         }, { what: 'ดึงประวัติพนักงานเข้า-ออก', as });
         return res.status(200).json({ status: 'success', ready: out?.ready !== false, data: out?.data || [] });
       }
+      if (view === 'transfers') {
+        const q = req.query;
+        const payload = txt(q.pending) === '1' ? { pending: true }
+          : txt(q.hrCode) ? { hrCode: txt(q.hrCode) }
+            : { start: txt(q.start), end: txt(q.end), branch: txt(q.branch) };
+        const out = await callSchedule('getBranchTransfers', payload, { what: 'ดึงรายการย้ายสาขา', as });
+        return res.status(200).json({ status: 'success', ready: out?.ready !== false, data: out?.data || [], joined: out?.joined || null });
+      }
     } catch (err) {
       return failed(res, err);
     }
-    return res.status(400).json({ status: 'error', message: 'view ต้องเป็น profiles หรือ movements' });
+    return res.status(400).json({ status: 'error', message: 'view ต้องเป็น profiles, movements หรือ transfers' });
   }
 
   if (req.method !== 'POST') {
@@ -69,6 +82,16 @@ export default async function handler(req, res) {
         hrCode: txt(b.hrCode), phone: txt(b.phone), address: txt(b.address),
         idCard: txt(b.idCard), birthday: txt(b.birthday), lineId: txt(b.lineId),
       }, { what: 'บันทึกข้อมูลส่วนตัวพนักงาน', as });
+      return res.status(200).json({ status: 'success', data, message: data?.message });
+    }
+    if (b.action === 'transfer') {
+      const data = await callSchedule('scheduleBranchTransfer', {
+        hrCode: txt(b.hrCode), toBranch: txt(b.toBranch), effectiveDate: txt(b.effectiveDate), reason: txt(b.reason),
+      }, { what: 'ย้ายสาขาพนักงาน', as });
+      return res.status(200).json({ status: 'success', data, message: data?.message });
+    }
+    if (b.action === 'cancelTransfer') {
+      const data = await callSchedule('cancelBranchTransfer', { transferId: Number(b.transferId) || 0 }, { what: 'ยกเลิกการย้ายสาขา', as });
       return res.status(200).json({ status: 'success', data, message: data?.message });
     }
     if (b.action === 'import') {
