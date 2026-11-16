@@ -8,6 +8,7 @@
 //   GET  /api/employee-hr?view=transfers&hrCode=...        ประวัติสาขาของคนเดียว (+ วันเข้าทำงาน)
 //   GET  /api/employee-hr?view=transfers&start&end[&branch] ย้ายสาขาตามช่วงวันที่มีผล
 //   POST /api/employee-hr { action:'transfer', hrCode, toBranch, effectiveDate, reason }   ตั้งย้าย (วันนี้ = ย้ายทันที)
+//   POST /api/employee-hr { action:'renameCode', oldCode, newCode }   เปลี่ยนรหัสพนักงานในทุกตาราง (กันรหัสซ้ำ)
 //   POST /api/employee-hr { action:'cancelTransfer', transferId }                         ยกเลิกรายการรอย้าย
 //   POST /api/employee-hr { action:'saveProfile', hrCode, phone, address, idCard, birthday, lineId } → { profile }
 //   POST /api/employee-hr { action:'import', kind:'employees'|'movements', rows:[...], reset? }
@@ -88,6 +89,10 @@ export default async function handler(req, res) {
       const data = await callSchedule('scheduleBranchTransfer', {
         hrCode: txt(b.hrCode), toBranch: txt(b.toBranch), effectiveDate: txt(b.effectiveDate), reason: txt(b.reason),
       }, { what: 'ย้ายสาขาพนักงาน', as });
+      return res.status(200).json({ status: 'success', data, message: data?.message });
+    }
+    if (b.action === 'renameCode') {
+      const data = await callSchedule('renameEmployeeCode', { oldCode: txt(b.oldCode), newCode: txt(b.newCode) }, { what: 'เปลี่ยนรหัสพนักงาน', as });
       return res.status(200).json({ status: 'success', data, message: data?.message });
     }
     if (b.action === 'cancelTransfer') {
