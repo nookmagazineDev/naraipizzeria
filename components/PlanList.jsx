@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info, RefreshCw, Plus, Trash2, Settings } from 'lucide-react';
+import { ClipboardList, Search, Loader2, AlertCircle, Download, X, Building2, Calendar, Info, RefreshCw, Plus, Trash2, Settings, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import * as XLSX from 'xlsx-js-style';
 import { isIncludedBranch } from '../lib/excludedBranches';
 import { makePlanMatcher, normItemCode, validateItemCode, STATUS_INACTIVE } from '../lib/planItems';
@@ -283,6 +283,46 @@ export default function PlanList() {
   }), [filtered]);
 
   // แถวดิบของรายการที่เลือก (ตามตัวกรองสาขา+ช่วงวันที่บันทึกด้วย) เรียงคีย์เวลาล่าสุดก่อน
+  /*
+   * แจ้งเตือนคีย์ซ้ำ: สาขาเดียวกัน + วันที่ส่งเดียวกัน แต่มีใบสั่งมากกว่า 1 ใบ
+   * ปกติสาขาหนึ่งควรมีใบเดียวต่อวันที่ส่ง — เกิน 1 ใบ = กดส่งซ้ำ หรือคีย์เพิ่มทีหลัง ต้องให้คนดูว่าตั้งใจไหม
+   * รายการที่อยู่ในหลายใบของวันเดียวกัน (dupItems) คือตัวที่มีโอกาสส่งเกินจริงมากที่สุด
+   * ดูจากใบที่อยู่ในช่วงวันที่สั่งที่เลือกเท่านั้น (หมวดตามตัวกรอง แต่ไม่ตามคำค้น)
+   */
+  const dupAlerts = useMemo(() => {
+    const groups = {};
+    baseRows.forEach(r => {
+      if (branchFilter && r.branch !== branchFilter) return;
+      const date = r.deliverDate || r.receiveDate;
+      if (!date || !r.orderNo) return;
+      const gk = `${r.branch}|${date}`;
+      const g = groups[gk] || (groups[gk] = { branch: r.branch, date, orders: {}, items: {} });
+      const o = g.orders[r.orderNo] || (g.orders[r.orderNo] = { orderNo: r.orderNo, orderDate: r.orderDate, recordTime: r.recordTime, _key: sortKey(r), lines: 0 });
+      o.lines++;
+      const it = g.items[r.itemCode] || (g.items[r.itemCode] = { itemCode: r.itemCode, itemName: r.itemName, unit: r.unit, perOrder: {} });
+      it.perOrder[r.orderNo] = (it.perOrder[r.orderNo] || 0) + r.qty;
+    });
+    return Object.values(groups)
+      .filter(g => Object.keys(g.orders).length > 1)
+      .map(g => ({
+        branch: g.branch, date: g.date,
+        orders: Object.values(g.orders).sort((a, b) => a._key.localeCompare(b._key)),
+        dupItems: Object.values(g.items)
+          .filter(it => Object.keys(it.perOrder).length > 1)
+          .map(it => ({ ...it, qtys: Object.values(it.perOrder), total: Object.values(it.perOrder).reduce((a, b) => a + b, 0) })),
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.branch.localeCompare(b.branch));
+  }, [baseRows, branchFilter]);
+
+  // รายการ+วันที่ส่ง ที่อยู่ในหลายใบ — ไว้ติดป้ายเตือนบนชิปวันที่ส่งในตารางหลัก
+  const dupItemDates = useMemo(() => {
+    const set = new Set();
+    dupAlerts.forEach(a => a.dupItems.forEach(it => set.add(`${it.itemCode}|${a.date}`)));
+    return set;
+  }, [dupAlerts]);
+  const [dupOpen, setDupOpen] = useState(false);
+  const DUP_PREVIEW = 3;
+
   const detailRows = useMemo(() => {
     if (!selectedItem) return [];
     return baseRows
@@ -375,10 +415,24 @@ export default function PlanList() {
     for (let c = 0; c < 7; c++) { const cell = ws3[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
     XLSX.utils.book_append_sheet(wb, ws3, 'ตามวันที่ส่ง');
 
+    // คีย์ซ้ำ — สาขาเดียวกัน วันที่ส่งเดียวกัน มีหลายใบ (มีเฉพาะตอนเจอ)
+    if (dupAlerts.length) {
+      const dAoa = [['วันที่ส่ง', 'วัน', 'สาขา', 'จำนวนใบ', 'เลขที่ใบสั่ง (วันเวลาคีย์)', 'รายการที่อยู่ในหลายใบ']];
+      dupAlerts.forEach(a => dAoa.push([
+        a.date, dayParts(a.date).dow, a.branch, a.orders.length,
+        a.orders.map(o => `${o.orderNo} (${o.orderDate} ${o.recordTime || ''})`.trim()).join(', '),
+        a.dupItems.map(it => `${it.itemName || it.itemCode} ${it.qtys.map(fmtNum).join('+')} = ${fmtNum(it.total)} ${it.unit || ''}`.trim()).join(' · ') || '— (คนละรายการ)',
+      ]));
+      const ws4 = XLSX.utils.aoa_to_sheet(dAoa);
+      ws4['!cols'] = [{ wch: 12 }, { wch: 5 }, { wch: 8 }, { wch: 9 }, { wch: 48 }, { wch: 70 }];
+      for (let c = 0; c < 6; c++) { const cell = ws4[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
+      XLSX.utils.book_append_sheet(wb, ws4, 'คีย์ซ้ำ');
+    }
+
     // ปฏิทินแยกชีทต่อไอเทม — ทำเฉพาะตอนกรองหมวดแพลนไว้
     // (ถ้าเปิด "ทุกหมวด" จะได้ชีทเป็นร้อย ไฟล์เปิดไม่ไหว)
     if (onlyPlan) {
-      const used = new Set(['สรุปรายการ', 'รายละเอียดทั้งหมด', 'ตามวันที่ส่ง']);
+      const used = new Set(['สรุปรายการ', 'รายละเอียดทั้งหมด', 'ตามวันที่ส่ง', 'คีย์ซ้ำ']);
       filtered.forEach(item => {
         const src = detailSrc.filter(r => r.itemCode === item.itemCode);
         if (!src.length) return;
@@ -570,6 +624,67 @@ export default function PlanList() {
           </div>
         )}
 
+        {/* แจ้งเตือนคีย์ซ้ำ: สาขาเดียวกัน วันที่ส่งเดียวกัน มีใบสั่งมากกว่า 1 ใบ */}
+        {!loading && !error && dupAlerts.length > 0 && (
+          <div className="m-4 rounded-xl border border-rose-200 bg-rose-50/70 text-sm">
+            <div className="flex items-start gap-2 p-3">
+              <AlertTriangle size={18} className="flex-shrink-0 mt-0.5 text-rose-600" />
+              <div className="flex-1">
+                <div className="font-bold text-rose-700">
+                  พบการคีย์ใบสั่งมากกว่า 1 รอบ ในวันที่ส่งเดียวกัน — {dupAlerts.length} จุด
+                </div>
+                <div className="text-xs text-rose-600/80 mt-0.5">
+                  ปกติแต่ละสาขาควรมีใบเดียวต่อวันที่ส่ง ตรวจว่าตั้งใจสั่งเพิ่มหรือกดส่งซ้ำ (ดูจากใบที่คีย์ในช่วงวันที่สั่งที่เลือก)
+                </div>
+              </div>
+            </div>
+            <div className="border-t border-rose-100 divide-y divide-rose-100">
+              {(dupOpen ? dupAlerts : dupAlerts.slice(0, DUP_PREVIEW)).map(a => {
+                const t = dayParts(a.date);
+                return (
+                  <div key={`${a.branch}|${a.date}`} className="px-3 py-2.5 flex flex-wrap items-start gap-x-4 gap-y-1.5">
+                    <div className="flex items-center gap-2 min-w-[190px]">
+                      <span className="px-2 py-0.5 rounded-md bg-white border border-rose-200 text-rose-700 text-xs font-bold">{a.branch}</span>
+                      <span className="font-mono text-xs text-slate-700">ส่ง {t.dow} {t.day}/{t.month}/{a.date.slice(0, 4)}</span>
+                      <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[11px] font-bold">{a.orders.length} ใบ</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 flex-1 min-w-[240px]">
+                      {a.orders.map(o => (
+                        <span key={o.orderNo} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white border border-slate-200 text-[11px] font-mono text-slate-600 whitespace-nowrap">
+                          <span className="font-bold text-slate-800">#{o.orderNo}</span>
+                          <span className="text-slate-400">คีย์ {o.orderDate} {o.recordTime}</span>
+                        </span>
+                      ))}
+                    </div>
+                    <div className="w-full pl-0.5 text-xs">
+                      {a.dupItems.length ? (
+                        <span className="text-rose-700">
+                          <span className="font-semibold">รายการซ้ำ: </span>
+                          {a.dupItems.map((it, i) => (
+                            <span key={it.itemCode}>
+                              {i > 0 && <span className="text-rose-300"> · </span>}
+                              {it.itemName || it.itemCode}{' '}
+                              <span className="font-mono font-bold">{it.qtys.map(fmtNum).join(' + ')} = {fmtNum(it.total)}</span> {it.unit}
+                            </span>
+                          ))}
+                        </span>
+                      ) : (
+                        <span className="text-slate-500">คนละรายการกัน (ไม่มีสินค้าซ้ำระหว่างใบ) — น่าจะเป็นการสั่งเพิ่ม</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {dupAlerts.length > DUP_PREVIEW && (
+              <button onClick={() => setDupOpen(o => !o)}
+                className="w-full border-t border-rose-100 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-100/60 rounded-b-xl inline-flex items-center justify-center gap-1">
+                {dupOpen ? <><ChevronUp size={14} /> ย่อ</> : <><ChevronDown size={14} /> ดูทั้งหมด {dupAlerts.length} จุด</>}
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 sticky top-0">
@@ -611,11 +726,16 @@ export default function PlanList() {
                       <div className="flex flex-wrap gap-1">
                         {x.deliveries.map(d => {
                           const t = d.date === '—' ? null : dayParts(d.date);
+                          const dup = dupItemDates.has(`${x.itemCode}|${d.date}`);
                           return (
-                            <span key={d.date} title={d.pending ? `ยังรอรับ ${d.pending} ใบ` : 'รับครบแล้ว'}
-                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-mono whitespace-nowrap border ${d.pending
+                            <span key={d.date}
+                              title={(dup ? 'คีย์ซ้ำ: มีมากกว่า 1 ใบในวันที่ส่งนี้ · ' : '') + (d.pending ? `ยังรอรับ ${d.pending} ใบ` : 'รับครบแล้ว')}
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-mono whitespace-nowrap border ${dup
+                                ? 'bg-rose-50 border-rose-300 text-rose-700 ring-1 ring-rose-200'
+                                : d.pending
                                 ? 'bg-amber-50 border-amber-100 text-amber-800'
                                 : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
+                              {dup && <AlertTriangle size={11} className="text-rose-600" />}
                               <span>{t ? `${t.dow} ${t.day}/${t.month}` : 'ไม่ระบุ'}</span>
                               <span className="font-bold">{fmtNum(d.qty)}</span>
                             </span>
