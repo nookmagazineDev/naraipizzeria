@@ -591,7 +591,7 @@ export default function PlanList() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-5">
+    <div className="w-full space-y-5">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -817,7 +817,7 @@ export default function PlanList() {
       {/* ───── Modal รายละเอียดรายการ ───── */}
       {selectedItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedItem(null)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[88vh] flex flex-col" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-[96vw] 2xl:max-w-[1600px] max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-slate-800">{selectedInfo?.itemName || selectedItem}</h3>
