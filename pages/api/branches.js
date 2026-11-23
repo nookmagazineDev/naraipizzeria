@@ -2,6 +2,7 @@
 //
 //   GET  /api/branches              -> รายชื่อสาขาทั้งหมด + รหัสพ้อง (ใช้เติม dropdown ทุกหน้า)
 //   GET  /api/branches?compare=1    -> แนบผลเทียบกับรายชื่อสาขาของระบบตารางงานมาด้วย
+//                                      + orderShops: ร้านของระบบเบิกของที่ยังไม่อยู่ในทะเบียน
 //   POST /api/branches              -> { action: 'saveBranch' | 'deleteBranch' | 'createTable'
 //                                              | 'saveAlias' | 'deleteAlias' | 'saveTarget', ... }
 //
@@ -27,7 +28,7 @@ import path from 'node:path';
 import { isConfigured as hasDirectDb, runQuery } from '../../lib/qcrdPool';
 import {
   readBranchRegistry, saveBranchRow, deleteBranchRow, sqlRoute, SHEETS_API_BASE,
-  readBranchAliases, saveAliasRow, deleteAliasRow, saveTargetRow,
+  readBranchAliases, saveAliasRow, deleteAliasRow, saveTargetRow, readOrderShops,
 } from '../../lib/sheetsSource';
 import { fetchScheduleBranches } from '../../lib/hrSchedule';
 import {
@@ -119,6 +120,35 @@ async function compareWithSchedule(list) {
   }
 }
 
+/**
+ * ร้านของระบบเบิกของ (dbo.order_shop) ที่ยังไม่อยู่ในทะเบียนนี้ — อ่านอย่างเดียว ไม่เขียนทะเบียนให้
+ * หน้า QC/RD วัตถุดิบเอาไปขึ้นเป็นปุ่ม "ระบบเบิก" ร้านที่เพิ่งเพิ่มในระบบเบิกจะได้ติ๊กวัตถุดิบได้เลย
+ *
+ * ตัดออก: ร้านที่ปิดใช้งานในระบบเบิก · รหัสที่มีในทะเบียนแล้ว (รวมสาขาที่ปิดในทะเบียน
+ * ไม่งั้นสาขาที่ตั้งใจปิดจะถูกดึงกลับมา) · รหัสพ้องที่ชี้ไปสาขาในทะเบียนอยู่แล้ว
+ * อ่านไม่ได้/ยังไม่มีตาราง ไม่ถือว่าพัง คืน ok:false หรือรายการว่าง
+ */
+async function compareWithOrderShops(list, aliases) {
+  try {
+    const shops = await readOrderShops();
+    if (!shops) return { ok: true, tableReady: false, missingInRegistry: [], names: {} };
+    const known = new Set(list.map((b) => normalizeCode(b.code)));
+    for (const a of aliases || []) {
+      if (known.has(normalizeCode(a.branchCode))) known.add(normalizeCode(a.alias));
+    }
+    const missing = shops.filter((s) => s.active && s.code && !known.has(s.code));
+    const codes = [...new Set(missing.map((s) => s.code))].sort();
+    return {
+      ok: true,
+      tableReady: true,
+      missingInRegistry: codes,
+      names: Object.fromEntries(missing.filter((s) => s.name).map((s) => [s.code, s.name])),
+    };
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
+}
+
 /** สร้างตารางจาก docs/schema-hr-branch.sql (รันซ้ำได้ ไม่ทับข้อมูลเดิม) */
 async function createTable() {
   // next.config.js สั่งแนบไฟล์นี้ไปกับฟังก์ชัน ไม่งั้นบน Vercel จะขึ้น ENOENT
@@ -161,8 +191,15 @@ export default async function handler(req, res) {
 
     // การเทียบกับระบบตารางงานไม่ต้องพึ่งฐานเลย (ยิงไป office-server ตรง ๆ)
     // จึงต้องทำได้แม้ตอนที่ยังต่อฐานไม่ได้และแสดงรายชื่อสำรองอยู่ — ไม่งั้นกดปุ่มแล้วเงียบ
-    const withCompare = async (payload, list) =>
-      wantCompare ? { ...payload, compare: await compareWithSchedule(list) } : payload;
+    // แนบร้านของระบบเบิกของมาด้วย (orderShops) — ยิงพร้อมกันกับการเทียบตารางงาน
+    const withCompare = async (payload, list) => {
+      if (!wantCompare) return payload;
+      const [compare, orderShops] = await Promise.all([
+        compareWithSchedule(list),
+        compareWithOrderShops(list, payload.aliases),
+      ]);
+      return { ...payload, compare, orderShops };
+    };
 
     if (!canWrite()) {
       const data = fallbackRows();
