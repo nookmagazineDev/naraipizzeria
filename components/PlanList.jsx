@@ -57,6 +57,11 @@ const sortKey = r => {
   return iso ? `${iso}${(r.recordTime || '').replace(/:/g, '')}` : '';
 };
 
+const MAX_DUP_SPAN_DAYS = 120;   // ช่วงวันที่ส่งที่ยอมดึงมาตรวจคีย์ซ้ำ
+const isISODateStr = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+// ตัวตนของแถวใบสั่ง — ไว้กันนับซ้ำตอนรวมข้อมูลสองชุด (ตามวันที่สั่ง + ตามวันที่ส่ง)
+const lineKey = r => `${r.branch}|${r.orderNo}|${r.seq}|${r.itemCode}`;
+
 // สถานะรับของ — มีเฉพาะข้อมูลสดจาก POS (ช่อง Ord_Rcv) ต้นทางสำเนาไม่มีให้
 const statusText = r => (r.received === true ? 'รับแล้ว' : r.received === false ? 'รอรับ' : '');
 
@@ -167,6 +172,43 @@ export default function PlanList() {
   };
   // เปลี่ยนช่วงวันที่ = ต้องไปดึงมาใหม่ ไม่ใช่แค่กรองของเดิม
   useEffect(load, [dateFrom, dateTo]);
+
+  /*
+   * ตรวจคีย์ซ้ำให้ครบ: ใบที่ส่งวันเดียวกันอาจถูกคีย์นอกช่วงวันที่สั่งที่เลือก (เช่น คีย์วันที่ 22 กับ 23 ส่งวันที่ 30)
+   * จึงดึงใบตาม "วันที่ส่ง" ของช่วงวันที่ส่งที่เจอในข้อมูลชุดนี้มาเพิ่มอีกรอบ
+   * แยกเป็นคำขอที่สองหลังตารางขึ้นแล้ว — orderd ไม่มี index ตามวันที่ คิวรีนี้กินเวลาอีกหลายวินาที ไม่ให้หน้ารอ
+   */
+  const [extraRows, setExtraRows] = useState([]);
+  const [dupCheck, setDupCheck] = useState({ state: 'idle', message: '' }); // idle | loading | done | error
+  const dupReqId = useRef(0);
+  useEffect(() => {
+    const myId = ++dupReqId.current;
+    setExtraRows([]);
+    const dates = rows.map(r => r.deliverDate || r.receiveDate).filter(isISODateStr);
+    if (loading || !dates.length) { setDupCheck({ state: 'idle', message: '' }); return; }
+    const from = dates.reduce((a, b) => (b < a ? b : a));
+    const to = dates.reduce((a, b) => (b > a ? b : a));
+    // วันที่ส่งเพี้ยน (เช่น คีย์ปีผิด) จะทำให้ช่วงกว้างจนคิวรีกวาดตารางนาน — เกินนี้ไม่ตรวจนอกช่วง
+    const spanDays = (Date.parse(to) - Date.parse(from)) / 86400000;
+    if (spanDays > MAX_DUP_SPAN_DAYS) {
+      setDupCheck({ state: 'error', message: `วันที่ส่งกระจาย ${Math.round(spanDays)} วัน (${from} ถึง ${to}) กว้างเกินไป` });
+      return;
+    }
+    setDupCheck({ state: 'loading', message: '' });
+    fetch(`/api/plan?from=${from}&to=${to}&by=deliver`)
+      .then(r => r.json())
+      .then(res => {
+        if (myId !== dupReqId.current) return;
+        if (res.status !== 'success') throw new Error(res.message || 'โหลดไม่สำเร็จ');
+        // ทางถอย (สำเนา) ไม่กรองช่วงให้ — กรองวันที่ส่งเองอีกชั้น
+        setExtraRows((res.data || []).filter(r => {
+          const d = r.deliverDate || r.receiveDate;
+          return isIncludedBranch(r.branch) && d >= from && d <= to;
+        }));
+        setDupCheck({ state: 'done', message: '' });
+      })
+      .catch(err => { if (myId === dupReqId.current) setDupCheck({ state: 'error', message: err.message }); });
+  }, [rows, loading]);
 
   const loadPlanItems = () =>
     fetch('/api/plan-items')
@@ -287,32 +329,39 @@ export default function PlanList() {
    * แจ้งเตือนคีย์ซ้ำ: สาขาเดียวกัน + วันที่ส่งเดียวกัน แต่มีใบสั่งมากกว่า 1 ใบ
    * ปกติสาขาหนึ่งควรมีใบเดียวต่อวันที่ส่ง — เกิน 1 ใบ = กดส่งซ้ำ หรือคีย์เพิ่มทีหลัง ต้องให้คนดูว่าตั้งใจไหม
    * รายการที่อยู่ในหลายใบของวันเดียวกัน (dupItems) คือตัวที่มีโอกาสส่งเกินจริงมากที่สุด
-   * ดูจากใบที่อยู่ในช่วงวันที่สั่งที่เลือกเท่านั้น (หมวดตามตัวกรอง แต่ไม่ตามคำค้น)
+   * นับทั้งใบในช่วงวันที่สั่งที่เลือก + ใบวันที่ส่งเดียวกันที่คีย์นอกช่วง (extraRows) — หมวดตามตัวกรอง แต่ไม่ตามคำค้น
+   * เตือนเฉพาะกลุ่มที่มีใบในช่วงที่เลือกอย่างน้อย 1 ใบ จะได้ตรงกับสิ่งที่กำลังดูอยู่
    */
   const dupAlerts = useMemo(() => {
     const groups = {};
-    baseRows.forEach(r => {
+    const seen = new Set(rows.map(lineKey));
+    const outside = extraRows.filter(r => !seen.has(lineKey(r)) && (!onlyPlan || isPlan(r.itemCode)));
+    const add = (r, inRange) => {
       if (branchFilter && r.branch !== branchFilter) return;
       const date = r.deliverDate || r.receiveDate;
       if (!date || !r.orderNo) return;
       const gk = `${r.branch}|${date}`;
-      const g = groups[gk] || (groups[gk] = { branch: r.branch, date, orders: {}, items: {} });
-      const o = g.orders[r.orderNo] || (g.orders[r.orderNo] = { orderNo: r.orderNo, orderDate: r.orderDate, recordTime: r.recordTime, _key: sortKey(r), lines: 0 });
+      const g = groups[gk] || (groups[gk] = { branch: r.branch, date, orders: {}, items: {}, hasInRange: false });
+      if (inRange) g.hasInRange = true;
+      const o = g.orders[r.orderNo] || (g.orders[r.orderNo] = { orderNo: r.orderNo, orderDate: r.orderDate, recordTime: r.recordTime, _key: sortKey(r), lines: 0, outside: !inRange });
       o.lines++;
       const it = g.items[r.itemCode] || (g.items[r.itemCode] = { itemCode: r.itemCode, itemName: r.itemName, unit: r.unit, perOrder: {} });
       it.perOrder[r.orderNo] = (it.perOrder[r.orderNo] || 0) + r.qty;
-    });
+    };
+    baseRows.forEach(r => add(r, true));
+    outside.forEach(r => add(r, false));
     return Object.values(groups)
-      .filter(g => Object.keys(g.orders).length > 1)
+      .filter(g => g.hasInRange && Object.keys(g.orders).length > 1)
       .map(g => ({
         branch: g.branch, date: g.date,
         orders: Object.values(g.orders).sort((a, b) => a._key.localeCompare(b._key)),
         dupItems: Object.values(g.items)
           .filter(it => Object.keys(it.perOrder).length > 1)
           .map(it => ({ ...it, qtys: Object.values(it.perOrder), total: Object.values(it.perOrder).reduce((a, b) => a + b, 0) })),
+        outsideCount: Object.values(g.orders).filter(o => o.outside).length,
       }))
       .sort((a, b) => a.date.localeCompare(b.date) || a.branch.localeCompare(b.branch));
-  }, [baseRows, branchFilter]);
+  }, [rows, baseRows, extraRows, branchFilter, onlyPlan, isPlan]);
 
   // รายการ+วันที่ส่ง ที่อยู่ในหลายใบ — ไว้ติดป้ายเตือนบนชิปวันที่ส่งในตารางหลัก
   const dupItemDates = useMemo(() => {
@@ -420,7 +469,7 @@ export default function PlanList() {
       const dAoa = [['วันที่ส่ง', 'วัน', 'สาขา', 'จำนวนใบ', 'เลขที่ใบสั่ง (วันเวลาคีย์)', 'รายการที่อยู่ในหลายใบ']];
       dupAlerts.forEach(a => dAoa.push([
         a.date, dayParts(a.date).dow, a.branch, a.orders.length,
-        a.orders.map(o => `${o.orderNo} (${o.orderDate} ${o.recordTime || ''})`.trim()).join(', '),
+        a.orders.map(o => `${o.orderNo} (${`${o.orderDate} ${o.recordTime || ''}`.trim()}${o.outside ? ' · นอกช่วง' : ''})`).join(', '),
         a.dupItems.map(it => `${it.itemName || it.itemCode} ${it.qtys.map(fmtNum).join('+')} = ${fmtNum(it.total)} ${it.unit || ''}`.trim()).join(' · ') || '— (คนละรายการ)',
       ]));
       const ws4 = XLSX.utils.aoa_to_sheet(dAoa);
@@ -542,7 +591,7 @@ export default function PlanList() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-5">
+    <div className="w-full space-y-5">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -634,7 +683,9 @@ export default function PlanList() {
                   พบการคีย์ใบสั่งมากกว่า 1 รอบ ในวันที่ส่งเดียวกัน — {dupAlerts.length} จุด
                 </div>
                 <div className="text-xs text-rose-600/80 mt-0.5">
-                  ปกติแต่ละสาขาควรมีใบเดียวต่อวันที่ส่ง ตรวจว่าตั้งใจสั่งเพิ่มหรือกดส่งซ้ำ (ดูจากใบที่คีย์ในช่วงวันที่สั่งที่เลือก)
+                  ปกติแต่ละสาขาควรมีใบเดียวต่อวันที่ส่ง ตรวจว่าตั้งใจสั่งเพิ่มหรือกดส่งซ้ำ (นับรวมใบวันที่ส่งเดียวกันที่คีย์นอกช่วงวันที่สั่งด้วย)
+                  {dupCheck.state === 'loading' && <span className="ml-1 inline-flex items-center gap-1 text-slate-500"><Loader2 size={11} className="animate-spin" /> กำลังตรวจใบที่คีย์นอกช่วง…</span>}
+                  {dupCheck.state === 'error' && <span className="ml-1 text-amber-700">· ตรวจใบที่คีย์นอกช่วงไม่ได้ ({dupCheck.message}) — นับเฉพาะใบในช่วง</span>}
                 </div>
               </div>
             </div>
@@ -650,9 +701,10 @@ export default function PlanList() {
                     </div>
                     <div className="flex flex-wrap gap-1.5 flex-1 min-w-[240px]">
                       {a.orders.map(o => (
-                        <span key={o.orderNo} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white border border-slate-200 text-[11px] font-mono text-slate-600 whitespace-nowrap">
+                        <span key={o.orderNo} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-white border ${o.outside ? 'border-violet-300 border-dashed' : 'border-slate-200'} text-[11px] font-mono text-slate-600 whitespace-nowrap`}>
                           <span className="font-bold text-slate-800">#{o.orderNo}</span>
                           <span className="text-slate-400">คีย์ {o.orderDate} {o.recordTime}</span>
+                          {o.outside && <span className="px-1 rounded bg-violet-100 text-violet-700 font-sans font-semibold" title="ใบนี้คีย์นอกช่วงวันที่สั่งที่เลือก แต่ส่งวันเดียวกัน">นอกช่วง</span>}
                         </span>
                       ))}
                     </div>
@@ -765,7 +817,7 @@ export default function PlanList() {
       {/* ───── Modal รายละเอียดรายการ ───── */}
       {selectedItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setSelectedItem(null)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[88vh] flex flex-col" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-[96vw] 2xl:max-w-[1600px] max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="p-5 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-slate-800">{selectedInfo?.itemName || selectedItem}</h3>
