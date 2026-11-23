@@ -37,8 +37,10 @@ sales_fallback.json
 scratch_test.js
 find_old_urls.py
 
-# IDE
-.claude
+# IDE — เก็บแค่ settings กับสกิลของ Claude ไว้ใน git ที่เหลือเป็นของเครื่องใครเครื่องมัน
+.claude/*
+!.claude/settings.json
+!.claude/skills/
 
 # ไฟล์ CSV ชั่วคราว/debug
 gs.csv
