@@ -8,8 +8,7 @@
 // ทางถอย (ตามลำดับ): dbo.stock_plan -> ชีท plan  พร้อมแนบ warning บอกว่าข้อมูลอาจไม่สด
 //
 // ⚠️ orderd ไม่มี index ตามวันที่ ต้องจำกัดช่วงเสมอ — ดูเหตุผลใน lib/planLive.js
-//    GET /api/plan?from=YYYY-MM-DD&to=YYYY-MM-DD[&by=deliver]   (ไม่ส่งมา = 30 วันล่าสุด)
-//    by=deliver = กรองด้วยวันที่ส่งของ (Ord_DelDate) · ไม่ส่ง/by=order = กรองด้วยวันที่สั่ง (Ord_OrdDate)
+//    GET /api/plan?from=YYYY-MM-DD&to=YYYY-MM-DD   (ไม่ส่งมา = 30 วันล่าสุด)
 import { fetchPlanRows } from '../../lib/sheetsSheet.mjs';
 import { usingSql, readPlan, sqlRoute } from '../../lib/sheetsSource';
 import { readPlanLive, bangkokToday, shiftDays, isISODate } from '../../lib/planLive';
@@ -24,8 +23,7 @@ function resolveRange(query) {
   const today = bangkokToday();
   const to = isISODate(query.to) ? query.to : today;
   const from = isISODate(query.from) ? query.from : shiftDays(to, -(DEFAULT_DAYS - 1));
-  const by = query.by === 'deliver' ? 'deliver' : 'order';
-  return from <= to ? { from, to, by } : { from: to, to: from, by };
+  return from <= to ? { from, to } : { from: to, to: from };
 }
 
 /** ทางถอยเดิม: SQL Server -> ชีท (ไม่มีช่วงวันที่ ตัวสำเนาเล็กพอที่จะดึงทั้งก้อน) */
