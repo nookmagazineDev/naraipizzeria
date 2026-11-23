@@ -63,6 +63,18 @@ const statusText = r => (r.received === true ? 'รับแล้ว' : r.recei
 // ชื่อวันแบบสั้น ไว้ทำหัวคอลัมน์ปฏิทิน (0 = อาทิตย์ ตาม getUTCDay)
 const TH_DOW = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 
+/** รวมจำนวนตามวันที่ส่ง เรียงจากวันแรก -> [{ date:'YYYY-MM-DD', qty, pending }] */
+const deliverBreakdown = map => Object.entries(map)
+  .sort(([a], [b]) => a.localeCompare(b))
+  .map(([date, v]) => ({ date, qty: v.qty, pending: v.pending }));
+
+/** ข้อความวันที่ส่งสำหรับ Excel: "จ 30/11 = 70 · พ 02/12 = 70" */
+const deliverText = list => list.map(d => {
+  if (d.date === '—') return `ไม่ระบุ = ${fmtNum(d.qty)}`;
+  const t = dayParts(d.date);
+  return `${t.dow} ${t.day}/${t.month} = ${fmtNum(d.qty)}`;
+}).join(' · ');
+
 /** 'YYYY-MM-DD' -> { dow:'จ', day:'08', month:'09', weekend:false } */
 const dayParts = iso => {
   const d = new Date(`${iso}T00:00:00Z`);
@@ -240,17 +252,22 @@ export default function PlanList() {
     baseRows.forEach(r => {
       if (branchFilter && r.branch !== branchFilter) return;
       const k = r.itemCode;
-      if (!g[k]) g[k] = { itemCode: k, itemName: r.itemName, unit: r.unit, qty: 0, total: 0, branches: new Set(), lines: 0, lastRecorded: '', lastDeliver: '', pending: 0, _key: '' };
+      if (!g[k]) g[k] = { itemCode: k, itemName: r.itemName, unit: r.unit, qty: 0, total: 0, branches: new Set(), lines: 0, lastRecorded: '', lastDeliver: '', pending: 0, byDeliver: {}, _key: '' };
       g[k].qty += r.qty;
       g[k].total += r.total;
       g[k].branches.add(r.branch);
       g[k].lines++;
       if (r.received === false) g[k].pending++;
       if (r.deliverDate && r.deliverDate > g[k].lastDeliver) g[k].lastDeliver = r.deliverDate;
+      // ยอดแยกตามวันที่ส่งของ — ใบที่คีย์ในช่วงวันที่สั่งนี้ ต้องส่งวันไหนเท่าไหร่
+      const dd = r.deliverDate || r.receiveDate || '—';
+      const slot = g[k].byDeliver[dd] || (g[k].byDeliver[dd] = { qty: 0, pending: 0 });
+      slot.qty += r.qty;
+      if (r.received === false) slot.pending++;
       const key = sortKey(r);
       if (key > g[k]._key) { g[k]._key = key; g[k].lastRecorded = r.orderDate; }
     });
-    return Object.values(g).map(x => ({ ...x, branchCount: x.branches.size }))
+    return Object.values(g).map(x => ({ ...x, branchCount: x.branches.size, deliveries: deliverBreakdown(x.byDeliver) }))
       .sort((a, b) => b.qty - a.qty);
   }, [baseRows, branchFilter]);
 
@@ -326,29 +343,42 @@ export default function PlanList() {
     if (!filtered.length) return;
     const wb = XLSX.utils.book_new();
 
-    const sumAoa = [['รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนรวม', 'มูลค่ารวม', 'จำนวนสาขาที่สั่ง', 'จำนวนครั้งสั่ง', 'สั่งล่าสุด', 'ส่งล่าสุด', 'ยังรอรับ (ใบ)']];
-    filtered.forEach(x => sumAoa.push([x.itemCode, x.itemName, x.unit, x.qty, x.total, x.branchCount, x.lines, x.lastRecorded, x.lastDeliver, x.pending || 0]));
+    const sumAoa = [['รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวนรวม', 'มูลค่ารวม', 'จำนวนสาขาที่สั่ง', 'จำนวนครั้งสั่ง', 'สั่งล่าสุด', 'วันที่ส่ง (จำนวน)', 'ยังรอรับ (ใบ)']];
+    filtered.forEach(x => sumAoa.push([x.itemCode, x.itemName, x.unit, x.qty, x.total, x.branchCount, x.lines, x.lastRecorded, deliverText(x.deliveries), x.pending || 0]));
     const ws1 = XLSX.utils.aoa_to_sheet(sumAoa);
-    ws1['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+    ws1['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 8 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 40 }, { wch: 12 }];
     for (let c = 0; c < 10; c++) { const cell = ws1[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
     XLSX.utils.book_append_sheet(wb, ws1, 'สรุปรายการ');
 
-    const detAoa = [['วันที่สั่ง', 'เวลา', 'สาขา', 'เลขที่ใบสั่ง', 'รหัสสินค้า', 'ชื่อสินค้า', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่ารวม', 'วันที่ส่ง', 'สถานะ', 'ผู้บันทึก']];
+    const detAoa = [['วันที่สั่ง', 'เวลา', 'วันที่ส่ง', 'สาขา', 'เลขที่ใบสั่ง', 'รหัสสินค้า', 'ชื่อสินค้า', 'จำนวน', 'หน่วย', 'ราคา/หน่วย', 'มูลค่ารวม', 'สถานะ', 'ผู้บันทึก']];
     // ให้ตรงกับที่เห็นบนจอ: ตามช่วงวันที่ + สาขา + คำค้นหา (เดิมชีตนี้ไม่ตามคำค้น เลยได้คนละชุดกับชีตสรุป)
     const codes = new Set(filtered.map(x => x.itemCode));
     const detailSrc = baseRows.filter(r =>
       codes.has(r.itemCode) && (!branchFilter || r.branch === branchFilter));
     [...detailSrc].sort((a, b) => sortKey(b).localeCompare(sortKey(a))).forEach(r =>
-      detAoa.push([r.orderDate, r.recordTime, r.branch, r.orderNo, r.itemCode, r.itemName, r.qty, r.unit, r.unitPrice, r.total, r.deliverDate || r.receiveDate, statusText(r), r.recordedBy]));
+      detAoa.push([r.orderDate, r.recordTime, r.deliverDate || r.receiveDate, r.branch, r.orderNo, r.itemCode, r.itemName, r.qty, r.unit, r.unitPrice, r.total, statusText(r), r.recordedBy]));
     const ws2 = XLSX.utils.aoa_to_sheet(detAoa);
-    ws2['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 34 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
+    ws2['!cols'] = [{ wch: 12 }, { wch: 9 }, { wch: 12 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 34 }, { wch: 9 }, { wch: 8 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
     for (let c = 0; c < 13; c++) { const cell = ws2[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
     XLSX.utils.book_append_sheet(wb, ws2, 'รายละเอียดทั้งหมด');
+
+    // ยอดตามวันที่ส่ง: ของที่คีย์ในช่วงวันที่สั่งนี้ ต้องส่งวันไหน รายการไหน เท่าไหร่
+    const delAoa = [['วันที่ส่ง', 'วัน', 'รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'จำนวน', 'ยังรอรับ (ใบ)']];
+    filtered
+      .flatMap(x => x.deliveries.map(d => ({ ...d, x })))
+      .sort((a, b) => a.date.localeCompare(b.date) || b.qty - a.qty)
+      .forEach(({ date, qty, pending, x }) => delAoa.push([
+        date, date === '—' ? '' : dayParts(date).dow, x.itemCode, x.itemName, x.unit, qty, pending || 0,
+      ]));
+    const ws3 = XLSX.utils.aoa_to_sheet(delAoa);
+    ws3['!cols'] = [{ wch: 12 }, { wch: 5 }, { wch: 12 }, { wch: 36 }, { wch: 8 }, { wch: 10 }, { wch: 12 }];
+    for (let c = 0; c < 7; c++) { const cell = ws3[XLSX.utils.encode_cell({ r: 0, c })]; if (cell) cell.s = HEAD_STYLE; }
+    XLSX.utils.book_append_sheet(wb, ws3, 'ตามวันที่ส่ง');
 
     // ปฏิทินแยกชีทต่อไอเทม — ทำเฉพาะตอนกรองหมวดแพลนไว้
     // (ถ้าเปิด "ทุกหมวด" จะได้ชีทเป็นร้อย ไฟล์เปิดไม่ไหว)
     if (onlyPlan) {
-      const used = new Set(['สรุปรายการ', 'รายละเอียดทั้งหมด']);
+      const used = new Set(['สรุปรายการ', 'รายละเอียดทั้งหมด', 'ตามวันที่ส่ง']);
       filtered.forEach(item => {
         const src = detailSrc.filter(r => r.itemCode === item.itemCode);
         if (!src.length) return;
@@ -552,7 +582,7 @@ export default function PlanList() {
                 <th className="px-3 py-3 text-center">สาขาที่สั่ง</th>
                 <th className="px-3 py-3 text-center">จำนวนครั้ง</th>
                 <th className="px-4 py-3 text-left">สั่งล่าสุด</th>
-                <th className="px-4 py-3 text-left">ส่งล่าสุด</th>
+                <th className="px-4 py-3 text-left">วันที่ส่ง (จำนวน)</th>
                 <th className="px-3 py-3 text-center">รอรับ</th>
               </tr>
             </thead>
@@ -576,7 +606,24 @@ export default function PlanList() {
                   </td>
                   <td className="px-3 py-2.5 text-center text-slate-500">{x.lines}</td>
                   <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap font-mono text-xs">{x.lastRecorded || '—'}</td>
-                  <td className="px-4 py-2.5 text-slate-500 whitespace-nowrap font-mono text-xs">{x.lastDeliver || '—'}</td>
+                  <td className="px-4 py-2.5">
+                    {x.deliveries.length ? (
+                      <div className="flex flex-wrap gap-1">
+                        {x.deliveries.map(d => {
+                          const t = d.date === '—' ? null : dayParts(d.date);
+                          return (
+                            <span key={d.date} title={d.pending ? `ยังรอรับ ${d.pending} ใบ` : 'รับครบแล้ว'}
+                              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-mono whitespace-nowrap border ${d.pending
+                                ? 'bg-amber-50 border-amber-100 text-amber-800'
+                                : 'bg-emerald-50 border-emerald-100 text-emerald-800'}`}>
+                              <span>{t ? `${t.dow} ${t.day}/${t.month}` : 'ไม่ระบุ'}</span>
+                              <span className="font-bold">{fmtNum(d.qty)}</span>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : <span className="text-slate-300 text-xs">—</span>}
+                  </td>
                   <td className="px-3 py-2.5 text-center">
                     {x.pending > 0
                       ? <span className="inline-block px-2 py-0.5 bg-amber-50 text-amber-700 rounded-full text-xs font-semibold">{x.pending}</span>
