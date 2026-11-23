@@ -11,7 +11,7 @@ import { makePlanMatcher, normItemCode, validateItemCode, STATUS_INACTIVE } from
  * ข้อมูลจึงตรงกันทันที (ทางถอย: สำเนาในชีท/SQL Server พร้อมแถบเตือนว่าอาจไม่สด)
  *
  * ทุกแถวมีสองวันที่ที่ต้องแยกให้ชัด: วันที่สั่ง (Ord_OrdDate) กับ วันที่ส่ง (Ord_DelDate)
- * ช่วงวันที่บนหน้าจอกรองด้วย "วันที่สั่ง" และถูกส่งไปให้ API จำกัดคิวรีด้วย
+ * ช่วงวันที่บนหน้าจอเลือกได้ว่ากรองด้วย "วันที่สั่ง" หรือ "วันที่ส่ง" และถูกส่งไปให้ API จำกัดคิวรีด้วย (by=order/deliver)
  * (orderd ใหญ่มากและไม่มี index ตามวันที่ — ดึงทั้งหมดไม่ได้)
  *
  * หน้าหลักสรุปยอดรวมต่อรายการ กดแถว → แยกตามสาขา + รายละเอียดทุกใบพร้อมสถานะรับของ
@@ -56,6 +56,10 @@ const sortKey = r => {
   const iso = toISO(r.orderDate);
   return iso ? `${iso}${(r.recordTime || '').replace(/:/g, '')}` : '';
 };
+
+// วันที่ที่ใช้กรองช่วง: order = วันที่สั่ง (วันคีย์) · deliver = วันที่ส่งของ
+const DATE_BY_LABEL = { order: 'วันที่สั่ง', deliver: 'วันที่ส่ง' };
+const rowDate = (r, by) => (by === 'deliver' ? toISO(r.deliverDate || r.receiveDate) : toISO(r.orderDate));
 
 // สถานะรับของ — มีเฉพาะข้อมูลสดจาก POS (ช่อง Ord_Rcv) ต้นทางสำเนาไม่มีให้
 const statusText = r => (r.received === true ? 'รับแล้ว' : r.received === false ? 'รอรับ' : '');
@@ -127,6 +131,9 @@ export default function PlanList() {
   // ช่วง "วันที่สั่ง" — ตัวนี้เป็นตัวกำหนดว่า API จะไปดึงใบสั่งช่วงไหนมา ไม่ใช่แค่กรองบนจอ
   const [dateFrom, setDateFrom] = useState(() => defaultRange().from);
   const [dateTo, setDateTo] = useState(() => defaultRange().to);
+  // ช่วงวันที่ข้างบนหมายถึงวันไหน — วันที่สั่ง (คีย์) หรือ วันที่ส่งของจริง
+  const [dateBy, setDateBy] = useState('order');
+  const dateLabel = DATE_BY_LABEL[dateBy];
   const [source, setSource] = useState('');     // pos = สดจาก POS · sql/sheet = สำเนา
   const [selectedItem, setSelectedItem] = useState(null); // itemCode ที่กำลังดูรายละเอียด
   // เปลี่ยนวันที่รัว ๆ แล้วคำตอบของช่วงเก่ามาถึงทีหลัง จะทับข้อมูลของช่วงใหม่ — นับรอบกันไว้
@@ -136,7 +143,7 @@ export default function PlanList() {
     if (!dateFrom || !dateTo) return;
     const myId = ++reqId.current;
     setLoading(true);
-    fetch(`/api/plan?from=${dateFrom}&to=${dateTo}`)
+    fetch(`/api/plan?from=${dateFrom}&to=${dateTo}&by=${dateBy}`)
       .then(async r => {
         // เซิร์ฟเวอร์ล่มมักตอบเป็นหน้า HTML ไม่ใช่ JSON — กัน error ดิบ ๆ ที่ผู้ใช้อ่านไม่รู้เรื่อง
         const text = await r.text();
@@ -154,7 +161,7 @@ export default function PlanList() {
       .finally(() => { if (myId === reqId.current) setLoading(false); });
   };
   // เปลี่ยนช่วงวันที่ = ต้องไปดึงมาใหม่ ไม่ใช่แค่กรองของเดิม
-  useEffect(load, [dateFrom, dateTo]);
+  useEffect(load, [dateFrom, dateTo, dateBy]);
 
   const loadPlanItems = () =>
     fetch('/api/plan-items')
@@ -215,24 +222,24 @@ export default function PlanList() {
   const dataRange = useMemo(() => {
     let min = '', max = '', minRaw = '', maxRaw = '', unreadable = 0;
     rows.forEach(r => {
-      const iso = toISO(r.orderDate);
+      const iso = rowDate(r, dateBy);
       if (!iso) { unreadable++; return; }
       if (!min || iso < min) { min = iso; minRaw = r.orderDate; }
       if (!max || iso > max) { max = iso; maxRaw = r.orderDate; }
     });
     return { min, max, minRaw, maxRaw, unreadable, readable: rows.length - unreadable };
-  }, [rows]);
+  }, [rows, dateBy]);
 
   // คัดตามหมวด + ช่วงวันที่สั่ง — ใช้ต่อทั้งสรุป/รายละเอียด/Excel จะได้เป็นชุดเดียวกันหมด
   const baseRows = useMemo(() => rows.filter(r => {
     if (onlyPlan && !isPlan(r.itemCode)) return false;
     if (!dateFrom && !dateTo) return true;
-    const iso = toISO(r.orderDate);
+    const iso = rowDate(r, dateBy);
     if (!iso) return false;
     if (dateFrom && iso < dateFrom) return false;
     if (dateTo && iso > dateTo) return false;
     return true;
-  }), [rows, dateFrom, dateTo, onlyPlan, isPlan]);
+  }), [rows, dateFrom, dateTo, dateBy, onlyPlan, isPlan]);
 
   // สรุปยอดรวมต่อรายการ (itemCode) พร้อมวันที่บันทึกข้อมูลล่าสุดของแต่ละรายการ
   const summary = useMemo(() => {
@@ -369,7 +376,7 @@ export default function PlanList() {
         // หัวเรื่อง 3 บรรทัด แล้วค่อยเป็นตารางปฏิทิน (แถว = สาขา, คอลัมน์ = วันที่ส่ง)
         const aoa = [
           [item.itemName ? `${item.itemName} (รหัส ${item.itemCode})` : `รหัส ${item.itemCode}`],
-          [`วันที่สั่ง ${dateFrom} ถึง ${dateTo}${branchFilter ? ` · เฉพาะสาขา ${branchFilter}` : ''}`],
+          [`${dateLabel} ${dateFrom} ถึง ${dateTo}${branchFilter ? ` · เฉพาะสาขา ${branchFilter}` : ''}`],
           [`หน่วย: ${item.unit || '—'} · ตัวเลขในตารางคือจำนวนที่ต้องส่ง · พื้นเหลือง = ยังไม่ได้รับ · พื้นเขียว = รับแล้ว`],
           [],
           ['สาขา', ...dates.map(d => { const t = dayParts(d); return `${t.dow} ${t.day}/${t.month}`; }), 'รวม'],
@@ -415,14 +422,14 @@ export default function PlanList() {
       });
     }
 
-    XLSX.writeFile(wb, `plan_procurement_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.writeFile(wb, `plan_${dateBy === 'deliver' ? 'deliver' : 'order'}_${dateFrom}_to_${dateTo}.xlsx`);
   };
 
   // ตารางว่างเพราะอะไร — บอกให้ตรงเหตุ ไม่ใช่ "ไม่พบรายการ" เฉย ๆ จนไล่ปัญหาไม่ถูก
   const emptyMessage = () => {
     if (!rows.length) return (
       <span>
-        ไม่มีใบสั่งของสาขาไหนเลยในช่วงวันที่สั่ง {dateFrom} ถึง {dateTo}
+        ไม่มีใบสั่งของสาขาไหนเลยในช่วง{dateLabel} {dateFrom} ถึง {dateTo}
         <button onClick={() => { const d = defaultRange(); setDateFrom(shiftISO(d.to, -89)); setDateTo(d.to); }}
           className="ml-2 text-cyan-600 hover:text-cyan-700 font-semibold underline">ลองขยายเป็น 90 วัน</button>
       </span>
@@ -430,8 +437,8 @@ export default function PlanList() {
 
     if (!dataRange.readable) return (
       <span className="text-rose-500">
-        อ่านรูปแบบ “วันที่สั่ง” จากต้นทางไม่ออกทั้ง {dataRange.unreadable.toLocaleString()} แถว
-        (ตัวอย่างค่าที่ได้มา: “{rows[0]?.orderDate || 'ว่าง'}”) — กรองตามวันที่จึงไม่เหลืออะไรเลย
+        อ่านรูปแบบ “{dateLabel}” จากต้นทางไม่ออกทั้ง {dataRange.unreadable.toLocaleString()} แถว
+        (ตัวอย่างค่าที่ได้มา: “{(dateBy === 'deliver' ? rows[0]?.deliverDate : rows[0]?.orderDate) || 'ว่าง'}”) — กรองตามวันที่จึงไม่เหลืออะไรเลย
       </span>
     );
 
@@ -469,7 +476,7 @@ export default function PlanList() {
                 {filtered.length.toLocaleString()} รายการ · จำนวนรวม {fmtNum(grand.qty)} · มูลค่ารวม ฿{fmtMoney(grand.total)}
                 {onlyPlan && <span className="ml-1.5 text-cyan-600 font-semibold">· เฉพาะหมวดแพลน</span>}
                 {(dateFrom || dateTo) && (
-                  <span className="ml-1.5 text-cyan-600 font-semibold">· วันที่สั่ง {dateFrom || '…'} ถึง {dateTo || '…'}</span>
+                  <span className="ml-1.5 text-cyan-600 font-semibold">· {dateLabel} {dateFrom || '…'} ถึง {dateTo || '…'}</span>
                 )}
                 {source && !loading && (
                   <span className={`ml-1.5 px-1.5 py-0.5 rounded text-[11px] font-semibold ${source === 'pos'
@@ -516,7 +523,12 @@ export default function PlanList() {
           </select>
           <div className="flex items-center gap-2 bg-cyan-50/60 border border-cyan-100 rounded-xl px-3 py-1.5">
             <Calendar size={14} className="text-cyan-600 flex-shrink-0" />
-            <span className="text-xs font-semibold text-cyan-700 whitespace-nowrap">วันที่สั่ง:</span>
+            <select value={dateBy} onChange={e => setDateBy(e.target.value)}
+              title="เลือกว่าช่วงวันที่นี้หมายถึงวันที่สั่ง (วันคีย์) หรือวันที่ส่งของจริง"
+              className="text-xs font-semibold text-cyan-700 bg-transparent border-0 pr-1 focus:outline-none cursor-pointer">
+              <option value="order">วันที่สั่ง:</option>
+              <option value="deliver">วันที่ส่ง:</option>
+            </select>
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
               className="border border-slate-200 rounded-lg px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-cyan-500" />
             <span className="text-slate-400 text-xs">-</span>
