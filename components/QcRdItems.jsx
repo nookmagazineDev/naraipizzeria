@@ -116,22 +116,34 @@ export default function QcRdItems() {
   // ใช้ผลเทียบของ /api/branches?compare=1 (missingInRegistry) — สาขาที่ปิดในทะเบียนแล้วไม่ถูกดึงกลับมา
   // ดึงไม่ได้ (เครื่องออฟฟิศดับ) ก็ใช้แค่ทะเบียนกลางตามเดิม
   const [appBranches, setAppBranches] = useState([]);
+  // ร้านของระบบเบิกของ (ordernaraipizzeria · dbo.order_shop) ที่ยังไม่อยู่ในทะเบียนกลาง — มาจากเส้นเดียวกัน
+  // (orderShops) เพิ่มร้านในระบบเบิกแล้วติ๊กวัตถุดิบให้ร้านนั้นได้เลย ร้านที่ปิดใช้งานในระบบเบิกไม่ขึ้น
+  // อ่านอย่างเดียว ไม่ได้เพิ่มร้านเข้าทะเบียนกลางให้ · ดึงไม่ได้ก็ไม่มีปุ่มกลุ่มนี้ หน้ายังใช้ได้ตามเดิม
+  const [orderShops, setOrderShops] = useState([]);
+  const [orderShopNames, setOrderShopNames] = useState({});
   useEffect(() => {
     let alive = true;
+    const clean = (list) => (list || []).map(c => String(c).trim().toUpperCase()).filter(Boolean);
     fetch('/api/branches?compare=1')
       .then(r => r.json())
       .then(res => {
-        if (!alive || !res?.compare?.ok) return;
-        setAppBranches((res.compare.missingInRegistry || []).map(c => String(c).trim().toUpperCase()).filter(Boolean));
+        if (!alive) return;
+        if (res?.compare?.ok) setAppBranches(clean(res.compare.missingInRegistry));
+        if (res?.orderShops?.ok) {
+          setOrderShops(clean(res.orderShops.missingInRegistry));
+          setOrderShopNames(res.orderShops.names || {});
+        }
       })
       .catch(() => { /* ใช้ทะเบียนกลางอย่างเดียว */ });
     return () => { alive = false; };
   }, []);
-  const BRANCHES = useMemo(
-    () => [...REGISTRY_BRANCHES, ...appBranches.filter(c => !REGISTRY_BRANCHES.includes(c)).sort()],
-    [REGISTRY_BRANCHES, appBranches],
-  );
+  const BRANCHES = useMemo(() => {
+    const app = appBranches.filter(c => !REGISTRY_BRANCHES.includes(c)).sort();
+    const shop = orderShops.filter(c => !REGISTRY_BRANCHES.includes(c) && !app.includes(c)).sort();
+    return [...REGISTRY_BRANCHES, ...app, ...shop];
+  }, [REGISTRY_BRANCHES, appBranches, orderShops]);
   const fromAppOnly = (code) => appBranches.includes(code) && !REGISTRY_BRANCHES.includes(code);
+  const fromOrderOnly = (code) => orderShops.includes(code) && !REGISTRY_BRANCHES.includes(code) && !appBranches.includes(code);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -1298,7 +1310,8 @@ export default function QcRdItems() {
                     return (
                       <button key={b} onClick={() => toggleBranch(b)}
                         title={retired ? `${b} ไม่อยู่ในทะเบียนสาขาที่เปิดใช้งานแล้ว — กดเพื่อเอาออกจากไอเทมนี้`
-                          : fromAppOnly(b) ? `${b} มีในระบบสาขา (Narai-branch) แต่ยังไม่อยู่ในทะเบียน HR → จัดการสาขา` : b}
+                          : fromAppOnly(b) ? `${b} มีในระบบสาขา (Narai-branch) แต่ยังไม่อยู่ในทะเบียน HR → จัดการสาขา`
+                          : fromOrderOnly(b) ? `${b}${orderShopNames[b] ? ` (${orderShopNames[b]})` : ''} มีในระบบเบิกของ แต่ยังไม่อยู่ในทะเบียน HR → จัดการสาขา` : b}
                         className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all ${on
                           ? (retired
                             ? 'bg-amber-500 border-amber-500 text-white'
@@ -1306,6 +1319,7 @@ export default function QcRdItems() {
                           : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
                         {b}{retired && <span className="ml-1 text-[9px] font-normal opacity-80">ปิดแล้ว</span>}
                         {!retired && fromAppOnly(b) && <span className="ml-1 text-[9px] font-normal opacity-70">ระบบสาขา</span>}
+                        {!retired && fromOrderOnly(b) && <span className="ml-1 text-[9px] font-normal opacity-70">ระบบเบิก</span>}
                       </button>
                     );
                   })}

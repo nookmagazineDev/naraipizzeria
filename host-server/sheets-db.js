@@ -16,6 +16,7 @@
 //    GET  /sheets/employee                 รายชื่อพนักงาน
 //    GET  /sheets/branch                   ทะเบียนสาขา (dbo.hr_branch)
 //    GET  /sheets/branch-alias             รหัสพ้องสาขา (dbo.hr_branch_alias)
+//    GET  /sheets/order-shop               ร้านของระบบเบิกของ (dbo.order_shop) อ่านอย่างเดียว
 //    GET  /sheets/branch-user              login ของสาขา (narai_hr.dbo.hr_user — คนละฐาน)
 //    GET  /sheets/stock-items?branch=crm   หน้านับสต๊อก: ยอดนับ/ยอดยกมา/ใบเบิกล่าสุดของสาขานั้น
 //    GET  /sheets/stock-total?endDate=     ยอดคงเหลือรวมทุกสาขา (ไม่ระบุวัน = ล่าสุด)
@@ -196,6 +197,10 @@ function mountSheets(app) {
   // ทะเบียนสาขา — dropdown เลือกสาขาทุกหน้าและตารางแมป outletID ฝั่ง API กินข้อมูลชุดนี้
   app.get('/sheets/branch', (req, res) =>
     send(res, getBranches().then(c => c.readBranches()), 'readBranches'));
+
+  // ร้านของระบบเบิกของ (dbo.order_shop) — อ่านอย่างเดียว หน้า QC/RD วัตถุดิบเอาไปเติมปุ่มสาขา
+  app.get('/sheets/order-shop', (req, res) =>
+    send(res, getBranches().then(c => c.readOrderShops()), 'readOrderShops'));
 
   // รหัสพ้อง (dbo.hr_branch_alias) — ตารางเดียวกับที่ตัวแปลรหัสสาขาฝั่ง API ใช้
   // ฝั่งเขียนไม่ต้องมีเส้นแยก /sheets/save ส่งต่อไปที่ branches.actions ให้อยู่แล้ว
