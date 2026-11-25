@@ -766,8 +766,12 @@ export default function EmployeeList() {
       const hrCode = String(emp.hrCode ?? '').toLowerCase();
       const fullName = String(emp.fullName ?? '').toLowerCase();
       const position = String(emp.position ?? '').toLowerCase();
+      const loga = String(emp.loga ?? '').toLowerCase();
       const matchesSearch =
-        hrCode.includes(search) || fullName.includes(search) || position.includes(search);
+        hrCode.includes(search) ||
+        fullName.includes(search) ||
+        position.includes(search) ||
+        loga.includes(search);
       const matchesStatus = statusFilter
         ? String(emp.status).toLowerCase() === statusFilter.toLowerCase()
         : true;
@@ -896,7 +900,7 @@ export default function EmployeeList() {
             </div>
             <input
               type="text"
-              placeholder="ค้นหาชื่อ, รหัส, ตำแหน่ง..."
+              placeholder="ค้นหาชื่อ, รหัส, ตำแหน่ง, เลข LOGA..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="block w-full md:w-80 pl-10 pr-3 py-2 border border-slate-200 rounded-xl leading-5 bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500 sm:text-sm transition-colors"
