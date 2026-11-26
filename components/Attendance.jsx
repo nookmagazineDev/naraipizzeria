@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx-js-style';
 import {
   Fingerprint, Loader2, Search, CalendarDays, ListOrdered,
   Building2, Download, AlertCircle, RefreshCw, CalendarClock,
-  Pencil, Check, X, CheckCircle, Lock
+  Pencil, Check, X, CheckCircle, Lock, Wallet
 } from 'lucide-react';
 import { hhmm, hoursToHm, assignOvernight, addDays, scanQueryBranch, keepBranchScans, summarizeDaily, attachSchedule, applyScanEdits, otNote, SCAN_SLOTS, slotLabel, totalLateOf } from '../lib/attendance';
 import { useBranches, useScanBranches } from '../lib/useBranches';
@@ -11,6 +11,8 @@ import { dayWork } from '../lib/payroll';
 import ScheduleLockPanel, { lockFor, thaiDate } from './ScheduleLockPanel';
 import PlanEditModal from './PlanEditModal';
 import { leaveText } from '../lib/leaveCodes';
+import { summarizeLabor } from '../lib/labor';
+import LaborDetail from './LaborDetail';
 
 /*
  * NARAI OFFICE — ดูสแกนหน้า (เข้า-ออกงาน)
@@ -192,7 +194,7 @@ const PRESETS = [
 ];
 
 export default function Attendance() {
-  const { codes: registryCodes } = useBranches();
+  const { codes: registryCodes, branches: registry } = useBranches();
   // ทะเบียนสาขา + พื้นที่ที่เจอในข้อมูลสแกน (เช่น OFFICE) — ดู useScanBranches
   const { codes: branchCodes, rememberAreas } = useScanBranches(registryCodes);
   const today = fmtDate(new Date());
@@ -210,6 +212,9 @@ export default function Attendance() {
   const [schedRows, setSchedRows] = useState([]);    // ตารางงานที่สาขาลงไว้ ในช่วงวันเดียวกัน
   const [schedNote, setSchedNote] = useState('');    // ดึงตารางงานไม่ได้/ได้ไม่ครบทุกสาขา
   const [loadedInfo, setLoadedInfo] = useState('');
+  // ช่วงวันที่/สาขาของข้อมูลที่ดึงมาแล้วจริง — การ์ดค่าแรงต้องอ้างช่วงนี้ ไม่ใช่ช่องวันที่ที่ผู้ใช้แก้ค้างไว้
+  const [loadedRange, setLoadedRange] = useState(null);   // { start, end, branch }
+  const [laborOpen, setLaborOpen] = useState(false);       // เปิดหน้ารายละเอียดค่าแรงอยู่
   const [search, setSearch] = useState('');
   const [view, setView] = useState('daily');         // 'daily' = สรุปรายวัน | 'raw' = ทุกครั้งที่สแกน
   const [showPlan, setShowPlan] = useState(true);    // เทียบกับตารางงานที่ลงไว้ (ปิดได้เพื่อดูตารางแบบสั้น)
@@ -265,6 +270,7 @@ export default function Attendance() {
 
       const range = s === e ? s : `${s} ถึง ${e}`;
       setLoadedInfo(`${range} · ${b || 'ทุกสาขา'} · ${punches.length} ครั้ง`);
+      setLoadedRange({ start: s, end: e, branch: b });
 
       // ตารางงานกับเวลาที่แก้ด้วยมือเป็นข้อมูลเสริม ดึงต่อจากเวลาสแกนเสมอ (คนละฐานข้อมูลกัน)
       // ดึงพร้อมกันได้ ไม่ได้พึ่งผลของกันและกัน และตัวไหนล้มก็ไม่ทำให้อีกตัวหาย
@@ -275,6 +281,7 @@ export default function Attendance() {
       ]);
     } catch (err) {
       setRows(null);
+      setLoadedRange(null);
       setSchedRows([]);
       setSchedNote('');
       setScanEdits([]);
@@ -457,6 +464,38 @@ export default function Attendance() {
       netHours: toHours(mins.netHours),
     };
   }, [daily]);
+
+  /* ------------------- ค่าแรงรวม (การ์ด + หน้ารายละเอียด) ------------------- */
+
+  // ค่าแรงของทั้งสาขาในช่วงที่ดึงมา — ไม่ผ่านช่องค้นหา (การ์ดเป็นยอดของสาขา ไม่ใช่ของคนที่ค้นอยู่)
+  const labor = useMemo(
+    () => (loadedRange ? summarizeLabor(schedRows, { start: loadedRange.start, end: loadedRange.end }) : null),
+    [schedRows, loadedRange]
+  );
+
+  // แถวรายวันครบทุกคนสำหรับตาราง "สแกนหักสาย" ในหน้ารายละเอียด — ไม่ผ่านช่องค้นหา และดึงคนที่ไม่มีสแกนมาด้วยเสมอ
+  // คิดเฉพาะตอนเปิดหน้ารายละเอียด จะได้ไม่เพิ่มงานให้ตารางหลักที่วาดอยู่ทุกครั้ง
+  const laborDaily = useMemo(
+    () => (laborOpen
+      ? applyScanEdits(attachSchedule(summarizeDaily(rows || []), schedRows, { includeUnscanned: true }), scanEdits)
+      : []),
+    [laborOpen, rows, schedRows, scanEdits]
+  );
+
+  // รหัสร้าน POS ของสาขาที่ดึงมา (ไว้ดึงยอดขาย) + ตารางกลับด้าน outletId -> รหัสสาขา (ไว้ตัดสาขาที่ไม่นับรวม)
+  const codeOfOutlet = useMemo(
+    () => Object.fromEntries((registry || []).filter((b) => b.outletId).map((b) => [String(b.outletId), b.code])),
+    [registry]
+  );
+  const laborOutletId = useMemo(() => {
+    const b = String(loadedRange?.branch || '').toUpperCase();
+    return b ? (registry || []).find((x) => String(x.code || '').toUpperCase() === b)?.outletId || '' : '';
+  }, [registry, loadedRange]);
+
+  const openLabor = () => {
+    setLaborOpen(true);
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0 });
+  };
 
   /* ------------------- แก้ตารางงานที่ลงไว้ (ฝั่งซ้าย) ------------------- */
 
@@ -720,6 +759,22 @@ export default function Attendance() {
     XLSX.writeFile(wb, `attendance_${tag}.xlsx`);
   };
 
+  // หน้ารายละเอียดค่าแรง — ใช้ข้อมูลที่ดึงไว้แล้วทั้งหมด กดกลับก็เจอหน้าเดิมพร้อมข้อมูลเดิม
+  if (laborOpen && loadedRange) {
+    return (
+      <LaborDetail
+        branch={loadedRange.branch}
+        startDate={loadedRange.start}
+        endDate={loadedRange.end}
+        schedRows={schedRows}
+        dailyRows={laborDaily}
+        outletId={laborOutletId}
+        codeOfOutlet={codeOfOutlet}
+        onBack={() => setLaborOpen(false)}
+      />
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* หัวข้อ */}
@@ -897,6 +952,28 @@ export default function Attendance() {
                 <ListOrdered size={16} /> ทุกครั้งที่สแกน
               </button>
             </div>
+            {/* ค่าแรงรวมของสาขา/ช่วงวันที่ที่ดึงมา (จากตารางงานที่สาขาลงไว้) — กดดูรายละเอียด */}
+            {labor && schedRows.length > 0 && (
+              <button
+                type="button" onClick={openLabor}
+                title="ดูรายละเอียดค่าแรง: ยอดขายรายวัน · สรุปตามตำแหน่ง · ตารางงาน · หักสาย"
+                className="inline-flex items-center gap-3 px-3.5 py-1.5 rounded-xl border-2 border-amber-400 bg-amber-50 hover:bg-amber-100 text-left transition-colors"
+              >
+                <span className="p-1.5 rounded-lg bg-amber-500 text-white"><Wallet size={18} /></span>
+                <span className="flex flex-col leading-tight">
+                  <span className="text-[11px] font-semibold text-amber-800">
+                    ค่าแรงรวม · {loadedRange.branch || 'ทุกสาขา'} · {loadedRange.start === loadedRange.end
+                      ? shortDay(loadedRange.start)
+                      : `${shortDay(loadedRange.start)}–${shortDay(loadedRange.end)}`}
+                  </span>
+                  <span className="text-lg font-bold text-slate-800">
+                    {Math.round(labor.wage).toLocaleString('en-US')}
+                    <span className="ml-1 text-xs font-medium text-slate-500">บาท · {labor.people} คน · {labor.days} วัน</span>
+                  </span>
+                </span>
+                <span className="text-xs font-bold text-amber-700 whitespace-nowrap">ดูรายละเอียด ›</span>
+              </button>
+            )}
             <div className="relative flex-1 min-w-[200px] max-w-xs">
               <Search size={16} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
