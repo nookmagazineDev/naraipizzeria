@@ -155,41 +155,162 @@ export default function LaborDetail({ branch, startDate, endDate, schedRows, dai
   const [tab, setTab] = useState('schedule');
 
   /* ---------------- Excel ---------------- */
+  // หน้าตาเดียวกับไฟล์ Excel ของหน้าดูสแกนหน้า: หัวตารางพื้นส้มตัวขาว · แถวรวมตัวหนาพื้นเทาเส้นคั่นบน
+  // ยอดรวมเขียนเป็นสูตร SUM (แก้ตัวเลขในไฟล์แล้วยอดตาม) พร้อมใส่ค่าที่คิดไว้แล้วไปด้วย
+  // เพิ่มจากไฟล์นั้น: ตัวเลขเงินมีคอมมา · % เป็นรูปแบบเปอร์เซ็นต์ · สีช่องหยุด/ลา/สาย ให้อ่านเหมือนบนหน้าเว็บ
   const exportExcel = () => {
     const wb = XLSX.utils.book_new();
-    const add = (name, aoa, widths) => {
+    const MONEY = '#,##0';
+    const money = (v) => ({ t: 'n', v: Math.round((v || 0) * 100) / 100, z: MONEY });
+    const pct = (labor, sales) => (sales > 0 ? { t: 'n', v: labor / sales, z: '0.0%' } : '');
+    const fill = (rgb) => ({ fgColor: { rgb } });
+    const HEAD = {
+      font: { bold: true, color: { rgb: 'FFFFFF' } },
+      fill: fill('F59E0B'),
+      alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+    };
+    const TOTAL = {
+      font: { bold: true },
+      fill: fill('F1F5F9'),
+      border: { top: { style: 'medium', color: { rgb: '94A3B8' } } },
+    };
+    const TYPE_FILL = { 'F/T': 'DBEAFE', 'P/T': 'EDE9FE', DAY: 'CCFBF1', DAY9: 'FFEDD5' };
+    const TYPE_FONT = { 'F/T': '1E40AF', 'P/T': '5B21B6', DAY: '115E59', DAY9: '9A3412' };
+    const typeStyle = (t) => (TYPE_FILL[t]
+      ? { fill: fill(TYPE_FILL[t]), font: { bold: true, color: { rgb: TYPE_FONT[t] } }, alignment: { horizontal: 'center' } }
+      : { alignment: { horizontal: 'center' } });
+    const col = (c) => XLSX.utils.encode_col(c);
+    /** SUM ของคอลัมน์ c จากแถวข้อมูลแรกถึงแถวสุดท้าย (แถว 1 = หัวตาราง) */
+    const sum = (c, lastRow, v, z) => ({ t: 'n', v, f: `SUM(${col(c)}2:${col(c)}${lastRow})`, ...(z ? { z } : {}) });
+
+    /**
+     * สร้างชีตจาก aoa แล้วแต่งตามแบบไฟล์ดูสแกนหน้า
+     * style(r, c) คืนสไตล์เพิ่มของช่องข้อมูล (ไม่รวมหัวตาราง/แถวรวม) · totalRow = แถวสุดท้ายเป็นแถวรวม
+     */
+    const add = (name, aoa, widths, { style, totalRow = true } = {}) => {
       const ws = XLSX.utils.aoa_to_sheet(aoa);
       ws['!cols'] = widths.map((wch) => ({ wch }));
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      for (let r = range.s.r; r <= range.e.r; r++) {
+        for (let c = range.s.c; c <= range.e.c; c++) {
+          const ref = XLSX.utils.encode_cell({ r, c });
+          // ช่องว่างในแถวหัว/แถวรวมต้องมีตัวตนด้วย ไม่งั้นพื้นสีขาดเป็นช่อง ๆ
+          if (!ws[ref] && (r === 0 || (totalRow && r === range.e.r))) ws[ref] = { t: 's', v: '' };
+          const cell = ws[ref];
+          if (!cell) continue;
+          // สำเนาใหม่ทุกช่อง — ตัวเขียนไฟล์เติมรูปแบบตัวเลข (cell.z) ลงในอ็อบเจกต์สไตล์ของช่องนั้น
+          // ใช้อ็อบเจกต์เดียวกันหลายช่อง รูปแบบ % ของช่องหนึ่งจะไปติดช่องอื่นด้วย (ยอดคน 172 กลายเป็น 17200%)
+          let s = null;
+          if (r === 0) s = HEAD;
+          else if (totalRow && r === range.e.r) s = TOTAL;
+          else if (style) s = style(r, c, cell);
+          if (s) cell.s = JSON.parse(JSON.stringify(s));
+        }
+      }
       XLSX.utils.book_append_sheet(wb, ws, name);
     };
+
+    // ---- 1. รายวัน ----
+    const n = days.length;
     add('รายวัน', [
       ['วันที่', 'วัน', 'ยอดขาย', 'ค่าแรง', '% ค่าแรง', 'คนมาทำงาน'],
       ...days.map((d) => {
         const s = salesOf(d);
-        return [d, DOW[weekdayOf(d)], s ?? '', laborOf(d), s > 0 ? Math.round((laborOf(d) / s) * 1000) / 10 : '', labor.byDate[d]?.staff || 0];
+        return [d, DOW[weekdayOf(d)], s == null ? '' : money(s), money(laborOf(d)), s == null ? '' : pct(laborOf(d), s), labor.byDate[d]?.staff || 0];
       }),
-      ['รวม', '', sales ? Math.round(sales.total * 100) / 100 : '', labor.wage,
-        sales?.total > 0 ? Math.round((labor.wage / sales.total) * 1000) / 10 : '', labor.days],
-    ], [12, 6, 14, 14, 10, 12]);
+      ['รวม', '',
+        sales ? sum(2, n + 1, Math.round(sales.total * 100) / 100, MONEY) : '',
+        sum(3, n + 1, labor.wage, MONEY),
+        sales?.total > 0 ? { t: 'n', v: labor.wage / sales.total, f: `IF(C${n + 2}>0,D${n + 2}/C${n + 2},"")`, z: '0.0%' } : '',
+        sum(5, n + 1, labor.days)],
+    ], [12, 7, 14, 14, 11, 12], {
+      // เสาร์-อาทิตย์ พื้นเหลืองอ่อนแบบเดียวกับปฏิทินบนหน้าเว็บ
+      style: (r) => (isWeekend(days[r - 1]) ? { fill: fill('FFFBEB') } : null),
+    });
+
+    // ---- 2. ตามตำแหน่ง ----
+    const posRows = [];
+    const posKind = [];   // 'pos' = แถวรวมของตำแหน่ง · 'type' = แถวแยกประเภท
+    for (const p of labor.byPosition) {
+      posRows.push([p.position, 'รวม', p.people, p.days, money(p.wage), pct(p.wage, labor.wage)]);
+      posKind.push({ kind: 'pos' });
+      for (const t of p.types) {
+        posRows.push(['', t.type, t.people, t.days, money(t.wage), '']);
+        posKind.push({ kind: 'type', type: t.type });
+      }
+    }
     add('ตามตำแหน่ง', [
-      ['ตำแหน่ง', 'ประเภท', 'จำนวนคน', 'วันทำงาน', 'ค่าแรง'],
-      ...labor.byPosition.flatMap((p) => [
-        [p.position, 'รวม', p.people, p.days, p.wage],
-        ...p.types.map((t) => ['', t.type, t.people, t.days, t.wage]),
-      ]),
-      ['รวมทุกตำแหน่ง', '', labor.people, labor.days, labor.wage],
-    ], [24, 10, 10, 10, 14]);
+      ['ตำแหน่ง', 'ประเภท', 'จำนวนคน', 'วันทำงาน', 'ค่าแรง', 'สัดส่วน'],
+      ...posRows,
+      // คนเดียวอยู่ได้หลายแถว (ย้ายตำแหน่งกลางงวด) ยอดคนจึงเป็นค่านับไม่ซ้ำ ไม่ใช่ SUM ของคอลัมน์
+      ['รวมทุกตำแหน่ง', '', labor.people, labor.days, money(labor.wage), labor.wage > 0 ? { t: 'n', v: 1, z: '0%' } : ''],
+    ], [24, 10, 10, 10, 14, 10], {
+      style: (r, c) => {
+        const k = posKind[r - 1];
+        if (k.kind === 'pos') return { font: { bold: true }, fill: fill('FEF3C7') };
+        if (c === 1) return typeStyle(k.type);
+        return null;
+      },
+    });
+
+    // ---- 3. ตารางงาน ----
+    const dayCol0 = branch ? 4 : 5;
+    const CELL_STYLE = {
+      off: { fill: fill('FFE4E6'), font: { color: { rgb: 'BE123C' } }, alignment: { horizontal: 'center' } },
+      paidLeave: { fill: fill('E0E7FF'), font: { color: { rgb: '3730A3' } }, alignment: { horizontal: 'center' } },
+      unpaidLeave: { fill: fill('FECACA'), font: { color: { rgb: '991B1B' } }, alignment: { horizontal: 'center' } },
+      work: { alignment: { horizontal: 'center' } },
+    };
+    const np = people.length;
     add('ตารางงาน', [
-      ['รหัส', 'ชื่อ', ...(branch ? [] : ['สาขา']), 'ตำแหน่ง', 'ประเภท', ...days, 'วันทำงาน', 'ค่าแรง'],
+      ['รหัส', 'ชื่อ', ...(branch ? [] : ['สาขา']), 'ตำแหน่ง', 'ประเภท',
+        ...days.map((d) => `${DOW[weekdayOf(d)]} ${dm(d)}`), 'วันทำงาน', 'ค่าแรง'],
       ...people.map((p) => [p.code, p.name, ...(branch ? [] : [p.branch]), p.position, p.type,
-        ...days.map((d) => p.cells[d]?.title || ''), p.days, Math.round(p.wage * 100) / 100]),
-    ], [10, 24, ...(branch ? [] : [8]), 16, 8, ...days.map(() => 12), 10, 12]);
+        ...days.map((d) => p.cells[d]?.title || ''), p.days, money(p.wage)]),
+      ['รวม', `${np} คน`, ...(branch ? [] : ['']), '', '', ...days.map(() => ''),
+        sum(dayCol0 + days.length, np + 1, labor.days),
+        sum(dayCol0 + days.length + 1, np + 1, labor.wage, MONEY)],
+    ], [10, 24, ...(branch ? [] : [8]), 16, 8, ...days.map(() => 12), 10, 12], {
+      style: (r, c) => {
+        const p = people[r - 1];
+        if (c === dayCol0 - 1) return typeStyle(p.type);
+        const di = c - dayCol0;
+        if (di >= 0 && di < days.length) return CELL_STYLE[p.cells[days[di]]?.kind] || null;
+        if (di >= days.length) return { font: { bold: true }, fill: fill('FFFBEB') };
+        return null;
+      },
+    });
+
+    // ---- 4. หักสาย ----
+    const nl = lateRows.length;
+    const lateHead = ['วันที่', 'รหัส', 'ชื่อ', 'ประเภท', ...(branch ? [] : ['สาขา']),
+      'ตาราง เข้า', 'สแกน เข้า', 'เข้าสาย (นาที)', 'เบรคสาย (นาที)', 'ออกก่อน (นาที)', 'รวมสาย (นาที)'];
+    const late0 = lateHead.indexOf('เข้าสาย (นาที)');
     add('หักสาย', [
-      ['วันที่', 'รหัส', 'ชื่อ', 'ประเภท', 'ตาราง เข้า', 'สแกน เข้า', 'เข้าสาย', 'เบรคสาย', 'ออกก่อน', 'รวมสาย (นาที)'],
-      ...lateRows.map((d) => [d.date, d.empCode, d.name, d.plan?.empType || '', d.plan?.in || '', hhmm(d.first) || '',
+      lateHead,
+      ...lateRows.map((d) => [d.date, d.empCode, d.name, d.plan?.empType || '', ...(branch ? [] : [d.branch]),
+        d.plan?.in || '', hhmm(d.first) || '',
         d.lateIn ?? '', d.lateBreakIn ?? '', d.earlyOut ?? '', totalLateOf(d) ?? '']),
-      ['รวม', '', '', '', '', '', lateTotals.lateIn, lateTotals.lateBreakIn, lateTotals.earlyOut, lateTotals.total],
-    ], [12, 10, 24, 8, 10, 10, 8, 8, 8, 12]);
+      ['รวม', `${nl} ครั้ง`, `${lateTotals.people.size} คน`, '', ...(branch ? [] : ['']), '', '',
+        sum(late0, nl + 1, lateTotals.lateIn), sum(late0 + 1, nl + 1, lateTotals.lateBreakIn),
+        sum(late0 + 2, nl + 1, lateTotals.earlyOut), sum(late0 + 3, nl + 1, lateTotals.total)],
+    ], [12, 10, 24, 8, ...(branch ? [] : [8]), 10, 10, 12, 12, 12, 12], {
+      style: (r, c, cell) => {
+        if (c === 3) return typeStyle(laborTypeOf(cell.v));
+        if (c === late0 - 2) return { fill: fill('EEF2FF'), font: { color: { rgb: '4338CA' } }, alignment: { horizontal: 'center' } };
+        if (c === late0 - 1) return { font: { bold: true, color: { rgb: '047857' } }, alignment: { horizontal: 'center' } };
+        if (c >= late0) {
+          const red = Number(cell.v) > 0;
+          return {
+            fill: fill(c === late0 + 3 ? 'FFE4E6' : 'FFF1F2'),
+            font: red ? { bold: true, color: { rgb: 'BE123C' } } : { color: { rgb: '94A3B8' } },
+            alignment: { horizontal: 'center' },
+          };
+        }
+        return null;
+      },
+    });
+
     XLSX.writeFile(wb, `labor_${branch || 'ALL'}_${startDate}_${endDate}.xlsx`);
   };
 
