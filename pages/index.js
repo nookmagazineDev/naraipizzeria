@@ -71,6 +71,8 @@ import ChangePasswordModal from '../components/ChangePasswordModal';
 import { MENU_GROUPS, MENU_LABELS, ROLE_ADMIN, firstAllowedMenu, hasPerm } from '../lib/permissions';
 import { FALLBACK_BRANCHES } from '../lib/branches';
 import { isIncludedBranch } from '../lib/excludedBranches';
+// กติกาตัดบิลชุดเดียวกับยอดขายในหน้ารายละเอียดค่าแรง (ดูสแกนหน้า) — แก้ที่ lib/salesRules.js ที่เดียว
+import { EXCLUDE_TABLES, lumpSumBillChecker, applyVoucher1 } from '../lib/salesRules';
 import {
   OPEN_DATE_BUFFER_DAYS, addDaysStr, dateFromRow, fetchChunkJson, getChunks, normalizeArray,
 } from '../lib/salesFetch';
@@ -152,11 +154,9 @@ function useOutletRegistry() {
 }
 
 /* ───────── EXCLUSIONS (ไม่นำมาคำนวณ) ───────── */
-const EXCLUDE_TABLES = [600];                       // โต๊ะที่ตัดออก (500 กลับไปนับต้นทุนจริงแล้ว)
+// EXCLUDE_TABLES (โต๊ะที่ตัดออก) กับไอเทมยอดเหมาที่ตัดทั้งบิล อยู่ใน lib/salesRules.js
 const EXCLUDE_ITEMS = [206001, 290016];            // itemCode เดี่ยวที่ตัดออก (290016 = ข้าวกล่องยอดเหมา)
 const EXCLUDE_ITEM_RANGES = [[500002, 500026]];    // ช่วง itemCode ที่ตัดออก
-// ไอเทมยอดเหมา: บิลไหนมีไอเทมนี้ ให้ตัด "ทั้งบิล" ออกจากยอดขาย (กัน 1 บิลบวมยอด/จำนวนมหาศาล)
-const LUMP_SUM_BILL_ITEMS = [290016];              // ข้าวกล่อง (คีย์ยอดเหมาเป็นจำนวนชิ้น)
 const COVER_ITEMS = [101001, 101002, 101003, 101004, 101107, 101108]; // ไอเทมบุฟเฟ่ใช้นับ "จำนวนคน"
 // วัตถุดิบ (กก) โต๊ะเตรียม — แยกออกจากต้นทุนที่ใช้คิดกำไร/ขาดทุน
 const PREP_KG_ITEMS = [206041, 206038, 205003, 205002, 205007, 205006, 205021, 206035, 206040, 205014, 205004, 206034];
@@ -1069,31 +1069,12 @@ export default function App() {
       // หัก voucher1 (ส่วนลด/วอเชอร์ที่บวกอยู่ใน billTotal แต่ไม่ใช่รายได้จริง) ออกจาก billTotal
       // → billTotal สุทธิ = ยอดที่จ่ายจริง (= amount = ผลรวมรายการหลังหักส่วนลด)
       // ปกติ voucher1 = 0 จึงแตะเฉพาะบิลที่มีส่วนลดวอเชอร์ ทำให้ Gross ตรงกับ Total Sales
-      allSales.forEach(r => {
-        const v1 = parseFloat(r.voucher1 ?? r.Voucher1 ?? 0) || 0;
-        if (v1) {
-          const bt = parseFloat(r.billTotal ?? r.BillTotal ?? r.amount ?? 0) || 0;
-          r.billTotal = bt - v1;
-        }
-      });
+      applyVoucher1(allSales);
 
       // กรองโต๊ะ/ไอเทมที่ไม่นำมาคำนวณ (เช่น โต๊ะ 500/600, ไอเทมเตรียมของ)
       // บิลที่มีไอเทมยอดเหมา (290016 ข้าวกล่อง) → ตัดทั้งบิลออกจากยอดขาย
       // เก็บคีย์ทั้งจาก orderID และ checkID+outlet เพื่อจับให้ครบแม้ orderID ว่าง
-      const lumpSumKeys = new Set();
-      allDetails.forEach(r => {
-        if (LUMP_SUM_BILL_ITEMS.indexOf(parseInt(r.itemCode)) < 0) return;
-        const oid = String(r.orderID ?? r.OrderID ?? '').trim();
-        if (oid) lumpSumKeys.add('O:' + oid);
-        const chk = String(r.chkCheckID ?? r.checkID ?? '').trim();
-        if (chk) lumpSumKeys.add('C:' + chk + '_' + (r.outletID ?? ''));
-      });
-      const isLumpSumBill = r => {
-        const oid = String(r.orderID ?? r.OrderID ?? '').trim();
-        if (oid && lumpSumKeys.has('O:' + oid)) return true;
-        const chk = String(r.checkID ?? r.CheckID ?? '').trim();
-        return chk && lumpSumKeys.has('C:' + chk + '_' + (r.outletID ?? ''));
-      };
+      const isLumpSumBill = lumpSumBillChecker(allDetails);
       const cleanSales = allSales.filter(r => !isExcludedTable(r.tableID ?? r.TableID) && !isLumpSumBill(r));
       const cleanDetails = allDetails.filter(r =>
         !isExcludedTable(r.tableID ?? r.TableID) && !isExcludedItem(r.itemCode));
