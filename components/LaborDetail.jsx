@@ -93,7 +93,8 @@ export default function LaborDetail({ branch, startDate, endDate, schedRows, dai
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branch, outletId, startDate, endDate, noOutlet, salesKey]);
 
-  const salesOf = (d) => (sales ? sales.byDate[d] || 0 : null);
+  // ยอดขาย = ก่อน VAT (ตัวเดียวกับ "ยอดขายรวมทั้งหมด" บนแดชบอร์ดหน้ายอดขาย) ทั้งหน้าใช้ตัวนี้ตัวเดียว
+  const salesOf = (d) => (sales ? sales.beforeVatByDate[d] || 0 : null);
   const laborOf = (d) => labor.byDate[d]?.wage || 0;
 
   /* ---------------- ปฏิทินรายวัน ---------------- */
@@ -213,21 +214,17 @@ export default function LaborDetail({ branch, startDate, endDate, schedRows, dai
     // ---- 1. รายวัน ----
     const n = days.length;
     add('รายวัน', [
-      // ยอดขาย (รวม VAT) = "ยอดขายรวม VAT" ของหน้ายอดขาย · ก่อน VAT = "ยอดขายรวมทั้งหมด" ของแดชบอร์ด
-      ['วันที่', 'วัน', 'ยอดขาย (รวม VAT)', 'ยอดขายก่อน VAT', 'ค่าแรง', '% ค่าแรง', 'คนมาทำงาน'],
+      ['วันที่', 'วัน', 'ยอดขาย (ก่อน VAT)', 'ค่าแรง', '% ค่าแรง', 'คนมาทำงาน'],
       ...days.map((d) => {
         const s = salesOf(d);
-        const nv = sales ? sales.beforeVatByDate[d] || 0 : null;
-        return [d, DOW[weekdayOf(d)], s == null ? '' : money(s), nv == null ? '' : money(nv),
-          money(laborOf(d)), s == null ? '' : pct(laborOf(d), s), labor.byDate[d]?.staff || 0];
+        return [d, DOW[weekdayOf(d)], s == null ? '' : money(s), money(laborOf(d)), s == null ? '' : pct(laborOf(d), s), labor.byDate[d]?.staff || 0];
       }),
       ['รวม', '',
-        sales ? sum(2, n + 1, Math.round(sales.total * 100) / 100, MONEY) : '',
-        sales ? sum(3, n + 1, Math.round(sales.beforeVat * 100) / 100, MONEY) : '',
-        sum(4, n + 1, labor.wage, MONEY),
-        sales?.total > 0 ? { t: 'n', v: labor.wage / sales.total, f: `IF(C${n + 2}>0,E${n + 2}/C${n + 2},"")`, z: '0.0%' } : '',
-        sum(6, n + 1, labor.days)],
-    ], [12, 7, 16, 15, 14, 11, 12], {
+        sales ? sum(2, n + 1, Math.round(sales.beforeVat * 100) / 100, MONEY) : '',
+        sum(3, n + 1, labor.wage, MONEY),
+        sales?.beforeVat > 0 ? { t: 'n', v: labor.wage / sales.beforeVat, f: `IF(C${n + 2}>0,D${n + 2}/C${n + 2},"")`, z: '0.0%' } : '',
+        sum(5, n + 1, labor.days)],
+    ], [12, 7, 17, 14, 11, 12], {
       // เสาร์-อาทิตย์ พื้นเหลืองอ่อนแบบเดียวกับปฏิทินบนหน้าเว็บ
       style: (r) => (isWeekend(days[r - 1]) ? { fill: fill('FFFBEB') } : null),
     });
@@ -318,7 +315,7 @@ export default function LaborDetail({ branch, startDate, endDate, schedRows, dai
     XLSX.writeFile(wb, `labor_${branch || 'ALL'}_${startDate}_${endDate}.xlsx`);
   };
 
-  const salesTotal = sales ? sales.total : null;
+  const salesTotal = sales ? sales.beforeVat : null;
 
   return (
     <div className="space-y-5">
@@ -359,7 +356,7 @@ export default function LaborDetail({ branch, startDate, endDate, schedRows, dai
           <div className="text-xs text-slate-600">เฉลี่ย {baht(days.length ? labor.wage / days.length : 0)} / วัน</div>
         </div>
         <div className="bg-white border border-slate-200 rounded-2xl p-4">
-          <div className="text-xs font-semibold text-slate-500">ยอดขายรวม VAT {branch || '(ทุกสาขา)'}</div>
+          <div className="text-xs font-semibold text-slate-500">ยอดขายก่อน VAT {branch || '(ทุกสาขา)'}</div>
           {noOutlet ? (
             <div className="text-sm text-slate-500 mt-2">สาขานี้ไม่มีรหัสร้าน POS ในทะเบียนสาขา — ไม่มียอดขายให้เทียบ</div>
           ) : salesLoading ? (
@@ -374,16 +371,14 @@ export default function LaborDetail({ branch, startDate, endDate, schedRows, dai
           ) : (
             <>
               <div className="text-3xl font-bold text-slate-800 mt-1">{baht(salesTotal)} <span className="text-sm font-medium text-slate-500">บาท</span></div>
-              <div className="text-xs text-slate-600">
-                ก่อน VAT {baht(sales?.beforeVat)} · {sales?.bills.toLocaleString('en-US')} บิล
-              </div>
+              <div className="text-xs text-slate-600">เฉลี่ย {baht(days.length ? salesTotal / days.length : 0)} / วัน · {sales?.bills.toLocaleString('en-US')} บิล</div>
             </>
           )}
         </div>
         <div className="bg-white border border-slate-200 rounded-2xl p-4">
           <div className="text-xs font-semibold text-slate-500">ค่าแรง / ยอดขาย</div>
           <div className="text-3xl font-bold text-emerald-700 mt-1">{salesTotal != null ? pctText(labor.wage, salesTotal) : '—'}</div>
-          <div className="text-xs text-slate-600">เทียบกับยอดขายรวม VAT (ตัวเลขเดียวกับหน้ายอดขาย)</div>
+          <div className="text-xs text-slate-600">เทียบกับยอดขายก่อน VAT</div>
         </div>
         <div className="bg-white border border-slate-200 rounded-2xl p-4">
           <div className="text-xs font-semibold text-slate-500">พนักงาน</div>
