@@ -3,6 +3,10 @@
 //   GET /api/hr-schedule?start=YYYY-MM-DD&end=YYYY-MM-DD[&branch=รหัสสาขา][&branches=a,b,c]
 //   → { status:'success', start, end, from, branches, count, truncated, missing, data:[...], failed:[...] }
 //
+//   &summary=1 → ค่าแรงรวมต่อสาขา (การ์ดสรุปรวมของแดชบอร์ด) ไม่ส่งแถวดิบกลับไป และไม่ติดเพดาน ROW_CAP
+//   → { status:'success', start, end, failed, unknown, data:[{ branch, wage, people, days }] }
+//   ค่าแรงคิดด้วย summarizeLabor ตัวเดียวกับการ์ด "ค่าแรงรวม" ในหน้าดูสแกนหน้า
+//
 // ไม่ระบุสาขา = ดึงทุกสาขาที่มีในฐานข้อมูล HR (หน้า "ดูสแกนหน้า" ใช้ทางนี้ตอนเลือก "ทุกสาขา"
 // เพราะสาขาที่หยุดทั้งสาขาจะไม่มีสแกนเลย ถ้าเดารายชื่อสาขาจากข้อมูลสแกนก็จะมองไม่เห็นวันหยุดนั้น)
 // ระบุ branches มา = ดึงเฉพาะสาขาในรายการนั้น
@@ -13,6 +17,7 @@ import { fetchScheduleBranches, fetchTimesheet, fetchTimesheetMany } from '../..
 // ตัวช่วยชุดเดียวกับ /api/attendance — ทั้งสองฝั่งของหน้า "ดูสแกนหน้า" เจอปัญหาเพดานแถวเหมือนกัน
 import { capByDay, missingDates, dayOf, inRange } from '../../lib/dateRange';
 import { branchAliasMap } from '../../lib/branchRegistry';
+import { summarizeLabor } from '../../lib/labor';
 
 // ยิงทีละสาขาหลายรอบ — เผื่อเวลาให้พอเหมือน /api/attendance
 export const config = { maxDuration: 60 };
@@ -158,6 +163,19 @@ export default async function handler(req, res) {
       console.warn(`hr-schedule: ต้นทางส่งวันนอกช่วง ${start}..${end} มา ${raw.length - inside.length} แถว — ตัดทิ้งแล้ว`);
     }
     const rows = mergeAliasRows(inside, aliasTo);
+
+    if (txt(req.query.summary) === '1') {
+      const byBranch = {};
+      for (const r of rows) {
+        const b = txt(r.branch).toLowerCase();
+        if (b) (byBranch[b] || (byBranch[b] = [])).push(r);
+      }
+      const data = Object.entries(byBranch).map(([b, list]) => {
+        const s = summarizeLabor(list, { start, end });
+        return { branch: b, wage: s.wage, people: s.people, days: s.days };
+      }).sort((a, b) => b.wage - a.wage);
+      return res.status(200).json({ status: 'success', start, end, unknown, failed, data });
+    }
 
     // เรียงใหม่→เก่าก่อนตัด ไม่งั้น "วันเก่าสุด" ที่ capByDay จะตัด ไม่ใช่วันเก่าสุดจริงๆ
     // (แถวมาเรียงตามสาขาที่ตอบก่อน) — เรียงสาขา/ชื่อต่อท้ายให้ผลออกมาเหมือนเดิมทุกครั้ง

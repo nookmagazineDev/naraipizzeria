@@ -20,6 +20,7 @@
 //    GET  /sheets/branch-user              login ของสาขา (narai_hr.dbo.hr_user — คนละฐาน)
 //    GET  /sheets/stock-items?branch=crm   หน้านับสต๊อก: ยอดนับ/ยอดยกมา/ใบเบิกล่าสุดของสาขานั้น
 //    GET  /sheets/stock-total?endDate=     ยอดคงเหลือรวมทุกสาขา (ไม่ระบุวัน = ล่าสุด)
+//    GET  /sheets/food-cost?start=&end=&branch=&aliases=  สต๊อกยกมา/คงเหลือ + รายจ่าย Supplier ทุกสาขา (หน้าต้นทุนใบเบิกสาขา)
 //    GET  /sheets/month-end-summary        สรุปรายสาขา: ปิดยอดรอบล่าสุดถึงวันไหน กี่รายการ มูลค่าเท่าไหร่
 //    GET  /sheets/month-end?month=&branch=&limit= แถวปิดรอบเดือนจาก dbo.stock_month_end (ไม่ระบุเดือน = เดือนล่าสุด)
 //    GET  /sheets/month-end-months         เดือนที่มีข้อมูลปิดรอบ ('YYYY-MM' ใหม่ก่อน)
@@ -90,6 +91,17 @@ function getStockCount() {
       .catch(err => { stockPromise = null; throw err; });
   }
   return stockPromise;
+}
+
+// ต้นทุนใบเบิกสาขา — ส่วนสต๊อกยกมา/คงเหลือ + รายจ่าย Supplier ของทุกสาขา (lib/foodCostSql.mjs)
+let foodCostPromise = null;
+function getFoodCost() {
+  if (!foodCostPromise) {
+    foodCostPromise = import('../lib/foodCostSql.mjs')
+      .then(m => m.createFoodCost({ q }))
+      .catch(err => { foodCostPromise = null; throw err; });
+  }
+  return foodCostPromise;
 }
 
 // ข้อมูลปิดรอบเดือน (dbo.stock_month_end) อยู่ฐานเดียวกัน — ตรรกะอยู่ใน lib/monthEndSql.mjs
@@ -193,6 +205,16 @@ function mountSheets(app) {
   // ยอดคงเหลือรวมทุกสาขา — หน้า "ดูยอดรวมทุกสาขา" (ไม่ระบุ endDate = ล่าสุด)
   app.get('/sheets/stock-total', (req, res) =>
     send(res, getStockCount().then(c => c.readStockTotal(str(req.query.endDate))), 'readStockTotal'));
+
+  // ต้นทุนใบเบิกสาขา — สต๊อกยกมา/คงเหลือ + รายจ่าย Supplier ทุกสาขา (aliases = JSON รหัสพ้อง -> รหัสจริง)
+  app.get('/sheets/food-cost', (req, res) => {
+    let aliasTo = {};
+    try { aliasTo = JSON.parse(str(req.query.aliases) || '{}') || {}; } catch { aliasTo = {}; }
+    send(res, getFoodCost().then(c => c.readStockAndSup({
+      start: str(req.query.start), end: str(req.query.end),
+      branch: str(req.query.branch).toLowerCase(), aliasTo,
+    })), 'readFoodCost');
+  });
 
   // ทะเบียนสาขา — dropdown เลือกสาขาทุกหน้าและตารางแมป outletID ฝั่ง API กินข้อมูลชุดนี้
   app.get('/sheets/branch', (req, res) =>
