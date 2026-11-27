@@ -41,7 +41,8 @@ import {
   Lock,
   Loader2,
   Truck,
-  ExternalLink
+  ExternalLink,
+  Coins
 } from 'lucide-react';
 import StockList from '../components/StockList';
 import StockTotalList from '../components/StockTotalList';
@@ -58,6 +59,8 @@ import OtherExpense from '../components/OtherExpense';
 import BranchSupReport from '../components/BranchSupReport';
 import TaxInvoice from '../components/TaxInvoice';
 import MemberLookup from '../components/MemberLookup';
+import BranchFoodCost from '../components/BranchFoodCost';
+import DashboardCostSummary from '../components/DashboardCostSummary';
 import QcRdMenu from '../components/QcRdMenu';
 import QcRdItems from '../components/QcRdItems';
 import QcRdProduction from '../components/QcRdProduction';
@@ -728,7 +731,7 @@ const FRANCHISE_TITLES = {
    ที่นี่เก็บเฉพาะ "หน้าตา" ของแต่ละกลุ่ม/เมนู (ไอคอนและสี) ซึ่งเป็นเรื่องของหน้าเว็บล้วน ๆ */
 const MENU_ICONS = {
   dashboard: LayoutDashboard, sales: TrendingUp, dailySale: Receipt, details: Layers,
-  itemSearch: Search, taxInvoice: FileText, otherExpense: DollarSign, supReport: Truck, memberLookup: Users,
+  itemSearch: Search, taxInvoice: FileText, otherExpense: DollarSign, supReport: Truck, memberLookup: Users, foodCost: Coins,
   stockList: PackageSearch, stockTotal: Eye, stockUsagePerHead: BarChart3, monthEnd: Calendar, scrapReport: ArrowRightLeft,
   employeeList: Users, attendance: Fingerprint, salaryReport: Wallet, uniformReport: ShoppingBag, branchList: Building2,
   branchUsers: KeyRound,
@@ -806,6 +809,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
+  // ช่วงวันที่ของข้อมูลที่โหลดอยู่จริง (แก้ช่องวันที่แล้วยังไม่กดค้นหา = ยังเป็นช่วงเดิม) — การ์ดสรุปรวมใช้ตัวนี้
+  const [loadedRange, setLoadedRange] = useState({ start: '', end: '' });
   const [loadProgress, setLoadProgress] = useState(null); // { current, total, text }
   const [dataNote, setDataNote] = useState('');          // ดึงมาได้แต่ถูกกรองทิ้งจนหมด
 
@@ -1090,6 +1095,7 @@ export default function App() {
       setCostMap(costJson);
       setMenuGroupMap(await menuGroupPromise);
       setLoaded(true);
+      setLoadedRange({ start: startDate, end: endDate });
 
       // Prepopulate branch comparison with top 3 outlets by sales
       const outletTotals = {};
@@ -2675,6 +2681,7 @@ export default function App() {
                 {activeTab === 'otherExpense' && <DollarSign size={20} className="text-amber-600" />}
                 {activeTab === 'supReport' && <Truck size={20} className="text-amber-600" />}
                 {activeTab === 'memberLookup' && <Users size={20} className="text-amber-600" />}
+                {activeTab === 'foodCost' && <Coins size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdMenu' && <FileText size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdItems' && <ClipboardList size={20} className="text-amber-600" />}
                 {activeTab === 'qcrdProduction' && <BarChart3 size={20} className="text-amber-600" />}
@@ -2706,6 +2713,7 @@ export default function App() {
                   : activeTab === 'otherExpense' ? 'ค่าใช้จ่ายอื่นๆ'
                   : activeTab === 'supReport' ? 'รายงานจากซัพหน้าสาขา'
                   : activeTab === 'memberLookup' ? 'ค้นหาสมาชิก (ทุกบิลของสาขาหลัก)'
+                  : activeTab === 'foodCost' ? 'ต้นทุนใบเบิกสาขา (Total Food Cost)'
                   : activeTab === 'qcrdMenu' ? 'QC/RD — เมนูและสูตร'
                   : activeTab === 'qcrdItems' ? 'QC/RD — วัตถุดิบ'
                   : activeTab === 'qcrdProduction' ? 'QC/RD — รายงานการผลิต (ครัวกลาง)'
@@ -2806,6 +2814,9 @@ export default function App() {
 
             {/* ACC: ค้นหาสมาชิก — ทุกบิลในฐาน NaraiPos ตามเลขสมาชิก (ช่อง MemberTel) ไม่จำกัดช่วงวันที่ */}
             {activeTab === 'memberLookup' && <MemberLookup />}
+
+            {/* ACC: ต้นทุนใบเบิกสาขา — Total Food Cost ทุกสาขา ชุดเดียวกับหน้าสรุปกำไรของแดชบอร์ดสาขา */}
+            {activeTab === 'foodCost' && <BranchFoodCost />}
 
             {/* QC/RD: เมนู+สูตร (BOM) และวัตถุดิบ จากชีทต้นทุนเมนู */}
             {activeTab === 'qcrdMenu' && <QcRdMenu />}
@@ -3148,6 +3159,20 @@ export default function App() {
                         </div>
                       </button>
                     </div>
+
+                    {/* สรุปรวม: ยอดขายก่อน VAT − ค่าแรง − ยอดเบิกของ − ค่าใช้จ่ายอื่นๆ (components/DashboardCostSummary.jsx)
+                        มีค่าแรงอยู่ด้วย จึงเปิดให้เฉพาะคนที่มีสิทธิ์เมนู ACC › ต้นทุนใบเบิกสาขา */}
+                    {can('foodCost') && (
+                      <DashboardCostSummary
+                        start={loadedRange.start}
+                        end={loadedRange.end}
+                        salesRows={branchCardStats.rows}
+                        codeOfOutlet={(oid) => OUTLETS[parseInt(oid)] || ''}
+                        selectedCode={selectedOutlet ? (OUTLETS[parseInt(selectedOutlet)] || '') : ''}
+                        can={can}
+                        onOpen={(key) => setActiveTab(key)}
+                      />
+                    )}
 
                     {/* CHART PANELS GRID */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
