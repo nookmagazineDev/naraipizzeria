@@ -3167,6 +3167,7 @@ export default function App() {
                         start={loadedRange.start}
                         end={loadedRange.end}
                         salesRows={branchCardStats.rows}
+                        bills={selectedOutlet ? salesRaw.filter(r => String(r.outletID) === String(selectedOutlet)) : salesRaw}
                         codeOfOutlet={(oid) => OUTLETS[parseInt(oid)] || ''}
                         selectedCode={selectedOutlet ? (OUTLETS[parseInt(selectedOutlet)] || '') : ''}
                         can={can}
