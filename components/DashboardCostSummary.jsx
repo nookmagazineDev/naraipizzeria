@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
-import { Loader2, AlertCircle, ChevronRight } from 'lucide-react';
+import { Loader2, AlertCircle, ChevronRight, Download } from 'lucide-react';
+import { exportTableXlsx } from '../lib/exportTable';
 import { apiCall as expenseApiCall } from '../lib/expenseApi';
 import { isIncludedBranch } from '../lib/excludedBranches';
 import { monthLabel } from '../lib/thaiDate';
@@ -202,6 +203,30 @@ export default function DashboardCostSummary({ start, end, salesRows, bills = []
   ];
   const partSum = parts.reduce((s, p) => s + Math.max(p.v, 0), 0);
 
+  // ตาราง "แยกรายสาขา" → Excel: ตัวเงิน + % ของยอดขายแยกคอลัมน์ (ตัวเลขจริง เอาไปคิดต่อได้)
+  const exportBranches = () => {
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const p2 = (v, b) => (b > 0 ? Math.round((v / b) * 10000) / 100 : '');
+    const money = (label, k) => ({ label, right: true, render: (x) => r2(x[k]) });
+    const share = (label, k) => ({ label, right: true, render: (x) => p2(x[k], x.sales) });
+    const cols = [
+      { label: 'สาขา', render: (x) => x.code.toUpperCase() },
+      money('ยอดขายก่อน VAT', 'sales'),
+      money('ค่าแรง', 'labor'), share('% ค่าแรง', 'labor'),
+      money('ยอดเบิกของ', 'food'), share('% ยอดเบิกของ', 'food'),
+      money('ค่าใช้จ่ายอื่นๆ', 'other'), share('% ค่าใช้จ่ายอื่นๆ', 'other'),
+      money('คงเหลือ', 'net'), share('% คงเหลือ', 'net'),
+    ];
+    const t = { code: 'รวม', ...total };
+    exportTableXlsx({
+      title: `สรุปรวมแยกรายสาขา ${start} ถึง ${end}`,
+      subtitle: `ค่าใช้จ่ายอื่นๆ เป็นยอดเต็มเดือน ${monthText}${want ? ` · สาขา ${want.toUpperCase()}` : ''}`,
+      cols,
+      rows: list,
+      foot: list.length > 1 ? cols.map((c) => (c.label === 'สาขา' ? 'รวม' : c.render(t))) : null,
+    });
+  };
+
   return (
     <div className="bg-amber-50/40 border border-amber-200 rounded-2xl p-4 space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -278,7 +303,16 @@ export default function DashboardCostSummary({ start, end, salesRows, bills = []
 
         {/* แยกรายสาขา */}
         <div className="bg-white border border-slate-200 rounded-2xl p-4 min-w-0">
-          <h4 className="text-sm font-bold text-slate-700 mb-2">แยกรายสาขา <span className="text-[11px] font-normal text-slate-400">· กดตัวเลขเพื่อดูรายละเอียด</span></h4>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <h4 className="text-sm font-bold text-slate-700">แยกรายสาขา <span className="text-[11px] font-normal text-slate-400">· กดตัวเลขเพื่อดูรายละเอียด</span></h4>
+            {list.length > 0 && (
+              <button type="button" onClick={exportBranches}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-500 text-emerald-600 text-xs font-semibold hover:bg-emerald-50"
+                title="ส่งออกตารางแยกรายสาขาเป็น Excel">
+                <Download size={14} /> Excel
+              </button>
+            )}
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs border-collapse">
               <thead>
