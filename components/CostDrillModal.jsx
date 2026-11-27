@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
-import { X, ArrowLeft, Loader2, AlertCircle, ChevronRight } from 'lucide-react';
+import { X, ArrowLeft, Loader2, AlertCircle, ChevronRight, Download } from 'lucide-react';
+import { exportTableXlsx } from '../lib/exportTable';
 import { dateFromRow } from '../lib/salesFetch';
 import { isClearedRow, isWorkedRow, wageOf, laborTypeOf, scheduleCellOf } from '../lib/labor';
 
@@ -12,7 +13,7 @@ import { isClearedRow, isWorkedRow, wageOf, laborTypeOf, scheduleCellOf } from '
  *           (/api/withdrawals + /api/food-cost?branch=)
  *   other   ค่าใช้จ่ายอื่นๆ ทีละแถว (ประเภท/รหัส/มิเตอร์/ราคา) ของเดือนที่สรุปอยู่
  *
- * หน้าย่อยซ้อนกันเป็น stack — ปุ่มย้อนกลับพากลับหน้าก่อน
+ * หน้าย่อยซ้อนกันเป็น stack — ปุ่มย้อนกลับพากลับหน้าก่อน · ปุ่ม Excel ส่งออกหน้าที่เปิดอยู่ (lib/exportTable.js)
  */
 
 const fmt = (n) => (Number(n) || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -132,7 +133,7 @@ function laborPages(rows, code, start, end) {
     rows: p.days.sort((a, b) => a.date.localeCompare(b.date)),
     cols: [
       { label: 'วันที่', render: (r) => r.date },
-      { label: 'สถานะ', render: (r) => <span className={r.kind === 'work' ? 'text-slate-700' : 'text-amber-600'}>{r.status}</span> },
+      { label: 'สถานะ', x: (r) => r.status, render: (r) => <span className={r.kind === 'work' ? 'text-slate-700' : 'text-amber-600'}>{r.status}</span> },
       { label: 'เวลา', render: (r) => r.time || '-' },
       { label: 'ค่าแรง', right: true, cls: 'text-blue-700', render: (r) => fmt(r.wage) },
     ],
@@ -311,6 +312,14 @@ export default function CostDrillModal({ kind, code, outletId, start, end, bills
             <h3 className="font-bold truncate">{page?.title || 'กำลังโหลด…'}</h3>
             {page?.subtitle && <p className="text-xs text-slate-300 truncate">{page.subtitle}</p>}
           </div>
+          {page?.rows?.length > 0 && (
+            <button
+              onClick={() => exportTableXlsx(page)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-400 text-emerald-300 text-xs font-semibold hover:bg-emerald-500/20"
+              title="ส่งออกหน้านี้เป็น Excel">
+              <Download size={14} /> Excel
+            </button>
+          )}
           <button onClick={onClose} className="p-1 rounded hover:bg-slate-700"><X size={18} /></button>
         </div>
 
