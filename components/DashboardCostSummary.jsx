@@ -3,6 +3,7 @@ import { Loader2, AlertCircle, ChevronRight } from 'lucide-react';
 import { apiCall as expenseApiCall } from '../lib/expenseApi';
 import { isIncludedBranch } from '../lib/excludedBranches';
 import { monthLabel } from '../lib/thaiDate';
+import CostDrillModal from './CostDrillModal';
 
 /*
  * แดชบอร์ดหลัก — การ์ดสรุปรวม: ยอดขายก่อน VAT − ค่าแรง − ยอดเบิกของ − ค่าใช้จ่ายอื่นๆ = คงเหลือ
@@ -14,6 +15,8 @@ import { monthLabel } from '../lib/thaiDate';
  *                   ของทุกเดือนที่ช่วงวันที่ครอบอยู่ ไม่เฉลี่ยตามจำนวนวัน
  *
  * แต่ละก้อนโหลดแยกกัน ก้อนไหนพังก็ขึ้นเตือนเฉพาะก้อนนั้น ที่เหลือยังแสดงได้
+ *
+ * ตัวเลขในตาราง "แยกรายสาขา" กดดูข้างในได้ (components/CostDrillModal.jsx)
  */
 
 const fmt = (n) => (Number(n) || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -35,6 +38,9 @@ function monthsIn(start, end) {
   }
   return out;
 }
+
+/** ช่องตัวเลขที่กดดูรายละเอียดได้ */
+const CELL_BTN = 'px-2 py-1.5 text-right font-mono tabular-nums cursor-pointer underline decoration-dotted decoration-slate-300 underline-offset-4 hover:bg-amber-50';
 
 const COLORS = {
   sales: '#059669', labor: '#3b82f6', food: '#e11d48', other: '#8b5cf6', net: '#10b981',
@@ -98,12 +104,14 @@ function Card({ label, value, color, sub, chips, source, onOpen, loading, error 
  * @param {object} p
  * @param {string} p.start / p.end  ช่วงวันที่ที่แดชบอร์ดโหลดไว้
  * @param {Array<{outletID, beforeVat}>} p.salesRows  ยอดขายก่อน VAT ต่อสาขา (branchCardStats.rows)
+ * @param {object[]} p.bills  บิลชุดเดียวกับที่คิด salesRows (salesRaw) — ไว้กดดูยอดขายรายวัน/รายบิล
  * @param {(outletId) => string} p.codeOfOutlet  outletID -> รหัสสาขา
  * @param {string} p.selectedCode  รหัสสาขาที่เลือกในแดชบอร์ด ('' = ทุกสาขา)
  * @param {(key) => boolean} p.can  สิทธิ์เมนู (ไว้ซ่อนปุ่ม "ดู" ของเมนูที่ไม่มีสิทธิ์)
  * @param {(key) => void} p.onOpen  เปลี่ยนไปเมนูนั้น
  */
-export default function DashboardCostSummary({ start, end, salesRows, codeOfOutlet, selectedCode, can, onOpen }) {
+export default function DashboardCostSummary({ start, end, salesRows, bills = [], codeOfOutlet, selectedCode, can, onOpen }) {
+  const [drill, setDrill] = useState(null); // { kind, code }
   const rangeKey = start && end ? `${start}~${end}` : '';
   const months = useMemo(() => (rangeKey ? monthsIn(start, end) : []), [rangeKey, start, end]);
 
@@ -140,6 +148,7 @@ export default function DashboardCostSummary({ start, end, salesRows, codeOfOutl
       x.people += Number(l.people) || 0;
     }
     const byType = {};
+    const expenseRows = {};
     for (const e of expense.data?.data || []) {
       if (!months.includes(String(e.month))) continue;
       const amt = Number(e.total) || 0;
@@ -147,6 +156,7 @@ export default function DashboardCostSummary({ start, end, salesRows, codeOfOutl
       const code = canon(e.branch);
       if (want && code !== want) continue;
       rowOf(code).other += amt;
+      (expenseRows[code] || (expenseRows[code] = [])).push(e);
       byType[e.type] = (byType[e.type] || 0) + amt;
     }
 
@@ -162,15 +172,22 @@ export default function DashboardCostSummary({ start, end, salesRows, codeOfOutl
       ['sales', 'labor', 'people', 'food', 'other', 'net'].forEach((k) => { t[k] += x[k]; });
       return t;
     }, { sales: 0, labor: 0, people: 0, food: 0, other: 0, net: 0 });
+    // รหัสสาขา -> outletID (ไว้ดึงใบเบิก/กรองบิลตอนกดดูรายละเอียด)
+    const outletOf = {};
+    for (const b of food.data?.branches || []) if (b.outletId) outletOf[canon(b.code)] = String(b.outletId);
+    for (const r of salesRows || []) {
+      const c = canon(codeOfOutlet(r.outletID));
+      if (c && !outletOf[c]) outletOf[c] = String(r.outletID);
+    }
     return {
-      list, total, nonStore: want ? [] : nonStore,
+      list, total, nonStore: want ? [] : nonStore, expenseRows, outletOf,
       byType: Object.entries(byType).sort((a, b) => b[1] - a[1]),
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [salesRows, food.data, labor.data, expense.data, months, want]);
 
   if (!rangeKey) return null;
-  const { list, total, nonStore, byType } = view;
+  const { list, total, nonStore, byType, expenseRows, outletOf } = view;
   const base = total.sales;
   const anyLoading = food.loading || labor.loading || expense.loading;
   const monthText = months.map(monthLabel).join(', ');
@@ -261,7 +278,7 @@ export default function DashboardCostSummary({ start, end, salesRows, codeOfOutl
 
         {/* แยกรายสาขา */}
         <div className="bg-white border border-slate-200 rounded-2xl p-4 min-w-0">
-          <h4 className="text-sm font-bold text-slate-700 mb-2">แยกรายสาขา</h4>
+          <h4 className="text-sm font-bold text-slate-700 mb-2">แยกรายสาขา <span className="text-[11px] font-normal text-slate-400">· กดตัวเลขเพื่อดูรายละเอียด</span></h4>
           <div className="overflow-x-auto">
             <table className="w-full text-xs border-collapse">
               <thead>
@@ -275,9 +292,13 @@ export default function DashboardCostSummary({ start, end, salesRows, codeOfOutl
                 {list.map((x) => (
                   <tr key={x.code} className="border-b border-slate-100">
                     <td className="px-2 py-1.5 font-semibold uppercase">{x.code}</td>
-                    <td className="px-2 py-1.5 text-right font-mono tabular-nums">{fmt0(x.sales)}</td>
-                    {[x.labor, x.food, x.other].map((v, i) => (
-                      <td key={i} className="px-2 py-1.5 text-right font-mono tabular-nums">
+                    <td className={`${CELL_BTN} hover:text-emerald-700`} onClick={() => setDrill({ kind: 'sales', code: x.code })} title="กดดูยอดขายรายวัน">
+                      {fmt0(x.sales)}
+                    </td>
+                    {[['labor', x.labor, 'hover:text-blue-700', 'กดดูค่าแรงรายคน'],
+                      ['food', x.food, 'hover:text-rose-700', 'กดดูใบเบิก'],
+                      ['other', x.other, 'hover:text-violet-700', 'กดดูรายการค่าใช้จ่าย']].map(([k, v, hov, tip]) => (
+                      <td key={k} className={`${CELL_BTN} ${hov}`} onClick={() => setDrill({ kind: k, code: x.code })} title={tip}>
                         {fmt0(v)}<span className="block text-[10px] text-slate-400">{pct(v, x.sales)}</span>
                       </td>
                     ))}
@@ -308,6 +329,22 @@ export default function DashboardCostSummary({ start, end, salesRows, codeOfOutl
           </div>
         </div>
       </div>
+
+      {drill && (
+        <CostDrillModal
+          kind={drill.kind}
+          code={drill.code}
+          outletId={outletOf[drill.code] || ''}
+          start={start}
+          end={end}
+          bills={drill.kind === 'sales'
+            ? bills.filter((r) => canon(codeOfOutlet(r.outletID ?? r.OutletID)) === drill.code)
+            : []}
+          expenses={expenseRows[drill.code] || []}
+          months={months}
+          onClose={() => setDrill(null)}
+        />
+      )}
 
       <p className="text-[10.5px] text-slate-400 leading-relaxed">
         * ยอดขายก่อน VAT = Bill − VAT (ตัวเดียวกับการ์ด &quot;ยอดขายรวมทั้งหมด&quot;) · ค่าแรง = ค่าแรงจากตารางงานที่สาขาลงไว้ (ตัวเดียวกับการ์ดค่าแรงรวมในหน้าดูสแกนหน้า)
