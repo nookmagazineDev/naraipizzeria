@@ -5,6 +5,7 @@ import {
 import * as XLSX from 'xlsx-js-style';
 import { FOOD_COST_CATS, foodCostCatOf } from '../lib/foodCostCats';
 import { fetchDailySales } from '../lib/laborSales';
+import { exportTableXlsx } from '../lib/exportTable';
 
 /*
  * NARAI OFFICE — ACC → ต้นทุนใบเบิกสาขา
@@ -70,7 +71,17 @@ function TableModal({ title, subtitle, cols, rows, onRow, foot, onClose }) {
             <h3 className="font-bold truncate">{title}</h3>
             {subtitle && <p className="text-xs text-slate-300">{subtitle}</p>}
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-slate-700"><X size={18} /></button>
+          <div className="flex items-center gap-2">
+            {rows.length > 0 && (
+              <button
+                onClick={() => exportTableXlsx({ title, subtitle, cols: cols.map((c) => ({ ...c, right: !c.left })), rows, foot })}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-400 text-emerald-300 text-xs font-semibold hover:bg-emerald-500/20"
+                title="ส่งออกหน้านี้เป็น Excel">
+                <Download size={14} /> Excel
+              </button>
+            )}
+            <button onClick={onClose} className="p-1 rounded hover:bg-slate-700"><X size={18} /></button>
+          </div>
         </div>
         <div className="flex-1 overflow-auto">
           {rows.length === 0 ? (
